@@ -83,6 +83,9 @@ STATS = {
     "published_channel": 0,
     "published_group": 0,
     "auto_post": 0,
+    "nudges_sent": 0,
+    "nudges_errors": 0,
+    "nudges_granted": 0,
 }
 STATS_USERS: Set[int] = set()
 STATS_USERS_INFO: Dict[int, Dict[str, object]] = {}
@@ -483,6 +486,15 @@ async def safe_edit_text(msg: Message, text: str):
         print(f"[safe_edit_text] bad request: {e}")
     return None
 
+async def safe_send_text(chat_id: int, text: str, **kwargs):
+    try:
+        return await bot.send_message(chat_id, text, **kwargs)
+    except (TelegramForbiddenError, TelegramNotFound):
+        print(f"[safe_send_text] blocked/not found: chat_id={chat_id}")
+    except TelegramBadRequest as e:
+        print(f"[safe_send_text] bad request: {e}")
+    return None
+
 # ===================== S3 HELPERS ====================
 def s3_put_and_presign(img_bytes: bytes, key_prefix: str = "inputs/") -> Optional[str]:
     missing = []
@@ -761,6 +773,160 @@ def generate_instacaption(user_prompt: str, lang: str = "ru") -> str:
     # (как раньше) — опущено ради краткости
     salts = ["Soft light. Sharp story.", "A little magic, a lot of you.", "Subtle glow, bold vibe."]
     return random.choice(salts)
+
+# ===================== NUDGES ========================
+NUDGE_ENABLED = os.getenv("NUDGE_ENABLED", "0") == "1"
+NUDGE_INTERVAL_HOURS = int(os.getenv("NUDGE_INTERVAL_HOURS", "24"))
+NUDGE_MIN_GAP_HOURS = int(os.getenv("NUDGE_MIN_GAP_HOURS", "24"))
+NUDGE_BATCH_LIMIT = int(os.getenv("NUDGE_BATCH_LIMIT", "25"))
+NUDGE_DAY_START_HOUR = int(os.getenv("NUDGE_DAY_START_HOUR", "10"))  # 10:00
+NUDGE_DAY_END_HOUR = int(os.getenv("NUDGE_DAY_END_HOUR", "20"))      # 20:00
+NUDGE_TZ_DEFAULT = os.getenv("NUDGE_TZ_DEFAULT", "UTC")
+NUDGE_INFO: Dict[int, Dict[str, object]] = {}
+
+def _nudge_eligible(uid: int) -> bool:
+    now = time.time()
+    ui = STATS_USERS_INFO.get(uid) or {}
+    last_seen = float(ui.get("last_seen", 0))
+    if last_seen <= 0:
+        return False
+    if now - last_seen < NUDGE_INTERVAL_HOURS * 3600:
+        return False
+    ni = NUDGE_INFO.get(uid) or {}
+    last_sent = float(ni.get("last_sent", 0))
+    if last_sent and now - last_sent < NUDGE_MIN_GAP_HOURS * 3600:
+        return False
+    return True
+
+def _nudge_pick_offer(uid: int) -> Dict[str, object]:
+    # Profile-based: paid users → PROMO3, others → FREE1
+    ui = STATS_USERS_INFO.get(uid) or {}
+    paid = int(ui.get("payments", 0)) > 0
+    if paid:
+        return {"kind": "PROMO3"}
+    return {"kind": "FREE1"}
+
+def _lang_to_tz(lang: str) -> str:
+    base = (lang or "").lower()
+    if base.startswith("ru") or base.startswith("uk") or base.startswith("be"):
+        return os.getenv("NUDGE_TZ_RU", "Europe/Moscow")
+    if base.startswith("ro") or base.startswith("mo"):
+        return os.getenv("NUDGE_TZ_RO", "Europe/Bucharest")
+    if base.startswith("en"):
+        return os.getenv("NUDGE_TZ_EN", NUDGE_TZ_DEFAULT)
+    return NUDGE_TZ_DEFAULT
+
+def _nudge_allowed_now(lang: str) -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+        tzname = _lang_to_tz(lang)
+        now_local = time.time()
+        # Convert using ZoneInfo
+        dt = time.gmtime(now_local)
+        # Using time module for portability: derive offset via ZoneInfo by datetime
+        import datetime as _dt
+        dt_local = _dt.datetime.now(ZoneInfo(tzname))
+        hour = dt_local.hour
+    except Exception:
+        hour = int(time.strftime("%H", time.gmtime()))
+    start_h = min(NUDGE_DAY_START_HOUR, NUDGE_DAY_END_HOUR)
+    end_h = max(NUDGE_DAY_START_HOUR, NUDGE_DAY_END_HOUR)
+    return start_h <= hour < end_h
+
+def _create_user_promo(uid: int, add: int = 3, ttl_uses: int = 1) -> str:
+    code = f"BACK{add}_{uid}_{random.randint(100,999)}".upper()
+    PROMO_CODES[code] = {"add": add, "uses": ttl_uses}
+    return code
+
+def craft_gpt_nudge(lang: str, offer: Dict[str, object], promo_code: str | None = None) -> str:
+    base_fallbacks = {
+        "ru": [
+            "Возвращайтесь в iModel — новые стили уже ждут вас!",
+            "Пора обновить аватарку? Загружайте селфи и получайте результат за секунды.",
+            "Дарим бонусную генерацию — попробуйте новый образ прямо сейчас!",
+        ],
+        "en": [
+            "Come back to iModel — fresh styles are waiting!",
+            "Time to refresh your avatar? Drop a selfie and get magic.",
+            "Claim your bonus generation and try a new look now!",
+        ],
+        "ro": [
+            "Revino în iModel — stiluri noi te așteaptă!",
+            "E timpul pentru un avatar nou? Încarcă un selfie și vezi magia.",
+            "Primește o generație bonus — încearcă acum!",
+        ],
+    }
+    try:
+        if not OPENAI_API_KEY or OpenAI is None:
+            raise RuntimeError("no_openai")
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        sys = (
+            "You are a direct-response marketer. Write a short, punchy, 1-2 sentence push message "
+            "to re-engage a user in a photo-generation bot. Use energetic, inviting tone and clear CTA. "
+            "No hashtags, no emojis overuse (max 1)."
+        )
+        offer_line = ""
+        if offer.get("kind") == "FREE1":
+            offer_line = "Offer: 1 free generation today."
+        elif offer.get("kind") == "PROMO3":
+            offer_line = f"Offer: promo code {promo_code} (+3 gens)."
+        lang_hint = {"ru": "Russian", "en": "English", "ro": "Romanian"}.get(lang, "English")
+        user = f"User language: {lang_hint}. {offer_line}\nWrite the push copy."
+        r = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+            temperature=0.8,
+            max_tokens=80,
+        )
+        msg = (r.choices[0].message.content or "").strip()
+        if not msg:
+            raise RuntimeError("empty")
+        return msg
+    except Exception:
+        arr = base_fallbacks.get(lang) or base_fallbacks["en"]
+        return random.choice(arr)
+
+async def _send_nudge(uid: int, lang: str):
+    ni = NUDGE_INFO.setdefault(uid, {})
+    offer = _nudge_pick_offer(uid)
+    promo_code = None
+    granted = 0
+    if offer["kind"] == "FREE1":
+        USER_CREDITS[uid] = USER_CREDITS.get(uid, FREE_QUOTA) + 1
+        granted = 1
+    elif offer["kind"] == "PROMO3":
+        promo_code = _create_user_promo(uid, add=3, ttl_uses=1)
+    text = craft_gpt_nudge(lang, offer, promo_code)
+    if offer["kind"] == "FREE1":
+        text += ({"ru": "\nБонус: +1 генерация уже на балансе.", "en": "\nBonus: +1 generation added.", "ro": "\nBonus: +1 generație adăugată."}.get(lang, ""))
+    elif offer["kind"] == "PROMO3" and promo_code:
+        k = {"ru": "\nПромокод: ", "en": "\nPromo code: ", "ro": "\nCod promo: "}.get(lang, "\nPromo: ")
+        text += f"{k}{promo_code}"
+    sent = await safe_send_text(uid, text)
+    if sent:
+        ni["last_sent"] = time.time()
+        STATS["nudges_sent"] += 1
+        if granted:
+            STATS["nudges_granted"] += 1
+    else:
+        STATS["nudges_errors"] += 1
+
+async def nudge_loop():
+    # Run hourly; send up to NUDGE_BATCH_LIMIT eligible nudges
+    await asyncio.sleep(5)
+    while True:
+        try:
+            if NUDGE_ENABLED and STATS_USERS_INFO:
+                eligible = [uid for uid in list(STATS_USERS_INFO.keys()) if _nudge_eligible(uid)]
+                random.shuffle(eligible)
+                for uid in eligible[:NUDGE_BATCH_LIMIT]:
+                    lang = USER_LANG.get(uid, LANG_DEFAULT)
+                    if not _nudge_allowed_now(lang):
+                        continue
+                    await _send_nudge(uid, lang)
+        except Exception as e:
+            print("nudge_loop error:", str(e)[:200])
+        await asyncio.sleep(3600)
 
 # ===================== CORE GEN ======================
 def generate_image_from_bytes(
@@ -1712,6 +1878,13 @@ async def on_startup():
         ],
         scope=BotCommandScopeDefault()
     )
+    # Background nudges
+    try:
+        if NUDGE_ENABLED:
+            asyncio.create_task(nudge_loop())
+            print("Nudge loop started")
+    except Exception as e:
+        print("Nudge loop error on startup:", str(e)[:160])
 @app.on_event("shutdown")
 async def on_shutdown():
     print("🛑 Shutting down...")
