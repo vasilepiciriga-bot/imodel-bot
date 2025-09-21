@@ -103,6 +103,7 @@ _s3 = boto3.client(
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
+ESRGAN_DISABLED  = False  # auto-disable on first 404
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "ru")
@@ -840,7 +841,8 @@ def generate_image_from_bytes(
 
     # Бережный апскейл
     try:
-        if not ESRGAN_MODEL:
+        global ESRGAN_DISABLED
+        if not ESRGAN_MODEL or ESRGAN_DISABLED:
             return nano_bytes
         up_url = replicate_generate(ESRGAN_MODEL, {
             "image": gen_url,
@@ -855,7 +857,11 @@ def generate_image_from_bytes(
                 return up_bytes
         return nano_bytes
     except Exception as e:
-        print("ESRGAN error:", str(e)[:200])
+        em = str(e)
+        print("ESRGAN error:", em[:200])
+        if "404" in em:
+            ESRGAN_DISABLED = True
+            print("→ Disable upscaler for this runtime (404)")
         return nano_bytes
 
 # ======= Автопост «до/после» (опционально) ===========
