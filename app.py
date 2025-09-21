@@ -152,7 +152,8 @@ _s3 = boto3.client(
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
-RETOUCH_MODEL    = os.getenv("RETOUCH_MODEL", "sczhou/codeformer:cc4956dd26fa5a7185d5660cc9100fab1b8070a1d1654a8bb5eb6d443b020bb2")  # Replicate face restore
+RETOUCH_MODEL    = os.getenv("RETOUCH_MODEL", "sczhou/codeformer")  # Replicate face restore (owner/name)
+RETOUCH_MODEL_VERSION = os.getenv("RETOUCH_MODEL_VERSION", "")
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -639,8 +640,21 @@ def replicate_wait_prediction(pred_id: str, timeout: float = 180.0, interval: fl
         time.sleep(interval)
 
 def replicate_generate(model: str, inputs: dict) -> Optional[str]:
+    # Allow passing either owner/name or owner/name:version
+    model_name = model
+    model_version = None
+    if ":" in model and not model.endswith(":"):
+        try:
+            model_name, model_version = model.split(":", 1)
+        except ValueError:
+            model_name = model
+            model_version = None
     try:
-        pred = replicate.predictions.create(model=model, input=inputs)
+        # Prefer creating by version if provided
+        if model_version:
+            pred = replicate.predictions.create(version=model_version, input=inputs)
+        else:
+            pred = replicate.predictions.create(model=model_name, input=inputs)
         pid = getattr(pred, "id", None) or (pred.get("id") if isinstance(pred, dict) else None)
         if pid:
             pred = replicate_wait_prediction(pid)
@@ -671,7 +685,8 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
             return "SENSITIVE"
 
     try:
-        out = replicate.run(model, input=inputs)
+        # replicate.run supports owner/name or owner/name:version
+        out = replicate.run(model if not model_version else f"{model_name}:{model_version}", input=inputs)
         url = _extract_first_url(out)
         if url:
             return url
@@ -869,7 +884,9 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
         # Prefer tuned inputs for CodeFormer when detected
         if "codeformer" in RETOUCH_MODEL.lower():
             try:
-                url = replicate_generate(RETOUCH_MODEL, {
+                # Use explicit version if provided via env
+                rf = RETOUCH_MODEL if not RETOUCH_MODEL_VERSION else f"{RETOUCH_MODEL}:{RETOUCH_MODEL_VERSION}"
+                url = replicate_generate(rf, {
                     "image": src_url,
                     "background_enhance": True,
                     "face_upsample": True,
@@ -901,7 +918,8 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
                 try:
                     inp = dict(v)
                     inp.update(c)
-                    url = replicate_generate(RETOUCH_MODEL, inp)
+                    rf = RETOUCH_MODEL if not RETOUCH_MODEL_VERSION else f"{RETOUCH_MODEL}:{RETOUCH_MODEL_VERSION}"
+                    url = replicate_generate(rf, inp)
                     if url and url.startswith("http"):
                         out = _download_with_retries(url)
                         if out:
