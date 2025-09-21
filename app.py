@@ -152,6 +152,7 @@ LAST_PHOTO: Dict[int, bytes] = {}
 USER_COPY_MODE: Set[int]         = set()
 USER_COPY_STYLE: Dict[int, bytes]= {}
 USER_COPY_PROMPT: Dict[int, str] = {}
+USER_COPY_PROMPT_EDITED: Set[int] = set()
 
 # Whitelist
 FREE_USERS: set[int] = set()
@@ -921,6 +922,7 @@ async def cmd_copy(m: Message):
     USER_COPY_MODE.add(m.chat.id)
     USER_COPY_STYLE.pop(m.chat.id, None)
     USER_COPY_PROMPT.pop(m.chat.id, None)
+    USER_COPY_PROMPT_EDITED.discard(m.chat.id)
     await safe_answer(m, L(m.chat.id)["copy_intro"])
 
 @dp.message(Command("start"))
@@ -1195,7 +1197,7 @@ async def on_photo(m: Message):
                 USER_COPY_PROMPT[m.chat.id] = prompt_preview
                 await safe_answer(
                     m,
-                    L(m.chat.id)["copy_style_ok"] + "\n\nПромпт по образцу:\n" + prompt_preview + "\n\nМожете отредактировать этот текст (просто отправьте сообщение), затем пришлите селфи.")
+                    L(m.chat.id)["copy_style_ok"] + "\n\nПромпт по образцу:\n" + prompt_preview + "\n\nМожете отредактировать этот текст (просто отправьте сообщение), затем пришлите селфи.\nЕсли не редактировать — промпт будет пересчитан по образцу при получении селфи.")
             else:
                 await safe_answer(m, L(m.chat.id)["copy_style_ok"] + "\nНе удалось автоматически получить промпт — отправьте свой текст и затем пришлите селфи.")
             return
@@ -1205,9 +1207,10 @@ async def on_photo(m: Message):
             if not style_bytes:
                 return await safe_answer(m, L(m.chat.id)["copy_need_style"])
 
-            # 1) Берём уже подготовленный/отредактированный пользователем промпт, либо пробуем сгенерировать
-            scene_spec = USER_COPY_PROMPT.get(m.chat.id)
-            if not scene_spec:
+            # 1) Если пользователь редактировал — используем его. Иначе пересчитываем по style_bytes сейчас.
+            if m.chat.id in USER_COPY_PROMPT_EDITED and USER_COPY_PROMPT.get(m.chat.id):
+                scene_spec = USER_COPY_PROMPT[m.chat.id]
+            else:
                 scene_spec = craft_mj_prompt_from_image(style_bytes)
             if not scene_spec:
                 scene_spec = craft_scene_spec_from_image(style_bytes) or "person, same scene."
@@ -1337,6 +1340,7 @@ async def on_prompt(m: Message):
     # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
     if m.chat.id in USER_COPY_MODE:
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
+        USER_COPY_PROMPT_EDITED.add(m.chat.id)
         await safe_answer(m, "Промпт обновлён. Теперь пришлите селфи.")
         return
     text = m.text.strip()
