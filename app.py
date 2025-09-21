@@ -16,7 +16,7 @@ from typing import Optional, Dict, List, Set
 
 import requests
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -63,6 +63,8 @@ ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "1") == "1"
 
 # Metrics/Stats
 METRICS_SECRET = os.getenv("METRICS_SECRET", "")
+ADMIN_PANEL_SECRET = os.getenv("ADMIN_PANEL_SECRET", METRICS_SECRET)
+SESSION_GAP_SECONDS = int(os.getenv("SESSION_GAP_SECONDS", "900"))  # 15 min
 STATS = {
     "start_ts": time.time(),
     "updates": 0,
@@ -83,6 +85,49 @@ STATS = {
     "auto_post": 0,
 }
 STATS_USERS: Set[int] = set()
+STATS_USERS_INFO: Dict[int, Dict[str, object]] = {}
+
+def _touch_user(uid: int, username: Optional[str] = None):
+    now = time.time()
+    info = STATS_USERS_INFO.get(uid)
+    if info is None:
+        info = {
+            "first_seen": now,
+            "last_seen": now,
+            "sessions": 1,
+            "session_start": now,
+            "active_seconds": 0.0,
+            "username": (username or "")[:64],
+            "messages": 0,
+            "photos": 0,
+            "gens_ok": 0,
+            "gens_fail": 0,
+            "gens_copy_ok": 0,
+            "gens_copy_fail": 0,
+            "published": 0,
+            "payments": 0,
+        }
+        STATS_USERS_INFO[uid] = info
+    else:
+        last_seen = float(info.get("last_seen", now))
+        if now - last_seen > SESSION_GAP_SECONDS:
+            info["sessions"] = int(info.get("sessions", 0)) + 1
+            info["session_start"] = now
+        else:
+            info["active_seconds"] = float(info.get("active_seconds", 0.0)) + max(0.0, now - last_seen)
+        info["last_seen"] = now
+        if username and not info.get("username"):
+            info["username"] = username[:64]
+
+def _uadd(uid: int, key: str, n: int = 1):
+    info = STATS_USERS_INFO.get(uid)
+    if not info:
+        _touch_user(uid)
+        info = STATS_USERS_INFO.get(uid)
+    try:
+        info[key] = int(info.get(key, 0)) + n
+    except Exception:
+        info[key] = n
 
 # S3 (Backblaze B2 S3-compatible)
 S3_ENDPOINT = os.getenv("S3_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
@@ -977,6 +1022,7 @@ async def got_payment(m: Message):
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
     await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
     STATS["payments"] += 1
+    _uadd(m.chat.id, "payments", 1)
 
 # ===================== COMMANDS =======================
 @dp.message(Command("version"))
@@ -1230,6 +1276,7 @@ async def cb_pub_yes(c: CallbackQuery):
         except Exception as e:
             print("channel media group error:", str(e)[:160])
     STATS["published_channel"] += 1
+    _uadd(c.message.chat.id, "published", 1)
     await c.answer("Опубликовано")
 
 @dp.callback_query(F.data == "pub_group")
@@ -1268,6 +1315,7 @@ async def cb_pub_group(c: CallbackQuery):
         except Exception as e:
             print("group media group error:", str(e)[:160])
     STATS["published_group"] += 1
+    _uadd(c.message.chat.id, "published", 1)
     await c.answer("Опубликовано в группе")
 
 # ===================== FLOW: PHOTO ====================
@@ -1281,6 +1329,8 @@ async def on_photo(m: Message):
     img_bytes = b.read()
     STATS["photos"] += 1
     STATS_USERS.add(m.chat.id)
+    _touch_user(m.chat.id, getattr(m.from_user, "username", None))
+    _uadd(m.chat.id, "photos", 1)
 
     # ----- Copy Mode -----
     if m.chat.id in USER_COPY_MODE:
@@ -1339,6 +1389,7 @@ async def on_photo(m: Message):
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
                     STATS["gens_copy_fail"] += 1
+                    _uadd(m.chat.id, "gens_copy_fail", 1)
                     return
 
             if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
@@ -1347,6 +1398,7 @@ async def on_photo(m: Message):
             USER_LAST_PROMPT[m.chat.id] = scene_spec
             LAST_PHOTO[m.chat.id] = final_bytes
             STATS["gens_copy_ok"] += 1
+            _uadd(m.chat.id, "gens_copy_ok", 1)
 
             # история
             hist = USER_HISTORY.setdefault(m.chat.id, [])
@@ -1399,6 +1451,7 @@ async def on_photo(m: Message):
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
         STATS["gens_fail"] += 1
+        _uadd(m.chat.id, "gens_fail", 1)
         return
 
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
@@ -1407,6 +1460,7 @@ async def on_photo(m: Message):
     USER_LAST_PROMPT[m.chat.id] = caption
     LAST_PHOTO[m.chat.id] = final_bytes
     STATS["gens_ok"] += 1
+    _uadd(m.chat.id, "gens_ok", 1)
 
     hist = USER_HISTORY.setdefault(m.chat.id, [])
     hist.append(final_bytes)
@@ -1436,6 +1490,8 @@ async def on_prompt(m: Message):
         await safe_answer(m, "Промпт обновлён. Теперь пришлите селфи.")
         return
     STATS["messages"] += 1
+    _touch_user(m.chat.id, getattr(m.from_user, "username", None))
+    _uadd(m.chat.id, "messages", 1)
     text = m.text.strip()
     if m.chat.id not in USER_LANG:
         USER_LANG[m.chat.id] = locale_to_lang(getattr(m.from_user, "language_code", None))
@@ -1446,6 +1502,7 @@ async def on_prompt(m: Message):
 
     if blocked(text):
         STATS["blocked"] += 1
+        _uadd(m.chat.id, "blocked", 1)
         return await safe_answer(m, L(m.chat.id)["blocked"])
 
     refs = USER_REFS.get(m.chat.id, [])
@@ -1466,6 +1523,7 @@ async def on_prompt(m: Message):
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
         STATS["gens_fail"] += 1
+        _uadd(m.chat.id, "gens_fail", 1)
         return
 
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
@@ -1474,6 +1532,7 @@ async def on_prompt(m: Message):
     USER_LAST_PROMPT[m.chat.id] = text
     LAST_PHOTO[m.chat.id] = final_bytes
     STATS["gens_ok"] += 1
+    _uadd(m.chat.id, "gens_ok", 1)
 
     hist = USER_HISTORY.setdefault(m.chat.id, [])
     hist.append(final_bytes)
@@ -1520,6 +1579,7 @@ async def cb_more(c: CallbackQuery):
     )
     if not result:
         STATS["gens_fail"] += 1
+        _uadd(chat_id, "gens_fail", 1)
         return await safe_edit_text(msg, L(chat_id)["fail"])
 
     if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
@@ -1528,6 +1588,7 @@ async def cb_more(c: CallbackQuery):
     USER_LAST_PROMPT[chat_id] = base_prompt
     LAST_PHOTO[chat_id] = result
     STATS["gens_ok"] += 1
+    _uadd(chat_id, "gens_ok", 1)
 
     hist = USER_HISTORY.setdefault(chat_id, [])
     hist.append(result)
@@ -1638,9 +1699,12 @@ async def telegram_webhook(request: Request):
             "from": (t.get("from") or {}).get("id"),
             "type": t.get("text", "<media>") if isinstance(t, dict) else "<unknown>",
         })
-        uid = (t.get("from") or {}).get("id")
+        user_obj = (t.get("from") or {})
+        uid = user_obj.get("id")
+        uname = user_obj.get("username")
         if isinstance(uid, int):
             STATS_USERS.add(uid)
+            _touch_user(uid, uname)
     except Exception:
         pass
     update = Update.model_validate(data)
@@ -1655,6 +1719,112 @@ async def http_metrics(request: Request):
     resp["users"] = len(STATS_USERS)
     resp["uptime_sec"] = int(time.time() - STATS["start_ts"]) if STATS.get("start_ts") else 0
     return resp
+
+@app.get("/admin")
+async def admin_panel(request: Request):
+    if ADMIN_PANEL_SECRET and request.query_params.get("secret") != ADMIN_PANEL_SECRET:
+        return JSONResponse({"status": "forbidden"}, status_code=403)
+    now = time.time()
+    users_total = len(STATS_USERS)
+    users_active_24h = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 86400)
+    users_active_5m = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 300)
+    sessions_total = sum(int(u.get("sessions", 0)) for u in STATS_USERS_INFO.values())
+    active_seconds_total = sum(float(u.get("active_seconds", 0.0)) for u in STATS_USERS_INFO.values())
+    avg_session_sec = int(active_seconds_total / sessions_total) if sessions_total else 0
+    total_processed = STATS.get("gens_ok", 0) + STATS.get("gens_copy_ok", 0)
+
+    # Top users by generations and time
+    items = []
+    for uid, u in STATS_USERS_INFO.items():
+        items.append({
+            "uid": uid,
+            "username": u.get("username") or str(uid),
+            "gens": int(u.get("gens_ok", 0)) + int(u.get("gens_copy_ok", 0)),
+            "time": int(float(u.get("active_seconds", 0.0))),
+            "sessions": int(u.get("sessions", 0)),
+        })
+    top_gens = sorted(items, key=lambda x: x["gens"], reverse=True)[:10]
+    top_time = sorted(items, key=lambda x: x["time"], reverse=True)[:10]
+
+    # Referrals
+    ref_items = []
+    for rid, st in REF_STATS.items():
+        ref_items.append({"uid": rid, "count": st.get("count", 0), "earned": st.get("earned", 0)})
+    top_ref = sorted(ref_items, key=lambda x: x["count"], reverse=True)[:10]
+
+    def fmt_sec(s):
+        h = s // 3600; m = (s % 3600) // 60; sc = s % 60
+        return f"{h:02d}:{m:02d}:{sc:02d}"
+
+    html = f"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>iModel — Admin</title>
+  <style>
+    :root {{ --bg:#0f1115; --card:#151922; --accent:#7aa2f7; --muted:#9aa4b2; --ok:#24c38b; --fail:#e56565; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin:0; font: 14px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:#e6edf3; }}
+    header {{ padding:16px 24px; border-bottom:1px solid #202636; }}
+    h1 {{ font-size:18px; margin:0; }}
+    .wrap {{ padding:20px; max-width:1100px; margin:0 auto; }}
+    .grid {{ display:grid; grid-template-columns: repeat(4,1fr); gap:14px; }}
+    .card {{ background:var(--card); border:1px solid #202636; border-radius:10px; padding:14px; }}
+    .kpi .v {{ font-size:22px; font-weight:600; }}
+    .muted {{ color:var(--muted); }}
+    .ok {{ color:var(--ok); }}
+    .fail {{ color:var(--fail); }}
+    table {{ width:100%; border-collapse:collapse; }}
+    th,td {{ padding:8px 10px; border-bottom:1px solid #242a3a; text-align:left; }}
+    th {{ color:#aab4c2; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }}
+    .section {{ margin-top:18px; }}
+  </style>
+  </head>
+  <body>
+    <header><h1>iModel — Admin Panel</h1></header>
+    <div class="wrap">
+      <div class="grid kpi">
+        <div class="card"><div class="muted">Users total</div><div class="v">{users_total}</div><div class="muted">Active 24h: {users_active_24h} · Now: {users_active_5m}</div></div>
+        <div class="card"><div class="muted">Sessions</div><div class="v">{sessions_total}</div><div class="muted">Avg length: {fmt_sec(avg_session_sec)}</div></div>
+        <div class="card"><div class="muted">Processed</div><div class="v ok">{total_processed}</div><div class="muted">OK: {STATS.get('gens_ok',0)} · Copy OK: {STATS.get('gens_copy_ok',0)}</div></div>
+        <div class="card"><div class="muted">Blocked</div><div class="v fail">{STATS.get('blocked',0)}</div><div class="muted">Updates: {STATS.get('updates',0)}</div></div>
+      </div>
+
+      <div class="grid section">
+        <div class="card" style="grid-column: span 2;">
+          <div class="muted">Top by generations</div>
+          <table><tr><th>User</th><th>Gens</th><th>Sessions</th></tr>
+            {''.join(f'<tr><td>@{i["username"]}</td><td>{i["gens"]}</td><td>{i["sessions"]}</td></tr>' for i in top_gens)}
+          </table>
+        </div>
+        <div class="card" style="grid-column: span 2;">
+          <div class="muted">Top by active time</div>
+          <table><tr><th>User</th><th>Time</th><th>Sessions</th></tr>
+            {''.join(f'<tr><td>@{i["username"]}</td><td>{fmt_sec(i["time"])}</td><td>{i["sessions"]}</td></tr>' for i in top_time)}
+          </table>
+        </div>
+      </div>
+
+      <div class="grid section">
+        <div class="card" style="grid-column: span 2;">
+          <div class="muted">Referrals</div>
+          <table><tr><th>User</th><th>Invited</th><th>Earned</th></tr>
+            {''.join(f'<tr><td>{r["uid"]}</td><td>{r["count"]}</td><td>{r["earned"]}</td></tr>' for r in top_ref)}
+          </table>
+        </div>
+        <div class="card" style="grid-column: span 2;">
+          <div class="muted">Financial</div>
+          <div>Payments: <b>{STATS.get('payments',0)}</b> · Promo used: <b>{STATS.get('promo_used',0)}</b></div>
+          <div class="muted" style="margin-top:8px;">Published → channel: {STATS.get('published_channel',0)} · group: {STATS.get('published_group',0)} · auto: {STATS.get('auto_post',0)}</div>
+        </div>
+      </div>
+    </div>
+  </body>
+  </html>
+    """
+    return HTMLResponse(content=html)
 
 
 @api.on_event("shutdown")
