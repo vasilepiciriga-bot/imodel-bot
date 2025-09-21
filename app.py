@@ -59,7 +59,7 @@ OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 
 # Filter toggles
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
-ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "0") == "1"
+ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "1") == "1"
 
 # S3 (Backblaze B2 S3-compatible)
 S3_ENDPOINT = os.getenv("S3_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
@@ -347,8 +347,6 @@ def blocked(text: str) -> bool:
 
     # Optional blocks controlled by env flags
     if (not ALLOW_NSFW) and _SEXUAL_RE.search(s):
-        return True
-    if (not ALLOW_CELEBS) and _CELEB_RE.search(s):
         return True
     return False
 
@@ -1225,15 +1223,8 @@ async def on_photo(m: Message):
         if m.chat.id not in USER_COPY_STYLE:
             # это style-reference
             USER_COPY_STYLE[m.chat.id] = img_bytes
-            # Пытаемся заранее получить MJ-промпт по стилю и показать пользователю
-            prompt_preview = craft_mj_prompt_from_image(img_bytes)
-            if prompt_preview:
-                USER_COPY_PROMPT[m.chat.id] = prompt_preview
-                await safe_answer(
-                    m,
-                    L(m.chat.id)["copy_style_ok"] + "\n\nПромпт по образцу:\n" + prompt_preview + "\n\nМожете отредактировать этот текст (просто отправьте сообщение), затем пришлите селфи.")
-            else:
-                await safe_answer(m, L(m.chat.id)["copy_style_ok"] + "\nНе удалось автоматически получить промпт — отправьте свой текст и затем пришлите селфи.")
+            # Никаких предпросмотров промпта — просто просим селфи
+            await safe_answer(m, L(m.chat.id)["copy_style_ok"])
             return
         else:
             # это селфи → генерим 1:1 сцену
