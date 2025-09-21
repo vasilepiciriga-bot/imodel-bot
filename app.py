@@ -152,7 +152,7 @@ _s3 = boto3.client(
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
-RETOUCH_MODEL    = os.getenv("RETOUCH_MODEL", "")  # optional: Replicate model for retouch
+RETOUCH_MODEL    = os.getenv("RETOUCH_MODEL", "sczhou/codeformer:cc4956dd26fa5a7185d5660cc9100fab1b8070a1d1654a8bb5eb6d443b020bb2")  # Replicate face restore
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -866,6 +866,23 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
         return None
     # Try custom retouch model first if provided
     if RETOUCH_MODEL:
+        # Prefer tuned inputs for CodeFormer when detected
+        if "codeformer" in RETOUCH_MODEL.lower():
+            try:
+                url = replicate_generate(RETOUCH_MODEL, {
+                    "image": src_url,
+                    "background_enhance": True,
+                    "face_upsample": True,
+                    "codeformer_fidelity": 0.7,
+                    "upscale": 2,
+                })
+                if url and url.startswith("http"):
+                    out = _download_with_retries(url)
+                    if out:
+                        return out
+            except Exception as e:
+                print("Retouch CodeFormer error:", str(e)[:200])
+        # Generic variants fallback
         variants = [
             {"image": src_url},
             {"img": src_url},
@@ -2075,7 +2092,7 @@ async def on_startup():
         print("Gallery channel:", GALLERY_CHANNEL_ID, "AUTO_POST:", AUTO_POST)
     if PUBLISH_GROUP_ID:
         print("Publish group:", PUBLISH_GROUP_ID)
-    print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>")
+    print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>", "| retouch:", RETOUCH_MODEL or "<unset>")
 
     me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
