@@ -554,6 +554,14 @@ async def safe_edit_text(msg: Message, text: str):
         print(f"[safe_edit_text] bad request: {e}")
     return None
 
+async def safe_cb_answer(c: CallbackQuery, *args, **kwargs):
+    try:
+        return await c.answer(*args, **kwargs)
+    except TelegramBadRequest as e:
+        print(f"[safe_cb_answer] bad request: {e}")
+    except Exception as e:
+        print(f"[safe_cb_answer] exception: {e}")
+    return None
 async def safe_send_text(chat_id: int, text: str, **kwargs):
     try:
         return await bot.send_message(chat_id, text, **kwargs)
@@ -1312,7 +1320,7 @@ async def cb_buy_stars(c: CallbackQuery):
         await send_stars_invoice(c.message.chat.id, "iModel — 30 генераций", "Пакет 30 генераций", "pack_30", 500)
     elif pack == "100":
         await send_stars_invoice(c.message.chat.id, "iModel — 100 генераций", "Пакет 100 генераций", "pack_100", 1200)
-    await c.answer()
+    await safe_cb_answer(c)
 
 @dp.pre_checkout_query()
 async def process_pre_checkout_q(pcq: PreCheckoutQuery):
@@ -1432,7 +1440,7 @@ async def cmd_de(m: Message):
 async def cb_set_lang(c: CallbackQuery):
     code = c.data.split("set_lang_")[-1]
     if code not in ("ru","en","ro","de"):
-        await c.answer()
+        await safe_cb_answer(c)
         return
     USER_LANG[c.message.chat.id] = code
     USER_SEEN_TEXT.add(c.message.chat.id)
@@ -1442,7 +1450,7 @@ async def cb_set_lang(c: CallbackQuery):
         "ro": "lang_ro",
         "de": "lang_de",
     }[code]
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)[key], reply_markup=main_menu_inline(c.message.chat.id))
 
 @dp.message(Command("presets"))
@@ -1531,27 +1539,27 @@ async def cmd_refer(m: Message):
 # ======= INLINE callbacks =======
 @dp.callback_query(F.data == "help_open")
 async def cb_help(c: CallbackQuery):
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["help"])
 
 @dp.callback_query(F.data == "presets_open")
 async def cb_presets(c: CallbackQuery):
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["presets"])
 
 @dp.callback_query(F.data == "promo_open")
 async def cb_promo(c: CallbackQuery):
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["promo_usage"])
 
 @dp.callback_query(F.data == "lang_open")
 async def cb_lang(c: CallbackQuery):
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["choose_lang"], reply_markup=kb_lang_select(c.message.chat.id))
 
 @dp.callback_query(F.data == "pricing_open")
 async def cb_pricing(c: CallbackQuery):
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["pricing"])
     await cmd_buy(c.message)
 
@@ -1559,39 +1567,39 @@ async def cb_pricing(c: CallbackQuery):
 async def cb_onboard_go(c: CallbackQuery):
     chat_id = c.message.chat.id
     USER_ONBOARDED.add(chat_id)
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(chat_id)["start"], reply_markup=main_menu_inline(chat_id))
 
 
 @dp.callback_query(F.data == "balance")
 async def cb_balance(c: CallbackQuery):
     chat_id = c.message.chat.id
-    await c.answer()
+    await safe_cb_answer(c)
     n = USER_CREDITS.get(chat_id, FREE_QUOTA)
     free_note = L(chat_id)["balance_free"] if is_free_user(chat_id, getattr(c.from_user, "username", None)) else ""
     await c.message.answer(L(chat_id)["balance"].format(n=n, free=free_note))
 
 @dp.callback_query(F.data == "buy_open")
 async def cb_buy_open(c: CallbackQuery):
-    await c.answer()
+    await safe_cb_answer(c)
     await cmd_buy(c.message)
 
 @dp.callback_query(F.data == "copy_open")
 async def cb_copy_open(c: CallbackQuery):
     USER_COPY_MODE.add(c.message.chat.id)
     USER_COPY_STYLE.pop(c.message.chat.id, None)
-    await c.answer()
+    await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["copy_intro"])
 
 @dp.callback_query(F.data == "pub_yes")
 async def cb_pub_yes(c: CallbackQuery):
     if not GALLERY_CHANNEL_ID:
-        await c.answer()
+        await safe_cb_answer(c)
         return await c.message.answer("Канал не настроен.")
     before = LAST_REF.get(c.message.chat.id)
     after  = LAST_PHOTO.get(c.message.chat.id)
     if not after:
-        await c.answer()
+        await safe_cb_answer(c)
         return await c.message.answer("Нет результата для публикации.")
     imgs = []
     if before:
@@ -1620,17 +1628,17 @@ async def cb_pub_yes(c: CallbackQuery):
             print("channel media group error:", str(e)[:160])
     STATS["published_channel"] += 1
     _uadd(c.message.chat.id, "published", 1)
-    await c.answer("Опубликовано")
+    await safe_cb_answer(c, "Опубликовано")
 
 @dp.callback_query(F.data == "pub_group")
 async def cb_pub_group(c: CallbackQuery):
     if not PUBLISH_GROUP_ID:
-        await c.answer()
+        await safe_cb_answer(c)
         return await c.message.answer("Группа не настроена.")
     before = LAST_REF.get(c.message.chat.id)
     after  = LAST_PHOTO.get(c.message.chat.id)
     if not after:
-        await c.answer()
+        await safe_cb_answer(c)
         return await c.message.answer("Нет результата для публикации.")
     imgs = []
     if before:
@@ -1659,7 +1667,7 @@ async def cb_pub_group(c: CallbackQuery):
             print("group media group error:", str(e)[:160])
     STATS["published_group"] += 1
     _uadd(c.message.chat.id, "published", 1)
-    await c.answer("Опубликовано в группе")
+    await safe_cb_answer(c, "Опубликовано в группе")
 
 # ===================== FLOW: PHOTO ====================
 @dp.message(F.photo)
@@ -1903,15 +1911,15 @@ async def cb_more(c: CallbackQuery):
     refs = USER_REFS.get(chat_id, [])
     base_prompt = USER_LAST_PROMPT.get(chat_id)
     if not refs or not base_prompt:
-        await c.answer()
+        await safe_cb_answer(c)
         return await c.message.answer(L(chat_id)["need_photo"])
 
     USER_CREDITS.setdefault(chat_id, FREE_QUOTA)
     if not has_credit(chat_id, getattr(c.from_user, "username", None)):
-        await c.answer()
+        await safe_cb_answer(c)
         return await c.message.answer(L(chat_id)["credits_none"])
 
-    await c.answer()
+    await safe_cb_answer(c)
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
     # тот же промпт, seed + 1 (минимальная вариативность, лицо стабильное)
