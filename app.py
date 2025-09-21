@@ -152,9 +152,6 @@ _s3 = boto3.client(
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
-RETOUCH_MODEL    = os.getenv("RETOUCH_MODEL", "sczhou/codeformer")  # Replicate face restore (owner/name)
-RETOUCH_MODEL_VERSION = os.getenv("RETOUCH_MODEL_VERSION", "")
-RETOUCH_DISABLED = False
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -235,7 +232,7 @@ USER_COPY_STYLE: Dict[int, bytes]= {}
 USER_COPY_PROMPT: Dict[int, str] = {}
 
 # Retouch Mode
-USER_RETOUCH_MODE: Set[int]      = set()
+ 
 
 # Whitelist
 FREE_USERS: set[int] = set()
@@ -261,10 +258,6 @@ BOT_USERNAME_GLOBAL = None
 # ===================== I18N =========================
 T = {
     "ru": {
-        "menu_retouch": "🪄 Ретушь",
-        "retouch_intro": "🪄 Режим ретуши: пришлите фото, я улучшу качество без изменения сцены (кожа, резкость, цветокоррекция).",
-        "retouch_processing": "Обрабатываю фото… ⏳",
-        "retouch_done": "Готово ✅",
         "menu_lang": "🌐 Язык",
         "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
         "onboard_btn": "🚀 Старт",
@@ -319,10 +312,6 @@ T = {
         "menu_copy": "📋 Скопировать",
     },
     "en": {
-        "menu_retouch": "🪄 Retouch",
-        "retouch_intro": "🪄 Retouch mode: send a photo; I’ll enhance quality without changing the scene (skin, sharpness, color).",
-        "retouch_processing": "Processing… ⏳",
-        "retouch_done": "Done ✅",
         "menu_lang": "🌐 Language",
         "onboard_welcome": "Welcome to iModel. Tap Start to begin.",
         "onboard_btn": "🚀 Start",
@@ -377,10 +366,6 @@ T = {
         "menu_copy": "📋 Copy",
     },
     "ro": {
-        "menu_retouch": "🪄 Retuș",
-        "retouch_intro": "🪄 Mod retuș: trimite o poză; îmbunătățesc calitatea fără a schimba scena (ten, claritate, culoare).",
-        "retouch_processing": "Procesez… ⏳",
-        "retouch_done": "Gata ✅",
         "menu_lang": "🌐 Limba",
         "onboard_welcome": "Bine ai venit la iModel. Apasă Start pentru a începe.",
         "onboard_btn": "🚀 Start",
@@ -436,10 +421,6 @@ T = {
     }
     ,
     "de": {
-        "menu_retouch": "🪄 Retusche",
-        "retouch_intro": "🪄 Retusche: Sende ein Foto; ich verbessere die Qualität ohne die Szene zu ändern (Haut, Schärfe, Farbe).",
-        "retouch_processing": "Verarbeite… ⏳",
-        "retouch_done": "Fertig ✅",
         "menu_lang": "🌐 Sprache",
         "onboard_welcome": "Willkommen bei iModel. Tippe auf Start, um zu beginnen.",
         "onboard_btn": "🚀 Start",
@@ -881,88 +862,7 @@ def generate_instacaption(user_prompt: str, lang: str = "ru") -> str:
     salts = ["Soft light. Sharp story.", "A little magic, a lot of you.", "Subtle glow, bold vibe."]
     return random.choice(salts)
 
-# ===================== RETOUCH =======================
-def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
-    global RETOUCH_DISABLED, ESRGAN_DISABLED
-    src_url = s3_put_and_presign(img_bytes, key_prefix="retouch/")
-    if not src_url:
-        return None
-    # Try custom retouch model first if provided
-    if RETOUCH_MODEL and not RETOUCH_DISABLED:
-        # Prefer tuned inputs for CodeFormer when detected
-        if "codeformer" in RETOUCH_MODEL.lower():
-            try:
-                # Use explicit version if provided via env
-                rf = RETOUCH_MODEL if not RETOUCH_MODEL_VERSION else f"{RETOUCH_MODEL}:{RETOUCH_MODEL_VERSION}"
-                url = replicate_generate(rf, {
-                    "image": src_url,
-                    "background_enhance": True,
-                    "face_upsample": True,
-                    "codeformer_fidelity": 0.7,
-                    "upscale": 2,
-                })
-                if url and url.startswith("http"):
-                    out = _download_with_retries(url)
-                    if out:
-                        return out
-                # If model not found, disable retouch model for this runtime
-                if REPLICATE_LAST_ERROR and ("404" in REPLICATE_LAST_ERROR or "not found" in REPLICATE_LAST_ERROR.lower()):
-                    RETOUCH_DISABLED = True
-            except Exception as e:
-                print("Retouch CodeFormer error:", str(e)[:200])
-        # Generic variants fallback
-        variants = [
-            {"image": src_url},
-            {"img": src_url},
-            {"input_image": src_url},
-            {"image_url": src_url},
-            {"image_input": [src_url]},
-        ]
-        cfgs = [
-            {},
-            {"face_enhance": True},
-            {"scale": 2},
-            {"face_enhance": True, "scale": 2},
-        ]
-        for v in variants:
-            for c in cfgs:
-                try:
-                    inp = dict(v)
-                    inp.update(c)
-                    rf = RETOUCH_MODEL if not RETOUCH_MODEL_VERSION else f"{RETOUCH_MODEL}:{RETOUCH_MODEL_VERSION}"
-                    url = replicate_generate(rf, inp)
-                    if url and url.startswith("http"):
-                        out = _download_with_retries(url)
-                        if out:
-                            return out
-                    if REPLICATE_LAST_ERROR and ("404" in REPLICATE_LAST_ERROR or "not found" in REPLICATE_LAST_ERROR.lower()):
-                        RETOUCH_DISABLED = True
-                        break
-                except Exception as e:
-                    print("Retouch custom variant error:", str(e)[:200])
-        
-    # Fallback to ESRGAN with gentle face enhance
-    try:
-        if not ESRGAN_MODEL or ESRGAN_DISABLED:
-            return img_bytes
-        url = replicate_generate(ESRGAN_MODEL, {
-            "image": src_url,
-            "scale": 2,
-            "face_enhance": True,
-            "model": "RealESRGAN_x4plus"
-        })
-        if url and url.startswith("http"):
-            out = _download_with_retries(url)
-            if out:
-                return out
-    except Exception as e:
-        em = str(e)
-        print("Retouch ESRGAN error:", em[:200])
-        if "404" in em or (REPLICATE_LAST_ERROR and "404" in REPLICATE_LAST_ERROR):
-            ESRGAN_DISABLED = True
-            print("→ Disable upscaler for this runtime (404)")
-    # As a last resort, return original to avoid failure UX
-    return img_bytes
+# (retouch feature removed)
 
 # ===================== NUDGES ========================
 NUDGE_ENABLED = os.getenv("NUDGE_ENABLED", "0") == "1"
@@ -1349,7 +1249,6 @@ def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=lang.get("menu_help", "🆘 /help"),    callback_data="help_open"),
         ],
         [
-            InlineKeyboardButton(text=lang.get("menu_retouch", "🪄 Retouch"), callback_data="retouch_open"),
             InlineKeyboardButton(text=lang.get("menu_lang", "🌐 /lang"), callback_data="lang_open"),
         ],
     ])
@@ -1467,10 +1366,6 @@ async def cmd_copy(m: Message):
     USER_COPY_PROMPT.pop(m.chat.id, None)
     await safe_answer(m, L(m.chat.id)["copy_intro"])
 
-@dp.message(Command("retouch"))
-async def cmd_retouch(m: Message):
-    USER_RETOUCH_MODE.add(m.chat.id)
-    await safe_answer(m, L(m.chat.id)["retouch_intro"])
 
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
@@ -1667,11 +1562,6 @@ async def cb_onboard_go(c: CallbackQuery):
     await c.answer()
     await c.message.answer(L(chat_id)["start"], reply_markup=main_menu_inline(chat_id))
 
-@dp.callback_query(F.data == "retouch_open")
-async def cb_retouch_open(c: CallbackQuery):
-    USER_RETOUCH_MODE.add(c.message.chat.id)
-    await c.answer()
-    await c.message.answer(L(c.message.chat.id)["retouch_intro"])
 
 @dp.callback_query(F.data == "balance")
 async def cb_balance(c: CallbackQuery):
@@ -1784,37 +1674,6 @@ async def on_photo(m: Message):
     STATS_USERS.add(m.chat.id)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     _uadd(m.chat.id, "photos", 1)
-
-    # ----- Retouch Mode -----
-    if m.chat.id in USER_RETOUCH_MODE:
-        USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
-        if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-            return await safe_answer(m, L(m.chat.id)["credits_none"])
-        wait = await safe_answer(m, L(m.chat.id)["retouch_processing"])
-        final_bytes = retouch_image_from_bytes(img_bytes)
-        if not final_bytes:
-            if wait:
-                await safe_edit_text(wait, L(m.chat.id)["fail"])
-            return
-        if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
-            USER_CREDITS[m.chat.id] -= 1
-        USER_LAST_OUTPUT[m.chat.id] = final_bytes
-        USER_LAST_PROMPT[m.chat.id] = "RET"  # mark retouch
-        LAST_PHOTO[m.chat.id] = final_bytes
-        hist = USER_HISTORY.setdefault(m.chat.id, [])
-        hist.append(final_bytes)
-        if len(hist) > GALLERY_LIMIT:
-            del hist[:-GALLERY_LIMIT]
-        if wait:
-            await wait.delete()
-        await safe_answer_photo(
-            m,
-            BufferedInputFile(final_bytes, filename="imodel_retouched.jpg"),
-            caption=L(m.chat.id)["retouch_done"],
-            reply_markup=kb_actions(m.chat.id),
-        )
-        USER_RETOUCH_MODE.discard(m.chat.id)
-        return
 
     # ----- Copy Mode -----
     if m.chat.id in USER_COPY_MODE:
@@ -2129,7 +1988,7 @@ async def on_startup():
         print("Gallery channel:", GALLERY_CHANNEL_ID, "AUTO_POST:", AUTO_POST)
     if PUBLISH_GROUP_ID:
         print("Publish group:", PUBLISH_GROUP_ID)
-    print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>", "| retouch:", RETOUCH_MODEL or "<unset>")
+    print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>")
 
     me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
@@ -2153,7 +2012,6 @@ async def on_startup():
             BotCommand(command="refer",   description="Реферальная ссылка"),
             BotCommand(command="pricing", description="Тарифы"),
             BotCommand(command="copy",    description="Скопировать фото"),
-            BotCommand(command="retouch", description="Ретушь фото"),
             BotCommand(command="help",    description="Помощь"),
             BotCommand(command="clear",   description="Очистить память"),
             BotCommand(command="version", description="Версия"),
