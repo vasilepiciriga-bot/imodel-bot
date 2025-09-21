@@ -495,7 +495,7 @@ SAFE_SUFFIX = (
 )
 
 IDENTITY_LOCK = (
-    "Keep the SAME person from the reference photo. Preserve facial identity, "
+    "Keep the SAME person from the input selfie. Preserve facial identity, "
     "facial structure, bone structure, age, skin tone, natural eye color, hairline and hair color. "
     "Do not alter ethnicity, face proportions, freckles, moles, or scars. "
     "No face reshaping, no beautification filters, no de-aging, no make-up exaggeration."
@@ -504,7 +504,11 @@ IDENTITY_LOCK = (
 NEGATIVE_LOCK = (
     "different person, identity change, changed ethnicity, de-aged, "
     "face morph, face swap artifacts, over-smooth skin, plastic doll, uncanny face, "
-    "warped features, duplicate face, extra fingers, extra hands, artifacts, lowres, "
+    "warped features, duplicate face, extra fingers, extra hands, artifacts, lowres"
+)
+
+# Используем только когда нужно зафиксировать сцену (copy exact scene)
+SCENE_CHANGE_BAN = (
     "changed background, different background, different scene, composition changed, new objects, added elements"
 )
 
@@ -516,7 +520,6 @@ SCENE_LOCK = (
 )
 
 STRICT_NEGATIVE = (
-    "different background, different scene, changed composition, added objects, removed objects, different lighting, "
     "beautify filter, airbrushed skin, over-retouched skin, body reshaped, face reshaped"
 )
 
@@ -667,7 +670,12 @@ def generate_image_from_bytes(
             print("→ Не удалось получить S3 URL для style-ref (продолжаем без него)")
 
     def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
-        neg = NEGATIVE_LOCK if not strict else f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
+        if strict and lock_scene:
+            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
+        elif strict:
+            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
+        else:
+            neg = NEGATIVE_LOCK
         inputs_common = {
             "prompt": p,
             "negative_prompt": neg,
