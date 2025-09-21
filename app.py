@@ -154,7 +154,7 @@ ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plu
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
 # Language / quotas
-LANG_DEFAULT = os.getenv("LANG_DEFAULT", "ru")
+LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
 FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "5"))
 
 # Channel & autopost
@@ -255,6 +255,7 @@ BOT_USERNAME_GLOBAL = None
 # ===================== I18N =========================
 T = {
     "ru": {
+        "menu_lang": "🌐 Язык",
         "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
         "onboard_btn": "🚀 Старт",
         "start": "👋 Добро пожаловать в iModel — профессиональный фотогенератор.\n\nКак это работает:\n1) Пришлите 1–4 селфи (хороший свет помогает)\n2) Опишите сцену или включите «Скопировать» (/copy)\n3) Получите готовый результат.\n\nБыстрые команды: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
@@ -265,10 +266,11 @@ T = {
         "fail": "Не удалось сгенерировать. Попробуйте изменить описание или фото.",
         "ready": "Готово ✅",
         "credits_none": "Нет кредитов. Используй /buy или /promo.",
-        "choose_lang": "Выбери язык:\n/ru  /en  /ro",
+        "choose_lang": "🌐 Выберите язык интерфейса:",
         "lang_ru": "Язык установлен: Русский",
         "lang_en": "Язык установлен: Английский",
         "lang_ro": "Язык установлен: Румынский",
+        "lang_de": "Язык установлен: Немецкий",
         "presets": "Идеи сцен:\n• Студия: портрет, мягкий свет, тёмный фон\n• Улица: закат, боке, 85мм\n• Интерьер: кафе, тёплый свет, винтаж\n• Природа: лес, рассеянный свет, «плёнка»",
         "blocked": "⛔ Запрос запрещён.",
         "btn_balance": "Баланс",
@@ -307,6 +309,7 @@ T = {
         "menu_copy": "📋 Скопировать",
     },
     "en": {
+        "menu_lang": "🌐 Language",
         "onboard_welcome": "Welcome to iModel. Tap Start to begin.",
         "onboard_btn": "🚀 Start",
         "start": "👋 Welcome to iModel — professional photo generation.\n\nHow it works:\n1) Send 1–4 selfies (good lighting helps)\n2) Describe the scene or use Copy Mode (/copy)\n3) Get the result.\n\nQuick commands: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
@@ -317,10 +320,11 @@ T = {
         "fail": "Generation failed. Try adjusting your description or selfie.",
         "ready": "Done ✅",
         "credits_none": "No credits. Use /buy or /promo.",
-        "choose_lang": "Choose language:\n/ru  /en  /ro",
+        "choose_lang": "🌐 Choose your interface language:",
         "lang_ru": "Language set: Russian",
         "lang_en": "Language set: English",
         "lang_ro": "Language set: Romanian",
+        "lang_de": "Language set: German",
         "presets": "Scene ideas:\n• Studio: portrait, soft light, dark backdrop\n• Outdoor: sunset, bokeh, 85mm\n• Interior: cafe, warm tones, vintage\n• Nature: forest, diffused light, film look",
         "blocked": "⛔ Request blocked.",
         "btn_balance": "Balance",
@@ -359,6 +363,7 @@ T = {
         "menu_copy": "📋 Copy",
     },
     "ro": {
+        "menu_lang": "🌐 Limba",
         "onboard_welcome": "Bine ai venit la iModel. Apasă Start pentru a începe.",
         "onboard_btn": "🚀 Start",
         "start": "👋 Bine ai venit la iModel — generare foto profesională.\n\nCum funcționează:\n1) Trimite 1–4 selfie‑uri (lumina bună ajută)\n2) Descrie scena sau folosește „Copiază” (/copy)\n3) Primești rezultatul.\n\nComenzi rapide: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
@@ -369,10 +374,11 @@ T = {
         "fail": "Nu am reușit. Încearcă altă descriere sau alt selfie.",
         "ready": "Gata ✅",
         "credits_none": "Nu mai ai credite. /buy sau /promo.",
-        "choose_lang": "Alege limba:\n/ru  /en  /ro",
+        "choose_lang": "🌐 Alege limba interfeței:",
         "lang_ru": "Limba setată: Rusă",
         "lang_en": "Limba setată: Engleză",
         "lang_ro": "Limba setată: Română",
+        "lang_de": "Limba setată: Germană",
         "presets": "Idei de scenă:\n• Studio: portret, lumină moale, fundal închis\n• Exterior: apus, bokeh, 85mm\n• Interior: cafenea, tonuri calde, vintage\n• Natură: pădure, lumină difuză, aspect film",
         "blocked": "⛔ Cerere blocată.",
         "btn_balance": "Sold",
@@ -410,6 +416,61 @@ T = {
         "copy_exit": "Modul „Copiază” oprit.",
         "menu_copy": "📋 Copiază",
     }
+    ,
+    "de": {
+        "menu_lang": "🌐 Sprache",
+        "onboard_welcome": "Willkommen bei iModel. Tippe auf Start, um zu beginnen.",
+        "onboard_btn": "🚀 Start",
+        "start": "👋 Willkommen bei iModel — professionelle Fotogenerierung.\n\nSo geht’s:\n1) Sende 1–4 Selfies (gutes Licht hilft)\n2) Beschreibe die Szene oder nutze den Kopier‑Modus (/copy)\n3) Erhalte das Ergebnis.\n\nSchnellbefehle: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
+        "help": "📘 Tipps:\n• 1–4 Selfies, möglichst ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt\n• Für exaktes Szenen‑Copy: /copy (erst Stil‑Bild, dann Selfie)",
+        "need_photo": "Bitte zuerst ein Gesichts‑Foto senden.",
+        "photo_ok": "Foto empfangen ✅ Beschreibe jetzt die Szene oder nutze /presets.",
+        "gen": "Erzeuge… ⏳",
+        "fail": "Erzeugung fehlgeschlagen. Bitte Beschreibung oder Selfie anpassen.",
+        "ready": "Fertig ✅",
+        "credits_none": "Keine Credits. Nutze /buy oder /promo.",
+        "choose_lang": "🌐 Sprache für die Oberfläche wählen:",
+        "lang_ru": "Sprache gesetzt: Russisch",
+        "lang_en": "Sprache gesetzt: Englisch",
+        "lang_ro": "Sprache gesetzt: Rumänisch",
+        "lang_de": "Sprache gesetzt: Deutsch",
+        "presets": "Szenen‑Ideen:\n• Studio: Porträt, weiches Licht, dunkler Hintergrund\n• Outdoor: Sonnenuntergang, Bokeh, 85mm\n• Interior: Café, warme Töne, Vintage\n• Natur: Wald, diffuses Licht, Film‑Look",
+        "blocked": "⛔ Anfrage blockiert.",
+        "btn_balance": "Guthaben",
+        "btn_buy": "Kaufen",
+        "btn_more": "Mehr",
+        "btn_publish": "Veröffentlichen",
+        "btn_publish_group": "In Gruppe",
+        "menu_presets": "🎛 Presets",
+        "menu_help": "🆘 Hilfe",
+        "menu_pricing": "💎 Preise",
+        "buy_title": "💳 Käufe (Telegram Stars)\nWähle ein passendes Paket:",
+        "buy_btn_10": "10 Gen — 200★",
+        "buy_btn_30": "30 Gen — 500★",
+        "buy_btn_100": "100 Gen — 1200★",
+        "bought": "Danke! +{add}. Gesamt: {all}.",
+        "promo_usage": "Verwendung: /promo CODE",
+        "promo_ok": "Promo angewendet: +{add}. Gesamt: {all}.",
+        "promo_bad": "Promo ungültig.",
+        "version": "ℹ️ Version: {ver}",
+        "balance": "Dein Guthaben: {n} Generationen{free}",
+        "balance_free": " (Whitelist/Admin — keine Abzüge)",
+        "cleared": "Speicher geleert.",
+        "tos": "Nutzung: Fotos nur zur Generierung; NSFW/Celebrities verboten; Ergebnis bis zu 72h gespeichert.",
+        "privacy": "Datenschutz: keine Weitergabe; /clear löscht temporär; /forget löscht vollständig.",
+        "admin_only": "Nur Admins.",
+        "granted": "{n} Gen an {uid} vergeben. Guthaben: {bal}.",
+        "free_added": "Nutzer {uid} zur Whitelist hinzugefügt.",
+        "gallery_empty": "Galerie ist leer.",
+        "ref_link_fail": "Bot‑Username nicht ermittelt.",
+        "pricing": "💎 iModel Preise\n\n• 10 Gen — 200★  (20★/Gen)\n• 30 Gen — 500★  (≈16.7★/Gen)\n• 100 Gen — 1200★ (12★/Gen)\n\nBezahlung via Telegram Stars. Größere Pakete sind günstiger.",
+        "copy_intro": "📋 Kopier‑Modus\nSchritt 1: Stil‑Referenz senden (Szene)\nSchritt 2: dein Selfie senden\nErgebnis: gleiche Szene, nur Gesicht ersetzt.",
+        "copy_style_ok": "Stil‑Referenz empfangen ✅ Jetzt dein Selfie senden.",
+        "copy_need_style": "Bitte zuerst die Stil‑Referenz senden.",
+        "copy_done": "Fertig ✅",
+        "copy_exit": "Kopier‑Modus AUS.",
+        "menu_copy": "📋 Kopieren",
+    }
 }
 
 def L(chat_id: int) -> dict:
@@ -426,6 +487,8 @@ def locale_to_lang(code: Optional[str]) -> str:
         return "ro"
     if base in ("en",):
         return "en"
+    if base in ("de",):
+        return "de"
     return LANG_DEFAULT
 
 # ===================== FILTER ========================
@@ -454,6 +517,8 @@ def detect_lang(sample: str) -> str:
         return LANG_DEFAULT
     if re.search(r"[ăâîșşțţ]", s):
         return "ro"
+    if re.search(r"[äöüß]", s):
+        return "de"
     cyr = sum(1 for ch in s if "а" <= ch <= "я" or ch == "ё")
     lat = sum(1 for ch in s if "a" <= ch <= "z")
     if cyr > lat * 1.2:
@@ -1151,12 +1216,37 @@ def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
             InlineKeyboardButton(text="💰 " + lang["btn_balance"],  callback_data="balance"),
-            InlineKeyboardButton(text=lang.get("menu_pricing", "💎 /pricing"),                callback_data="pricing_open"),
+            InlineKeyboardButton(text=lang.get("menu_pricing", "💎 /pricing"), callback_data="pricing_open"),
         ],
         [
             InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
             InlineKeyboardButton(text="📋 " + lang["menu_copy"],   callback_data="copy_open"),
             InlineKeyboardButton(text=lang.get("menu_help", "🆘 /help"),    callback_data="help_open"),
+        ],
+        [
+            InlineKeyboardButton(text=lang.get("menu_lang", "🌐 /lang"), callback_data="lang_open"),
+        ],
+    ])
+
+def kb_lang_select(chat_id: int) -> InlineKeyboardMarkup:
+    cur = USER_LANG.get(chat_id, LANG_DEFAULT)
+    def label(code: str) -> str:
+        names = {
+            "ru": "🇷🇺 Русский",
+            "en": "🇬🇧 English",
+            "ro": "🇷🇴 Română",
+            "de": "🇩🇪 Deutsch",
+        }
+        base = names.get(code, code.upper())
+        return ("✅ " + base) if code == cur else base
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=label("en"), callback_data="set_lang_en"),
+            InlineKeyboardButton(text=label("ru"), callback_data="set_lang_ru"),
+        ],
+        [
+            InlineKeyboardButton(text=label("ro"), callback_data="set_lang_ro"),
+            InlineKeyboardButton(text=label("de"), callback_data="set_lang_de"),
         ],
     ])
 
@@ -1289,7 +1379,7 @@ async def cmd_help(m: Message):
 
 @dp.message(Command("lang"))
 async def cmd_lang(m: Message):
-    await safe_answer(m, L(m.chat.id)["choose_lang"])
+    await safe_answer(m, L(m.chat.id)["choose_lang"], reply_markup=kb_lang_select(m.chat.id))
 
 @dp.message(Command("ru"))
 async def cmd_ru(m: Message):
@@ -1305,6 +1395,29 @@ async def cmd_en(m: Message):
 async def cmd_ro(m: Message):
     USER_LANG[m.chat.id] = "ro"; USER_SEEN_TEXT.add(m.chat.id)
     await safe_answer(m, L(m.chat.id)["lang_ro"], reply_markup=main_menu_inline(m.chat.id))
+
+@dp.message(Command("de"))
+async def cmd_de(m: Message):
+    USER_LANG[m.chat.id] = "de"; USER_SEEN_TEXT.add(m.chat.id)
+    msg = T.get("de", {}).get("lang_de") or "Language set: German"
+    await safe_answer(m, msg, reply_markup=main_menu_inline(m.chat.id))
+
+@dp.callback_query(F.data.startswith("set_lang_"))
+async def cb_set_lang(c: CallbackQuery):
+    code = c.data.split("set_lang_")[-1]
+    if code not in ("ru","en","ro","de"):
+        await c.answer()
+        return
+    USER_LANG[c.message.chat.id] = code
+    USER_SEEN_TEXT.add(c.message.chat.id)
+    key = {
+        "ru": "lang_ru",
+        "en": "lang_en",
+        "ro": "lang_ro",
+        "de": "lang_de",
+    }[code]
+    await c.answer()
+    await c.message.answer(L(c.message.chat.id)[key], reply_markup=main_menu_inline(c.message.chat.id))
 
 @dp.message(Command("presets"))
 async def cmd_presets(m: Message):
@@ -1408,7 +1521,7 @@ async def cb_promo(c: CallbackQuery):
 @dp.callback_query(F.data == "lang_open")
 async def cb_lang(c: CallbackQuery):
     await c.answer()
-    await c.message.answer(L(c.message.chat.id)["choose_lang"])
+    await c.message.answer(L(c.message.chat.id)["choose_lang"], reply_markup=kb_lang_select(c.message.chat.id))
 
 @dp.callback_query(F.data == "pricing_open")
 async def cb_pricing(c: CallbackQuery):
