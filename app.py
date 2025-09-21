@@ -55,6 +55,7 @@ os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 
 # S3 (Backblaze B2 S3-compatible)
 S3_ENDPOINT = os.getenv("S3_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
@@ -579,11 +580,11 @@ def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
         msg = [
             {"role": "system", "content": sys},
             {"role": "user", "content": [
-                {"type": "input_text", "text": "Describe the scene for 1:1 copy."},
-                {"type": "input_image", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text", "text": "Describe the scene for 1:1 copy."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
             ]}
         ]
-        r = client.chat.completions.create(model=OPENAI_MODEL, messages=msg, temperature=0.2, max_tokens=180)
+        r = client.chat.completions.create(model=OPENAI_MODEL_VISION, messages=msg, temperature=0.2, max_tokens=180)
         line = (r.choices[0].message.content or "").strip()
         if not line:
             return None
@@ -608,15 +609,15 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
             "Keep SFW (fully clothed), avoid any brand/celebrity names, keep it respectful. Do not mention 'reference' or 'face swap'."
         )
         user_content = [
-            {"type": "input_text", "text": "Create a one-line Midjourney prompt capturing this photo's style."},
-            {"type": "input_image", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            {"type": "text", "text": "Create a one-line Midjourney prompt capturing this photo's style."},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
         ]
         msg = [
             {"role": "system", "content": sys},
             {"role": "user", "content": user_content},
         ]
         r = client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_MODEL_VISION,
             messages=msg,
             temperature=0.2,
             max_tokens=200,
@@ -786,6 +787,8 @@ def generate_image_from_bytes(
 
     # Бережный апскейл
     try:
+        if not ESRGAN_MODEL:
+            return nano_bytes
         up_url = replicate_generate(ESRGAN_MODEL, {
             "image": gen_url,
             "scale": 4,

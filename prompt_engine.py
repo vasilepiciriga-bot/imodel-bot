@@ -41,8 +41,8 @@ def craft_prompt_from_style_image(style_bytes: bytes) -> Optional[Dict[str, str]
     messages = [
         { "role": "system", "content": SYSTEM_PROMPT },
         { "role": "user", "content": [
-            {"type": "input_text", "text": "Analyze this photo and return JSON with {prompt, negative, seed_hint}."},
-            {"type": "input_image", "image_url": {"url": img_url}},
+            {"type": "text", "text": "Analyze this photo and return JSON with {prompt, negative, seed_hint}."},
+            {"type": "image_url", "image_url": {"url": img_url}},
         ]}
     ]
     try:
