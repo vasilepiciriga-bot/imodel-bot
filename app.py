@@ -57,6 +57,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 
+# Filter toggles
+ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
+ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "0") == "1"
+
 # S3 (Backblaze B2 S3-compatible)
 S3_ENDPOINT = os.getenv("S3_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
 S3_REGION   = os.getenv("S3_REGION", "eu-central-003")
@@ -328,12 +332,25 @@ def locale_to_lang(code: Optional[str]) -> str:
     return LANG_DEFAULT
 
 # ===================== FILTER ========================
-BANNED_RE = re.compile(
-    r"(nsfw|nude|porn|xxx|celebrity|public\s*figure)",
-    re.IGNORECASE
-)
+_SEXUAL_RE = re.compile(r"(nsfw|nude|nudity|porn|xxx|sex|sexual)", re.IGNORECASE)
+_CELEB_RE  = re.compile(r"(celebrity|public\s*figure)", re.IGNORECASE)
+_MINOR_RE  = re.compile(r"(minor|underage|child|kid|teen|baby|дет|реб[её]нок|подросток)", re.IGNORECASE)
+
 def blocked(text: str) -> bool:
-    return bool(BANNED_RE.search(text or ""))
+    s = (text or "").strip()
+    # Ignore safe disclaimers like "no nudity", "no celebrity", "no public figure(s)", "no minors"
+    s = re.sub(r"\bno\s+(nsfw|nude|nudity|porn|xxx|sex|sexual|celebrity|celebrities|public\s*figure[s]?|minor[s]?|children|kids|teens|underage)\b", "", s, flags=re.I)
+
+    # Always block sexual content involving minors
+    if _SEXUAL_RE.search(s) and _MINOR_RE.search(s):
+        return True
+
+    # Optional blocks controlled by env flags
+    if (not ALLOW_NSFW) and _SEXUAL_RE.search(s):
+        return True
+    if (not ALLOW_CELEBS) and _CELEB_RE.search(s):
+        return True
+    return False
 
 # ===================== Lang detect (fallback) ========
 def detect_lang(sample: str) -> str:
@@ -490,10 +507,16 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
     return None
 
 # ===================== PROMPTS ========================
-SAFE_SUFFIX = (
-    " | safe for work, fully clothed, "
-    "no nudity, no sexual content, no celebrity, respectful"
-)
+def _safe_suffix() -> str:
+    parts = []
+    if not ALLOW_NSFW:
+        parts.append("safe for work, fully clothed")
+        parts.append("no nudity")
+        parts.append("no sexual content")
+    if not ALLOW_CELEBS:
+        parts.append("no celebrity")
+    parts.append("respectful")
+    return " | " + ", ".join(parts)
 
 IDENTITY_LOCK = (
     "Keep the SAME person from the input selfie. Preserve facial identity, "
@@ -526,10 +549,12 @@ STRICT_NEGATIVE = (
 
 def enforce_safe_prompt(user_text: str) -> str:
     text = (user_text or "").strip()
-    # Remove explicit NSFW terms; keep SFW framing, but do not force age
-    text = re.sub(r"\b(nsfw|nude|nudity|xxx|sex)\b", "", text, flags=re.I)
-    if SAFE_SUFFIX.lower() not in text.lower():
-        text = f"{text}. {SAFE_SUFFIX}"
+    if not ALLOW_NSFW:
+        # Remove explicit NSFW terms; keep SFW framing
+        text = re.sub(r"\b(nsfw|nude|nudity|xxx|sex)\b", "", text, flags=re.I)
+    suffix = _safe_suffix()
+    if suffix.lower() not in text.lower():
+        text = f"{text}. {suffix}"
     return text
 
 def safer_variant(prompt: str) -> str:
@@ -1493,6 +1518,7 @@ async def on_startup():
         print("Gallery channel:", GALLERY_CHANNEL_ID, "AUTO_POST:", AUTO_POST)
     if PUBLISH_GROUP_ID:
         print("Publish group:", PUBLISH_GROUP_ID)
+    print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>")
 
     me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
