@@ -576,8 +576,8 @@ def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
         msg = [
             {"role": "system", "content": sys},
             {"role": "user", "content": [
-                {"type": "input_text", "text": "Describe the scene for 1:1 copy."},
-                {"type": "input_image", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text", "text": "Describe the scene for 1:1 copy."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
             ]}
         ]
         r = client.chat.completions.create(model=OPENAI_MODEL, messages=msg, temperature=0.2, max_tokens=180)
@@ -605,8 +605,8 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
             "Keep SFW (fully clothed), avoid any brand/celebrity names, keep it respectful. Do not mention 'reference' or 'face swap'."
         )
         user_content = [
-            {"type": "input_text", "text": "Create a one-line Midjourney prompt capturing this photo's style."},
-            {"type": "input_image", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            {"type": "text", "text": "Create a one-line Midjourney prompt capturing this photo's style."},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
         ]
         msg = [
             {"role": "system", "content": sys},
