@@ -155,7 +155,7 @@ ESRGAN_DISABLED  = False  # auto-disable on first 404
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
-FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "5"))
+FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "3"))
 
 # Channel & autopost
 GALLERY_CHANNEL_ID = os.getenv("GALLERY_CHANNEL_ID", "")
@@ -188,7 +188,7 @@ def _parse_admins(val: str) -> Set[int]:
     return out
 
 ADMIN_IDS: Set[int] = _parse_admins(os.getenv("ADMIN_IDS", ""))
-ADMIN_USERNAMES_RAW = os.getenv("ADMIN_USERNAMES", "@piciriga,@MarkBeth_beauty")
+ADMIN_USERNAMES_RAW = os.getenv("ADMIN_USERNAMES", "@piciriga,@MarkBeth_beauty,@tamara_piciriga")
 ADMIN_USERNAMES = {
     u.lstrip("@").lower()
     for u in re.split(r"[,\s]+", ADMIN_USERNAMES_RAW)
@@ -2068,6 +2068,14 @@ async def telegram_webhook(request: Request):
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
     return {"ok": True}
+
+@app.get("/")
+async def root_health():
+    return {"ok": True, "version": APP_VERSION}
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
 @app.get("/metrics")
 async def http_metrics(request: Request):
