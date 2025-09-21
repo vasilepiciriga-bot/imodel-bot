@@ -217,6 +217,7 @@ USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt
 USER_LANG: Dict[int, str]          = {}   # язык
 USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
+USER_ONBOARDED: Set[int]           = set()
 
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
@@ -251,6 +252,8 @@ BOT_USERNAME_GLOBAL = None
 # ===================== I18N =========================
 T = {
     "ru": {
+        "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
+        "onboard_btn": "🚀 Старт",
         "start": "👋 Добро пожаловать в iModel — профессиональный фотогенератор.\n\nКак это работает:\n1) Пришлите 1–4 селфи (хороший свет помогает)\n2) Опишите сцену или включите «Скопировать» (/copy)\n3) Получите готовый результат.\n\nБыстрые команды: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
         "help": "📘 Советы:\n• 1–4 селфи без сильных фильтров\n• Опишите место, свет, стиль, кадрирование\n• Для точной копии сцены — /copy (сначала образец, затем селфи)",
         "need_photo": "Сначала пришли фото лица.",
@@ -301,6 +304,8 @@ T = {
         "menu_copy": "📋 Скопировать",
     },
     "en": {
+        "onboard_welcome": "Welcome to iModel. Tap Start to begin.",
+        "onboard_btn": "🚀 Start",
         "start": "👋 Welcome to iModel — professional photo generation.\n\nHow it works:\n1) Send 1–4 selfies (good lighting helps)\n2) Describe the scene or use Copy Mode (/copy)\n3) Get the result.\n\nQuick commands: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
         "help": "📘 Tips:\n• 1–4 selfies, minimal filters/makeup\n• Describe location, light, style, framing\n• For exact scene copy — /copy (style first, then selfie)",
         "need_photo": "Please send a face photo first.",
@@ -351,6 +356,8 @@ T = {
         "menu_copy": "📋 Copy",
     },
     "ro": {
+        "onboard_welcome": "Bine ai venit la iModel. Apasă Start pentru a începe.",
+        "onboard_btn": "🚀 Start",
         "start": "👋 Bine ai venit la iModel — generare foto profesională.\n\nCum funcționează:\n1) Trimite 1–4 selfie‑uri (lumina bună ajută)\n2) Descrie scena sau folosește „Copiază” (/copy)\n3) Primești rezultatul.\n\nComenzi rapide: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
         "help": "📘 Sfaturi:\n• 1–4 selfie‑uri, minim filtre/machiaj\n• Descrie scena: locație, lumină, stil, încadrare\n• Pentru copiere exactă — /copy (stil apoi selfie)",
         "need_photo": "Trimite o poză cu fața mai întâi.",
@@ -1102,6 +1109,11 @@ async def cmd_start(m: Message):
 
     USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
     USER_SEEN_TEXT.discard(m.chat.id)
+    if m.chat.id not in USER_ONBOARDED:
+        # Show minimal welcome with a single Start button
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(m.chat.id)["onboard_btn"], callback_data="onboard_go")]])
+        await safe_answer(m, L(m.chat.id)["onboard_welcome"], reply_markup=kb)
+        return
     await safe_answer(m, L(m.chat.id)["start"], reply_markup=main_menu_inline(m.chat.id))
     STATS_USERS.add(m.chat.id)
 
@@ -1237,6 +1249,13 @@ async def cb_pricing(c: CallbackQuery):
     await c.answer()
     await c.message.answer(L(c.message.chat.id)["pricing"])
     await cmd_buy(c.message)
+
+@dp.callback_query(F.data == "onboard_go")
+async def cb_onboard_go(c: CallbackQuery):
+    chat_id = c.message.chat.id
+    USER_ONBOARDED.add(chat_id)
+    await c.answer()
+    await c.message.answer(L(chat_id)["start"], reply_markup=main_menu_inline(chat_id))
 
 @dp.callback_query(F.data == "balance")
 async def cb_balance(c: CallbackQuery):
