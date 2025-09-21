@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>iModel — Privacy Policy</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg:#fff; --fg:#0e0e0e; --muted:#666; --card:#f7f7f8; --brand:#111; --accent:#d4af37;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+    .wrap{max-width:920px;margin:0 auto;padding:32px 20px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
+    .brand{display:flex;align-items:center;gap:12px}
+    .logo{width:40px;height:40px;border-radius:8px;background:linear-gradient(135deg,var(--brand),#333);position:relative;box-shadow:0 6px 24px rgba(0,0,0,.12)}
+    .logo:after{content:"iM";position:absolute;inset:0;display:grid;place-items:center;color:#fff;font-weight:700;letter-spacing:.5px}
+    h1{font-size:28px;margin:0}
+    .badge{font-size:13px;color:#222;background:#f0f0f2;border:1px solid #e6e6ea;border-radius:999px;padding:6px 10px}
+    nav{display:flex;gap:8px;flex-wrap:wrap}
+    .lang{border:1px solid #e6e6ea;background:#fff;color:#111;border-radius:10px;padding:8px 12px;cursor:pointer}
+    .lang.active{border-color:var(--accent);box-shadow:0 0 0 3px rgba(212,175,55,.12)}
+    .card{background:var(--card);border:1px solid #eee;border-radius:16px;padding:22px;margin:14px 0}
+    h2{font-size:20px;margin:0 0 8px}
+    h3{font-size:17px;margin:18px 0 8px}
+    p,li{color:#222}
+    .muted{color:var(--muted)}
+    .grid{display:grid;gap:14px}
+    .grid.two{grid-template-columns:1fr 1fr}
+    @media (max-width:720px){.grid.two{grid-template-columns:1fr}}
+    footer{margin-top:26px;color:var(--muted);font-size:14px}
+    a{color:#111;text-decoration-thickness:2px;text-underline-offset:3px}
+    .pill{display:inline-block;background:#111;color:#fff;border-radius:999px;padding:4px 10px;font-size:12px;margin-right:6px}
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;background:#111;color:#fff;border-radius:6px;padding:2px 6px;font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <h1>iModel — Privacy Policy</h1>
+          <div class="badge">Effective date: 20 Sep 2025</div>
+        </div>
+      </div>
+      <nav>
+        <button class="lang active" data-lang="ru">Русский</button>
+        <button class="lang" data-lang="en">English</button>
+        <button class="lang" data-lang="ro">Română</button>
+      </nav>
+    </header>
+
+    <!-- RU -->
+    <section class="view" id="ru">
+      <div class="card">
+        <h2>Политика конфиденциальности</h2>
+        <p class="muted">Эта Политика объясняет, как <b>iModel AI Bot</b> собирает и использует данные при работе в Telegram.</p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>1. Какие данные мы получаем</h3>
+          <ul>
+            <li><b>Telegram User ID</b> — для учёта баланса и работы функций.</li>
+            <li><b>Сообщения, описания и загруженные фото</b> — только для генерации изображений.</li>
+            <li><b>Платёжные события Stars</b> — обрабатываются Telegram; мы не получаем данные карт.</li>
+          </ul>
+          <p>Мы не храним ваши изображения и промпты постоянно. Файлы используются временно и удаляются автоматически после обработки.</p>
+        </div>
+
+        <div class="card">
+          <h3>2. Как мы используем данные</h3>
+          <ul>
+            <li>Генерация и доставка изображений по вашему запросу.</li>
+            <li>Учёт кредитов, бесплатных лимитов, покупок и промокодов.</li>
+            <li>Защита от злоупотреблений и соблюдение правил платформ.</li>
+          </ul>
+          <p>Мы <b>не продаём</b> и <b>не передаём</b> ваши данные третьим лицам в маркетинговых целях.</p>
+        </div>
+
+        <div class="card">
+          <h3>3. Сторонние сервисы</h3>
+          <ul>
+            <li><b>Replicate</b> — генерация изображений (модели NanoBanana/ESRGAN и др.).</li>
+            <li><b>Backblaze B2 (S3 API)</b> — временное хранение изображений.</li>
+            <li><b>Telegram Payments (Stars)</b> — платежи.</li>
+          </ul>
+          <p>Каждый сервис обрабатывает данные согласно собственной политике конфиденциальности.</p>
+        </div>
+
+        <div class="card">
+          <h3>4. Безопасность и хранение</h3>
+          <ul>
+            <li>Временные файлы автоматически удаляются после завершения обработки.</li>
+            <li>Доступ ограничен по принципу необходимости.</li>
+            <li>Мы принимаем технические и организационные меры для защиты данных.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>5. Ваши права</h3>
+          <p>Вы можете в боте:</p>
+          <ul>
+            <li>Использовать <span class="kbd">/clear</span> для удаления временных данных (реф-фото и последних результатов).</li>
+            <li>Запросить полное удаление учётных данных — напишите нам (контакты ниже).</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>6. Дети</h3>
+          <p>Сервис не предназначен для лиц младше 13 лет.</p>
+        </div>
+
+        <div class="card">
+          <h3>7. Изменения</h3>
+          <p>Мы можем обновлять эту Политику. Актуальная версия будет доступна по этой ссылке.</p>
+        </div>
+
+        <div class="card">
+          <h3>8. Контакты</h3>
+          <p>Вопросы по приватности: <a href="https://t.me/piciriga" target="_blank">@piciriga</a></p>
+        </div>
+      </div>
+      <footer>iModel © 2025</footer>
+    </section>
+
+    <!-- EN -->
+    <section class="view" id="en" hidden>
+      <div class="card">
+        <h2>Privacy Policy</h2>
+        <p class="muted">This Policy explains how <b>iModel AI Bot</b> collects and uses data when you use the Telegram bot.</p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>1. Information We Collect</h3>
+          <ul>
+            <li><b>Telegram User ID</b> for balance and features.</li>
+            <li><b>Messages, prompts, uploaded photos</b> for image generation only.</li>
+            <li><b>Telegram Stars payments</b> events — processed by Telegram; we don’t receive card data.</li>
+          </ul>
+          <p>We don’t store your images/prompts permanently. Files are used temporarily and auto-deleted after processing.</p>
+        </div>
+
+        <div class="card">
+          <h3>2. How We Use Data</h3>
+          <ul>
+            <li>Generate and deliver AI images based on your requests.</li>
+            <li>Manage credits, free trials, purchases and promo codes.</li>
+            <li>Prevent abuse and comply with platform rules.</li>
+          </ul>
+          <p>We do <b>not sell</b> or <b>share</b> your data for marketing purposes.</p>
+        </div>
+
+        <div class="card">
+          <h3>3. Third-Party Services</h3>
+          <ul>
+            <li><b>Replicate</b> — image generation (NanoBanana/ESRGAN etc.).</li>
+            <li><b>Backblaze B2 (S3 API)</b> — temporary storage.</li>
+            <li><b>Telegram Payments (Stars)</b> — transactions.</li>
+          </ul>
+          <p>Each service processes data under its own privacy policy.</p>
+        </div>
+
+        <div class="card">
+          <h3>4. Security & Retention</h3>
+          <ul>
+            <li>Temporary files are auto-deleted once processing is finished.</li>
+            <li>Access is strictly limited on a need-to-know basis.</li>
+            <li>We apply technical and organizational measures to protect your data.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>5. Your Rights</h3>
+          <ul>
+            <li>Use <span class="kbd">/clear</span> in the bot to remove temporary data (ref photos & recent results).</li>
+            <li>Request full deletion of your account data — contact us (below).</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>6. Children</h3>
+          <p>The service is not intended for users under 13.</p>
+        </div>
+
+        <div class="card">
+          <h3>7. Changes</h3>
+          <p>We may update this Policy; the latest version will remain available at this link.</p>
+        </div>
+
+        <div class="card">
+          <h3>8. Contact</h3>
+          <p>Privacy inquiries: <a href="https://t.me/piciriga" target="_blank">@piciriga</a></p>
+        </div>
+      </div>
+      <footer>iModel © 2025</footer>
+    </section>
+
+    <!-- RO -->
+    <section class="view" id="ro" hidden>
+      <div class="card">
+        <h2>Politica de Confidențialitate</h2>
+        <p class="muted">Această Politică explică modul în care <b>iModel AI Bot</b> colectează și folosește datele în Telegram.</p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>1. Ce date colectăm</h3>
+          <ul>
+            <li><b>Telegram User ID</b> — pentru sold și funcționalități.</li>
+            <li><b>Mesaje, prompturi, fotografii încărcate</b> — doar pentru generarea imaginilor.</li>
+            <li><b>Plăți cu Stele Telegram</b> — procesate de Telegram; nu primim datele cardului.</li>
+          </ul>
+          <p>Nu stocăm permanent imaginile/prompturile. Fișierele sunt temporare și se șterg automat după procesare.</p>
+        </div>
+
+        <div class="card">
+          <h3>2. Cum folosim datele</h3>
+          <ul>
+            <li>Generăm și livrăm imagini AI pe baza cererilor tale.</li>
+            <li>Gestionăm creditele, gratuitățile, achizițiile și codurile promo.</li>
+            <li>Prevenim abuzurile și respectăm regulile platformei.</li>
+          </ul>
+          <p>Nu <b>vindem</b> și nu <b>partajăm</b> datele tale în scopuri de marketing.</p>
+        </div>
+
+        <div class="card">
+          <h3>3. Servicii terțe</h3>
+          <ul>
+            <li><b>Replicate</b> — generare imagini (NanoBanana/ESRGAN etc.).</li>
+            <li><b>Backblaze B2 (S3 API)</b> — stocare temporară.</li>
+            <li><b>Telegram Payments (Stele)</b> — tranzacții.</li>
+          </ul>
+          <p>Fiecare serviciu procesează datele conform propriei politici de confidențialitate.</p>
+        </div>
+
+        <div class="card">
+          <h3>4. Securitate & retenție</h3>
+          <ul>
+            <li>Fișierele temporare se șterg automat după finalizarea procesării.</li>
+            <li>Accesul este restricționat strict la nevoie.</li>
+            <li>Aplicăm măsuri tehnice și organizatorice pentru protecția datelor.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>5. Drepturile tale</h3>
+          <ul>
+            <li>Folosește <span class="kbd">/clear</span> în bot pentru a elimina datele temporare (poze ref & rezultate recente).</li>
+            <li>Poți solicita ștergerea completă a contului — contactează-ne (mai jos).</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>6. Copii</h3>
+          <p>Serviciul nu este destinat persoanelor sub 13 ani.</p>
+        </div>
+
+        <div class="card">
+          <h3>7. Modificări</h3>
+          <p>Putem actualiza această Politică; versiunea cea mai recentă va rămâne disponibilă la acest link.</p>
+        </div>
+
+        <div class="card">
+          <h3>8. Contact</h3>
+          <p>Întrebări despre confidențialitate: <a href="https://t.me/piciriga" target="_blank">@piciriga</a></p>
+        </div>
+      </div>
+      <footer>iModel © 2025</footer>
+    </section>
+
+  </div>
+
+  <script>
+    const buttons = document.querySelectorAll('.lang');
+    const views = document.querySelectorAll('.view');
+    function setLang(code){
+      buttons.forEach(b=>b.classList.toggle('active', b.dataset.lang===code));
+      views.forEach(v=>v.hidden = (v.id!==code));
+      localStorage.setItem('iModel_privacy_lang', code);
+    }
+    buttons.forEach(b=>b.addEventListener('click', ()=>setLang(b.dataset.lang)));
+    const saved = localStorage.getItem('iModel_privacy_lang');
+    const browser = (navigator.language || 'en').toLowerCase().split('-')[0];
+    setLang(saved || (['ru','ro','en'].includes(browser)? browser : 'en'));
+  </script>
+</body>
+</html>
