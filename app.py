@@ -89,6 +89,14 @@ except Exception:
     GALLERY_CHANNEL_ID = None
 AUTO_POST = os.getenv("AUTO_POST", "0") == "1"  # if 1: авто-пост в канал «до/после»
 
+# Optional group for manual publishing
+PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "")
+try:
+    if PUBLISH_GROUP_ID:
+        PUBLISH_GROUP_ID = int(PUBLISH_GROUP_ID)
+except Exception:
+    PUBLISH_GROUP_ID = None
+
 # ===================== Admins =======================
 def _parse_admins(val: str) -> Set[int]:
     out: Set[int] = set()
@@ -103,7 +111,7 @@ def _parse_admins(val: str) -> Set[int]:
     return out
 
 ADMIN_IDS: Set[int] = _parse_admins(os.getenv("ADMIN_IDS", ""))
-ADMIN_USERNAMES_RAW = os.getenv("ADMIN_USERNAMES", "@piciriga,@MarkBeth_beauty,@tamara_piciriga")
+ADMIN_USERNAMES_RAW = os.getenv("ADMIN_USERNAMES", "@piciriga,@MarkBeth_beauty")
 ADMIN_USERNAMES = {
     u.lstrip("@").lower()
     for u in re.split(r"[,\s]+", ADMIN_USERNAMES_RAW)
@@ -143,6 +151,7 @@ LAST_PHOTO: Dict[int, bytes] = {}
 # Copy Mode
 USER_COPY_MODE: Set[int]         = set()
 USER_COPY_STYLE: Dict[int, bytes]= {}
+USER_COPY_PROMPT: Dict[int, str] = {}
 
 # Whitelist
 FREE_USERS: set[int] = set()
@@ -826,6 +835,7 @@ def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
     [
         InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
         InlineKeyboardButton(text="✨ Опубликовать", callback_data="pub_yes"),
+        InlineKeyboardButton(text="👥 В группу", callback_data="pub_group"),
     ]])
 
 def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
@@ -910,6 +920,7 @@ async def cmd_pricing(m: Message):
 async def cmd_copy(m: Message):
     USER_COPY_MODE.add(m.chat.id)
     USER_COPY_STYLE.pop(m.chat.id, None)
+    USER_COPY_PROMPT.pop(m.chat.id, None)
     await safe_answer(m, L(m.chat.id)["copy_intro"])
 
 @dp.message(Command("start"))
@@ -1126,6 +1137,43 @@ async def cb_pub_yes(c: CallbackQuery):
             print("channel media group error:", str(e)[:160])
     await c.answer("Опубликовано")
 
+@dp.callback_query(F.data == "pub_group")
+async def cb_pub_group(c: CallbackQuery):
+    if not PUBLISH_GROUP_ID:
+        await c.answer()
+        return await c.message.answer("Группа не настроена.")
+    before = LAST_REF.get(c.message.chat.id)
+    after  = LAST_PHOTO.get(c.message.chat.id)
+    if not after:
+        await c.answer()
+        return await c.message.answer("Нет результата для публикации.")
+    imgs = []
+    if before:
+        imgs.append(before)
+    imgs.append(after)
+    if len(imgs) == 1:
+        try:
+            await bot.send_photo(
+                chat_id=PUBLISH_GROUP_ID,
+                photo=BufferedInputFile(imgs[0], filename="after.jpg"),
+                caption=generate_instacaption(USER_LAST_PROMPT.get(c.message.chat.id, ""), USER_LANG.get(c.message.chat.id, LANG_DEFAULT))
+            )
+        except Exception as e:
+            print("group single photo error:", str(e)[:160])
+    else:
+        media = []
+        for i, b in enumerate(imgs):
+            cap = "До / После ✨" if i == 1 else None
+            if i == 0:
+                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption="До"))
+            else:
+                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="after.jpg"), caption=cap))
+        try:
+            await bot.send_media_group(chat_id=PUBLISH_GROUP_ID, media=media)
+        except Exception as e:
+            print("group media group error:", str(e)[:160])
+    await c.answer("Опубликовано в группе")
+
 # ===================== FLOW: PHOTO ====================
 @dp.message(F.photo)
 async def on_photo(m: Message):
@@ -1141,7 +1189,15 @@ async def on_photo(m: Message):
         if m.chat.id not in USER_COPY_STYLE:
             # это style-reference
             USER_COPY_STYLE[m.chat.id] = img_bytes
-            await safe_answer(m, L(m.chat.id)["copy_style_ok"])
+            # Пытаемся заранее получить MJ-промпт по стилю и показать пользователю
+            prompt_preview = craft_mj_prompt_from_image(img_bytes)
+            if prompt_preview:
+                USER_COPY_PROMPT[m.chat.id] = prompt_preview
+                await safe_answer(
+                    m,
+                    L(m.chat.id)["copy_style_ok"] + "\n\nПромпт по образцу:\n" + prompt_preview + "\n\nМожете отредактировать этот текст (просто отправьте сообщение), затем пришлите селфи.")
+            else:
+                await safe_answer(m, L(m.chat.id)["copy_style_ok"] + "\nНе удалось автоматически получить промпт — отправьте свой текст и затем пришлите селфи.")
             return
         else:
             # это селфи → генерим 1:1 сцену
@@ -1149,10 +1205,11 @@ async def on_photo(m: Message):
             if not style_bytes:
                 return await safe_answer(m, L(m.chat.id)["copy_need_style"])
 
-            # 1) Получаем подробный Midjourney-стиль промпт по style-референсу
-            scene_spec = craft_mj_prompt_from_image(style_bytes)
+            # 1) Берём уже подготовленный/отредактированный пользователем промпт, либо пробуем сгенерировать
+            scene_spec = USER_COPY_PROMPT.get(m.chat.id)
             if not scene_spec:
-                # Fallback на краткий scene spec
+                scene_spec = craft_mj_prompt_from_image(style_bytes)
+            if not scene_spec:
                 scene_spec = craft_scene_spec_from_image(style_bytes) or "person, same scene."
             USER_REFS.setdefault(m.chat.id, [])
             USER_REFS[m.chat.id] = (USER_REFS[m.chat.id] + [img_bytes])[-4:]
@@ -1167,14 +1224,14 @@ async def on_photo(m: Message):
             seed_int = int(seed[:8], 16)
 
             # строгий режим: жёсткая сцена + identity lock + negative
-            # 2) Генерим по selfie + текстовому промпту, ПЕРЕДАВАЯ style-image в модель
+            # 2) Генерим по selfie + текстовому промпту (БЕЗ передачи style-image в модель)
             final_bytes = generate_image_from_bytes(
                 img_bytes,
                 scene_spec,
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                 seed=seed_int,
                 strict=True,
-                style_bytes=style_bytes,
+                style_bytes=None,
                 lock_scene=False,
             )
             if not final_bytes:
@@ -1185,7 +1242,7 @@ async def on_photo(m: Message):
                     lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                     seed=seed_int,
                     strict=True,
-                    style_bytes=style_bytes,
+                    style_bytes=None,
                     lock_scene=False,
                 )
                 if not final_bytes:
@@ -1277,6 +1334,11 @@ async def on_photo(m: Message):
 # ===================== FLOW: TEXT =====================
 @dp.message(F.text & ~F.text.startswith("/"))
 async def on_prompt(m: Message):
+    # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
+    if m.chat.id in USER_COPY_MODE:
+        USER_COPY_PROMPT[m.chat.id] = m.text.strip()
+        await safe_answer(m, "Промпт обновлён. Теперь пришлите селфи.")
+        return
     text = m.text.strip()
     if m.chat.id not in USER_LANG:
         USER_LANG[m.chat.id] = locale_to_lang(getattr(m.from_user, "language_code", None))
@@ -1418,6 +1480,8 @@ async def on_startup():
     print("ADMINS (usernames):", ADMIN_USERNAMES)
     if GALLERY_CHANNEL_ID:
         print("Gallery channel:", GALLERY_CHANNEL_ID, "AUTO_POST:", AUTO_POST)
+    if PUBLISH_GROUP_ID:
+        print("Publish group:", PUBLISH_GROUP_ID)
 
     me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
@@ -1447,7 +1511,6 @@ async def on_startup():
         ],
         scope=BotCommandScopeDefault()
     )
-
 @app.on_event("shutdown")
 async def on_shutdown():
     print("🛑 Shutting down...")
