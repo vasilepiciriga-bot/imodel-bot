@@ -61,6 +61,29 @@ OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
 ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "1") == "1"
 
+# Metrics/Stats
+METRICS_SECRET = os.getenv("METRICS_SECRET", "")
+STATS = {
+    "start_ts": time.time(),
+    "updates": 0,
+    "messages": 0,
+    "photos": 0,
+    "blocked": 0,
+    "gens_ok": 0,
+    "gens_fail": 0,
+    "gens_copy_ok": 0,
+    "gens_copy_fail": 0,
+    "mj_prompt_ok": 0,
+    "mj_prompt_fail": 0,
+    "payments": 0,
+    "promo_used": 0,
+    "referrals": 0,
+    "published_channel": 0,
+    "published_group": 0,
+    "auto_post": 0,
+}
+STATS_USERS: Set[int] = set()
+
 # S3 (Backblaze B2 S3-compatible)
 S3_ENDPOINT = os.getenv("S3_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
 S3_REGION   = os.getenv("S3_REGION", "eu-central-003")
@@ -649,10 +672,17 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
         if not line:
             return None
         # Ensure SFW suffix but do not force age
-        line = enforce_safe_prompt(line)
+        try:
+            line2 = enforce_safe_prompt(line)
+            if line2:
+                line = line2
+            STATS["mj_prompt_ok"] += 1
+        except Exception:
+            STATS["mj_prompt_ok"] += 1
         return line
     except Exception as e:
         print("Vision MJ prompt error:", str(e)[:200])
+        STATS["mj_prompt_fail"] += 1
         return None
 
 # ===== Короткий caption (для канала) =================
@@ -857,6 +887,7 @@ async def post_before_after_to_channel(user_id: int):
             )
         except Exception as e:
             print("auto-post (single) error:", str(e)[:160])
+    STATS["auto_post"] += 1
 
 # ===================== UI ============================
 def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
@@ -939,6 +970,7 @@ async def got_payment(m: Message):
     elif payload == "pack_100": add = 100
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
     await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
+    STATS["payments"] += 1
 
 # ===================== COMMANDS =======================
 @dp.message(Command("version"))
@@ -949,6 +981,25 @@ async def cmd_version(m: Message):
 async def cmd_pricing(m: Message):
     await safe_answer(m, L(m.chat.id)["pricing"])
     await cmd_buy(m)
+
+@dp.message(Command("stats"))
+async def cmd_stats(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    uptime = int(time.time() - STATS["start_ts"]) if STATS.get("start_ts") else 0
+    users = len(STATS_USERS)
+    lines = [
+        f"📊 Stats (uptime {uptime}s)",
+        f"Users: {users}",
+        f"Updates: {STATS['updates']}  Messages: {STATS['messages']}  Photos: {STATS['photos']}",
+        f"Blocked: {STATS['blocked']}",
+        f"Gen OK: {STATS['gens_ok']}  Gen FAIL: {STATS['gens_fail']}",
+        f"Copy OK: {STATS['gens_copy_ok']}  Copy FAIL: {STATS['gens_copy_fail']}",
+        f"MJ prompt OK: {STATS['mj_prompt_ok']}  FAIL: {STATS['mj_prompt_fail']}",
+        f"Payments: {STATS['payments']}  Promo used: {STATS['promo_used']}  Referrals: {STATS['referrals']}",
+        f"Published → channel: {STATS['published_channel']}  group: {STATS['published_group']}  auto: {STATS['auto_post']}",
+    ]
+    await safe_answer(m, "\n".join(lines))
 
 @dp.message(Command("copy"))
 async def cmd_copy(m: Message):
@@ -975,12 +1026,14 @@ async def cmd_start(m: Message):
                 REF_STATS[ref_id]["count"] += 1
                 REF_STATS[ref_id]["earned"] += REF_BONUS_REF
                 USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
+                STATS["referrals"] += 1
         except Exception:
             pass
 
     USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
     USER_SEEN_TEXT.discard(m.chat.id)
     await safe_answer(m, L(m.chat.id)["start"], reply_markup=main_menu_inline(m.chat.id))
+    STATS_USERS.add(m.chat.id)
 
 @dp.message(Command("help"))
 async def cmd_help(m: Message):
@@ -1023,6 +1076,7 @@ async def cmd_promo(m: Message):
     promo["uses"] = max(0, promo["uses"] - 1)
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
     await safe_answer(m, lang["promo_ok"].format(add=add, all=USER_CREDITS[m.chat.id]))
+    STATS["promo_used"] += 1
 
 @dp.message(Command("balance"))
 async def cmd_balance(m: Message):
@@ -1169,6 +1223,7 @@ async def cb_pub_yes(c: CallbackQuery):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("channel media group error:", str(e)[:160])
+    STATS["published_channel"] += 1
     await c.answer("Опубликовано")
 
 @dp.callback_query(F.data == "pub_group")
@@ -1206,6 +1261,7 @@ async def cb_pub_group(c: CallbackQuery):
             await bot.send_media_group(chat_id=PUBLISH_GROUP_ID, media=media)
         except Exception as e:
             print("group media group error:", str(e)[:160])
+    STATS["published_group"] += 1
     await c.answer("Опубликовано в группе")
 
 # ===================== FLOW: PHOTO ====================
@@ -1217,6 +1273,8 @@ async def on_photo(m: Message):
     f = await bot.get_file(m.photo[-1].file_id)
     b = await bot.download_file(f.file_path)
     img_bytes = b.read()
+    STATS["photos"] += 1
+    STATS_USERS.add(m.chat.id)
 
     # ----- Copy Mode -----
     if m.chat.id in USER_COPY_MODE:
@@ -1274,6 +1332,7 @@ async def on_photo(m: Message):
                 )
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    STATS["gens_copy_fail"] += 1
                     return
 
             if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
@@ -1281,6 +1340,7 @@ async def on_photo(m: Message):
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
             LAST_PHOTO[m.chat.id] = final_bytes
+            STATS["gens_copy_ok"] += 1
 
             # история
             hist = USER_HISTORY.setdefault(m.chat.id, [])
@@ -1317,6 +1377,7 @@ async def on_photo(m: Message):
     if not caption:
         return await safe_answer(m, L(m.chat.id)["photo_ok"])
     if blocked(caption):
+        STATS["blocked"] += 1
         return await safe_answer(m, L(m.chat.id)["blocked"])
 
     USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
@@ -1331,6 +1392,7 @@ async def on_photo(m: Message):
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+        STATS["gens_fail"] += 1
         return
 
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
@@ -1338,6 +1400,7 @@ async def on_photo(m: Message):
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
     LAST_PHOTO[m.chat.id] = final_bytes
+    STATS["gens_ok"] += 1
 
     hist = USER_HISTORY.setdefault(m.chat.id, [])
     hist.append(final_bytes)
@@ -1366,6 +1429,7 @@ async def on_prompt(m: Message):
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
         await safe_answer(m, "Промпт обновлён. Теперь пришлите селфи.")
         return
+    STATS["messages"] += 1
     text = m.text.strip()
     if m.chat.id not in USER_LANG:
         USER_LANG[m.chat.id] = locale_to_lang(getattr(m.from_user, "language_code", None))
@@ -1375,6 +1439,7 @@ async def on_prompt(m: Message):
             USER_LANG[m.chat.id] = detect_lang(text)
 
     if blocked(text):
+        STATS["blocked"] += 1
         return await safe_answer(m, L(m.chat.id)["blocked"])
 
     refs = USER_REFS.get(m.chat.id, [])
@@ -1394,6 +1459,7 @@ async def on_prompt(m: Message):
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+        STATS["gens_fail"] += 1
         return
 
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
@@ -1401,6 +1467,7 @@ async def on_prompt(m: Message):
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = text
     LAST_PHOTO[m.chat.id] = final_bytes
+    STATS["gens_ok"] += 1
 
     hist = USER_HISTORY.setdefault(m.chat.id, [])
     hist.append(final_bytes)
@@ -1446,6 +1513,7 @@ async def cb_more(c: CallbackQuery):
         seed=seed_int
     )
     if not result:
+        STATS["gens_fail"] += 1
         return await safe_edit_text(msg, L(chat_id)["fail"])
 
     if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
@@ -1453,6 +1521,7 @@ async def cb_more(c: CallbackQuery):
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = base_prompt
     LAST_PHOTO[chat_id] = result
+    STATS["gens_ok"] += 1
 
     hist = USER_HISTORY.setdefault(chat_id, [])
     hist.append(result)
@@ -1554,6 +1623,7 @@ async def telegram_webhook(request: Request):
         return JSONResponse({"status": "forbidden"}, status_code=403)
     data = await request.json()
     try:
+        STATS["updates"] += 1
         t = data.get("message", {}) or data.get("edited_message", {}) or data.get("callback_query", {})
         chat = (t.get("chat") or t.get("message", {}).get("chat") or {})
         print("[webhook] update received:", {
@@ -1562,11 +1632,23 @@ async def telegram_webhook(request: Request):
             "from": (t.get("from") or {}).get("id"),
             "type": t.get("text", "<media>") if isinstance(t, dict) else "<unknown>",
         })
+        uid = (t.get("from") or {}).get("id")
+        if isinstance(uid, int):
+            STATS_USERS.add(uid)
     except Exception:
         pass
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
     return {"ok": True}
+
+@app.get("/metrics")
+async def http_metrics(request: Request):
+    if METRICS_SECRET and request.query_params.get("secret") != METRICS_SECRET:
+        return JSONResponse({"status": "forbidden"}, status_code=403)
+    resp = dict(STATS)
+    resp["users"] = len(STATS_USERS)
+    resp["uptime_sec"] = int(time.time() - STATS["start_ts"]) if STATS.get("start_ts") else 0
+    return resp
 
 
 @api.on_event("shutdown")
