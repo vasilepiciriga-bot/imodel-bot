@@ -154,6 +154,7 @@ ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plu
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 RETOUCH_MODEL    = os.getenv("RETOUCH_MODEL", "sczhou/codeformer")  # Replicate face restore (owner/name)
 RETOUCH_MODEL_VERSION = os.getenv("RETOUCH_MODEL_VERSION", "")
+RETOUCH_DISABLED = False
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -639,7 +640,11 @@ def replicate_wait_prediction(pred_id: str, timeout: float = 180.0, interval: fl
             return pred
         time.sleep(interval)
 
+REPLICATE_LAST_ERROR: str = ""
+
 def replicate_generate(model: str, inputs: dict) -> Optional[str]:
+    global REPLICATE_LAST_ERROR
+    REPLICATE_LAST_ERROR = ""
     # Allow passing either owner/name or owner/name:version
     model_name = model
     model_version = None
@@ -680,6 +685,7 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
                 pass
     except Exception as e:
         em = str(e)
+        REPLICATE_LAST_ERROR = em
         print("replicate.predictions.create error:", em[:200])
         if "sensitive" in em.lower():
             return "SENSITIVE"
@@ -692,6 +698,7 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
             return url
     except Exception as e2:
         em2 = str(e2)
+        REPLICATE_LAST_ERROR = em2
         print("replicate.run error:", em2[:200])
         if "sensitive" in em2.lower():
             return "SENSITIVE"
@@ -880,7 +887,7 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
     if not src_url:
         return None
     # Try custom retouch model first if provided
-    if RETOUCH_MODEL:
+    if RETOUCH_MODEL and not RETOUCH_DISABLED:
         # Prefer tuned inputs for CodeFormer when detected
         if "codeformer" in RETOUCH_MODEL.lower():
             try:
@@ -897,6 +904,10 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
                     out = _download_with_retries(url)
                     if out:
                         return out
+                # If model not found, disable retouch model for this runtime
+                if REPLICATE_LAST_ERROR and ("404" in REPLICATE_LAST_ERROR or "not found" in REPLICATE_LAST_ERROR.lower()):
+                    global RETOUCH_DISABLED
+                    RETOUCH_DISABLED = True
             except Exception as e:
                 print("Retouch CodeFormer error:", str(e)[:200])
         # Generic variants fallback
@@ -924,9 +935,12 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
                         out = _download_with_retries(url)
                         if out:
                             return out
+                    if REPLICATE_LAST_ERROR and ("404" in REPLICATE_LAST_ERROR or "not found" in REPLICATE_LAST_ERROR.lower()):
+                        RETOUCH_DISABLED = True
+                        break
                 except Exception as e:
                     print("Retouch custom variant error:", str(e)[:200])
-
+        
     # Fallback to ESRGAN with gentle face enhance
     try:
         if not ESRGAN_MODEL or ESRGAN_DISABLED:
@@ -942,8 +956,14 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
             if out:
                 return out
     except Exception as e:
-        print("Retouch ESRGAN error:", str(e)[:200])
-    return None
+        em = str(e)
+        print("Retouch ESRGAN error:", em[:200])
+        if "404" in em or (REPLICATE_LAST_ERROR and "404" in REPLICATE_LAST_ERROR):
+            global ESRGAN_DISABLED
+            ESRGAN_DISABLED = True
+            print("→ Disable upscaler for this runtime (404)")
+    # As a last resort, return original to avoid failure UX
+    return img_bytes
 
 # ===================== NUDGES ========================
 NUDGE_ENABLED = os.getenv("NUDGE_ENABLED", "0") == "1"
