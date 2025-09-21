@@ -883,6 +883,7 @@ def generate_instacaption(user_prompt: str, lang: str = "ru") -> str:
 
 # ===================== RETOUCH =======================
 def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
+    global RETOUCH_DISABLED, ESRGAN_DISABLED
     src_url = s3_put_and_presign(img_bytes, key_prefix="retouch/")
     if not src_url:
         return None
@@ -906,7 +907,6 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
                         return out
                 # If model not found, disable retouch model for this runtime
                 if REPLICATE_LAST_ERROR and ("404" in REPLICATE_LAST_ERROR or "not found" in REPLICATE_LAST_ERROR.lower()):
-                    global RETOUCH_DISABLED
                     RETOUCH_DISABLED = True
             except Exception as e:
                 print("Retouch CodeFormer error:", str(e)[:200])
@@ -959,7 +959,6 @@ def retouch_image_from_bytes(img_bytes: bytes) -> Optional[bytes]:
         em = str(e)
         print("Retouch ESRGAN error:", em[:200])
         if "404" in em or (REPLICATE_LAST_ERROR and "404" in REPLICATE_LAST_ERROR):
-            global ESRGAN_DISABLED
             ESRGAN_DISABLED = True
             print("→ Disable upscaler for this runtime (404)")
     # As a last resort, return original to avoid failure UX
