@@ -1972,21 +1972,48 @@ async def cmd_diag(m: Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(m: Message):
-    if not PUBLISH_GROUP_ID:
-        return await safe_answer(m, "Group not configured")
+    # Allow fallback to current chat if it's a group/supergroup
+    target_id = PUBLISH_GROUP_ID or (m.chat.id if str(m.chat.id).startswith("-") else None)
+    if not target_id:
+        return await safe_answer(m, "Group not configured. Use /set_group_here in a group or /set_group <id>.")
     lang = _next_group_lang()
     txt = craft_group_post_text(lang, BOT_USERNAME_GLOBAL)
     img = generate_group_post_image(lang)
     try:
         if img:
-            await bot.send_photo(chat_id=PUBLISH_GROUP_ID, photo=BufferedInputFile(img, filename="promo.jpg"), caption=txt)
+            await bot.send_photo(chat_id=target_id, photo=BufferedInputFile(img, filename="promo.jpg"), caption=txt)
         else:
-            await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=txt)
+            await bot.send_message(chat_id=target_id, text=txt)
         global GROUP_POST_LAST_AT
         GROUP_POST_LAST_AT = time.time()
         await safe_answer(m, f"Posted ({lang})")
     except Exception as e:
         await safe_answer(m, f"Post error: {str(e)[:160]}")
+
+@dp.message(Command("set_group_here"))
+async def cmd_set_group_here(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    if not str(m.chat.id).startswith("-"):
+        return await safe_answer(m, "Run this command inside a group/supergroup.")
+    global PUBLISH_GROUP_ID
+    PUBLISH_GROUP_ID = m.chat.id
+    await safe_answer(m, f"Group set to {PUBLISH_GROUP_ID}")
+
+@dp.message(Command("set_group"))
+async def cmd_set_group(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) < 2:
+        return await safe_answer(m, "Usage: /set_group -1001234567890")
+    try:
+        gid = int(parts[1])
+    except Exception:
+        return await safe_answer(m, "Invalid group id")
+    global PUBLISH_GROUP_ID
+    PUBLISH_GROUP_ID = gid
+    await safe_answer(m, f"Group set to {PUBLISH_GROUP_ID}")
 
 @dp.message(Command("pricing"))
 async def cmd_pricing(m: Message):
