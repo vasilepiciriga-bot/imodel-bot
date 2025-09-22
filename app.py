@@ -523,8 +523,8 @@ T = {
         "menu_lang": "🌐 Язык",
         "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
         "onboard_btn": "🚀 Старт",
-        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1–4 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n🎁 Бесплатные генерации — пригласите друзей: /refer\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
-        "help": "🆘 Помощь\n\nКак получить лучший результат:\n• Пришлите 1–4 селфи при ровном свете, без сильных фильтров\n• В описании укажите место, свет, стиль, кадрирование, настроение\n• Быстрый старт: откройте Пресеты и выберите стиль\n• Скопировать сцену: режим ‘Скопировать’ — сначала образец, затем селфи\n\nОплата и баланс:\n• Покупка — раздел ‘Купить’ (Telegram Stars)\n• Списание — только при успешной генерации (кроме whitelist/админ)\n• Промокоды — команда /promo КОД\n\nРеферальная программа:\n• Пригласи друга — ты +{ref_ref}, новый пользователь +{ref_new}\n• Твоя ссылка: /refer\n\nПравила и приватность:\n• Запрещены NSFW/селебы\n• Фото хранятся временно; /clear — очистка, /forget — полное удаление\n\nНужна помощь? Напишите @piciriga — ответим быстро.",
+        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n🎁 Бесплатные генерации — пригласите друзей: /refer\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
+        "help": "🆘 Помощь\n\nКак получить лучший результат:\n• Пришлите 1 селфи при ровном свете, без сильных фильтров\n• В описании укажите место, свет, стиль, кадрирование, настроение\n• Быстрый старт: откройте Пресеты и выберите стиль\n• Скопировать сцену: режим ‘Скопировать’ — сначала образец, затем селфи\n\nОплата и баланс:\n• Покупка — раздел ‘Купить’ (Telegram Stars)\n• Списание — только при успешной генерации (кроме whitelist/админ)\n• Промокоды — команда /promo КОД\n\nРеферальная программа:\n• Пригласи друга — ты +{ref_ref}, новый пользователь +{ref_new}\n• Твоя ссылка: /refer\n\nПравила и приватность:\n• Запрещены NSFW/селебы\n• Фото хранятся временно; /clear — очистка, /forget — полное удаление\n\nНужна помощь? Напишите @piciriga — ответим быстро.",
         "need_photo": "Сначала пришли фото лица.",
         "photo_ok": "Фото получено ✅ Теперь опишите сцену или используйте /presets.",
         "gen": "Генерирую… ⏳",
@@ -585,8 +585,8 @@ T = {
         "menu_lang": "🌐 Language",
         "onboard_welcome": "Welcome to iModel. Tap Start to begin.",
         "onboard_btn": "🚀 Start",
-        "start": "👋 Welcome to iModel — professional photo generation.\n\nHow it works:\n1) Send 1–4 selfies (good lighting helps)\n2) Describe the scene or use Copy Mode (/copy)\n3) Get the result.\n\nQuick commands: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
-        "help": "🆘 Help\n\nBest results:\n• Send 1–4 selfies in even lighting, minimal filters\n• In your prompt describe location, light, style, framing, mood\n• Quick start: open Presets and pick a style\n• Copy a scene: use ‘Copy’ — first the reference, then your selfie\n\nPayments & balance:\n• Buy in ‘Buy’ (Telegram Stars)\n• Credits are deducted only on successful generation (except whitelist/admin)\n• Promo codes — /promo CODE\n\nReferral program:\n• Invite a friend — you +{ref_ref}, they +{ref_new}\n• Your link: /refer\n\nRules & privacy:\n• NSFW/celebrities are forbidden\n• Photos are stored temporarily; /clear to purge temp, /forget for full delete\n\nNeed help? Message @piciriga — we’ll reply quickly.",
+        "start": "✨ Welcome to iModel — the AI photo studio.\nYour photos can look like they were taken by a professional photographer.\n\n🔹 Upload 1 selfie — good lighting helps.\n🔹 Describe the scene or mood you want.\n🔹 Or use ‘Copy’: upload a photo you like from the internet, add your selfie — and get a stylish result in the same spirit.\n\n📌 Menu:\n⭐ Buy — top up balance and unlock more.\n💰 Balance — always know how many generations you have.\n📸 Presets — ready-made shoot styles.\n📋 Copy — recreate a style with your photo.\n🆘 Help — answers to questions.\n🌐 Language — switch interface.\n\n🎁 Free credits — invite friends: /refer\n\n📷 Your photos — your story. We’ll make it impeccable.",
+        "help": "🆘 Help\n\nBest results:\n• Send 1 selfie in even lighting, minimal filters\n• In your prompt describe location, light, style, framing, mood\n• Quick start: open Presets and pick a style\n• Copy a scene: use ‘Copy’ — first the reference, then your selfie\n\nPayments & balance:\n• Buy in ‘Buy’ (Telegram Stars)\n• Credits are deducted only on successful generation (except whitelist/admin)\n• Promo codes — /promo CODE\n\nReferral program:\n• Invite a friend — you +{ref_ref}, they +{ref_new}\n• Your link: /refer\n\nRules & privacy:\n• NSFW/celebrities are forbidden\n• Photos are stored temporarily; /clear to purge temp, /forget for full delete\n\nNeed help? Message @piciriga — we’ll reply quickly.",
         "need_photo": "Please send a face photo first.",
         "photo_ok": "Photo received ✅ Now describe the scene or use /presets.",
         "gen": "Working… ⏳",
@@ -647,8 +647,8 @@ T = {
         "menu_lang": "🌐 Limba",
         "onboard_welcome": "Bine ai venit la iModel. Apasă Start pentru a începe.",
         "onboard_btn": "🚀 Start",
-        "start": "👋 Bine ai venit la iModel — generare foto profesională.\n\nCum funcționează:\n1) Trimite 1–4 selfie‑uri (lumina bună ajută)\n2) Descrie scena sau folosește „Copiază” (/copy)\n3) Primești rezultatul.\n\nComenzi rapide: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
-        "help": "🆘 Ajutor\n\nRezultate mai bune:\n• Trimite 1–4 selfie‑uri cu lumină uniformă, fără filtre puternice\n• În descriere: locație, lumină, stil, încadrare, mood\n• Start rapid: deschide Preseturi și alege un stil\n• Copiere scenă: ‘Copiază’ — mai întâi referința, apoi selfie‑ul\n\nPlăți & sold:\n• Cumpără în ‘Cumpără’ (Stele Telegram)\n• Creditul se scade doar la generare reușită (exceptând whitelist/admin)\n• Cod promo — /promo COD\n\nProgram de recomandări:\n• Invită un prieten — tu +{ref_ref}, el/ea +{ref_new}\n• Linkul tău: /refer\n\nReguli & confidențialitate:\n• NSFW/celebr. interzise\n• Pozele se păstrează temporar; /clear curăță, /forget ștergere totală\n\nAi nevoie de ajutor? Scrie la @piciriga — răspundem rapid.",
+        "start": "✨ Bine ai venit la iModel — studio foto AI.\nFotografiile tale pot arăta ca făcute de un fotograf profesionist.\n\n🔹 Încarcă 1 selfie — lumina bună ajută.\n🔹 Descrie scena sau atmosfera dorită.\n🔹 Sau folosește ‘Copiază’: încarcă o poză preferată de pe internet, adaugă selfie‑ul tău — și primești un rezultat stilat în același spirit.\n\n📌 Meniu:\n⭐ Cumpără — alimentează soldul și deblochează mai mult.\n💰 Sold — vezi câte generări ai.\n📸 Preseturi — stiluri gata făcute.\n📋 Copiază — recreează un stil cu poza ta.\n🆘 Ajutor — răspunsuri la întrebări.\n🌐 Limbă — schimbă interfața.\n\n🎁 Generații gratuite — invită prieteni: /refer\n\n📷 Pozele tale — povestea ta. Noi o facem impecabilă.",
+        "help": "🆘 Ajutor\n\nRezultate mai bune:\n• Trimite 1 selfie cu lumină uniformă, fără filtre puternice\n• În descriere: locație, lumină, stil, încadrare, mood\n• Start rapid: deschide Preseturi și alege un stil\n• Copiere scenă: ‘Copiază’ — mai întâi referința, apoi selfie‑ul\n\nPlăți & sold:\n• Cumpără în ‘Cumpără’ (Stele Telegram)\n• Creditul se scade doar la generare reușită (exceptând whitelist/admin)\n• Cod promo — /promo COD\n\nProgram de recomandări:\n• Invită un prieten — tu +{ref_ref}, el/ea +{ref_new}\n• Linkul tău: /refer\n\nReguli & confidențialitate:\n• NSFW/celebr. interzise\n• Pozele se păstrează temporar; /clear curăță, /forget ștergere totală\n\nAi nevoie de ajutor? Scrie la @piciriga — răspundem rapid.",
         "need_photo": "Trimite o poză cu fața mai întâi.",
         "photo_ok": "Poză primită ✅ Acum descrie scena sau folosește /presets.",
         "gen": "Generez… ⏳",
@@ -710,8 +710,8 @@ T = {
         "menu_lang": "🌐 Sprache",
         "onboard_welcome": "Willkommen bei iModel. Tippe auf Start, um zu beginnen.",
         "onboard_btn": "🚀 Start",
-        "start": "👋 Willkommen bei iModel — professionelle Fotogenerierung.\n\nSo geht’s:\n1) Sende 1–4 Selfies (gutes Licht hilft)\n2) Beschreibe die Szene oder nutze den Kopier‑Modus (/copy)\n3) Erhalte das Ergebnis.\n\nSchnellbefehle: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
-        "help": "🆘 Hilfe\n\nBeste Ergebnisse:\n• 1–4 Selfies bei gleichmäßiger Beleuchtung, ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt, Stimmung\n• Schnellstart: Presets öffnen und Stil wählen\n• Szene kopieren: ‘Kopieren’ — zuerst Referenz, dann Selfie\n\nZahlung & Guthaben:\n• Kaufen in ‘Kaufen’ (Telegram Stars)\n• Abzug nur bei erfolgreicher Generierung (außer Whitelist/Admin)\n• Promo‑Code — /promo CODE\n\nEmpfehlungsprogramm:\n• Freund einladen — du +{ref_ref}, er/sie +{ref_new}\n• Dein Link: /refer\n\nRegeln & Datenschutz:\n• NSFW/Promis verboten\n• Fotos werden temporär gespeichert; /clear löscht temporär, /forget vollständig\n\nBrauchen Sie Hilfe? Schreiben Sie @piciriga — wir antworten schnell.",
+        "start": "✨ Willkommen bei iModel — dem KI‑Fotostudio.\nDeine Fotos können aussehen, als wären sie vom Profi gemacht.\n\n🔹 Lade 1 Selfie hoch — gutes Licht hilft.\n🔹 Beschreibe die gewünschte Szene oder Stimmung.\n🔹 Oder nutze ‘Kopieren’: lade ein Lieblingsfoto aus dem Internet hoch, füge dein Selfie hinzu — und erhalte ein stilvolles Ergebnis im selben Geist.\n\n📌 Menü:\n⭐ Kaufen — Guthaben aufladen und mehr freischalten.\n💰 Guthaben — sieh, wie viele Generierungen du hast.\n📸 Presets — fertige Shooting‑Stile.\n📋 Kopieren — Stil mit deinem Foto nachbilden.\n🆘 Hilfe — Antworten auf Fragen.\n🌐 Sprache — Oberfläche umstellen.\n\n🎁 Kostenlose Credits — lade Freunde ein: /refer\n\n📷 Deine Fotos — deine Geschichte. Wir machen sie makellos.",
+        "help": "🆘 Hilfe\n\nBeste Ergebnisse:\n• 1 Selfie bei gleichmäßiger Beleuchtung, ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt, Stimmung\n• Schnellstart: Presets öffnen und Stil wählen\n• Szene kopieren: ‘Kopieren’ — zuerst Referenz, dann Selfie\n\nZahlung & Guthaben:\n• Kaufen in ‘Kaufen’ (Telegram Stars)\n• Abzug nur bei erfolgreicher Generierung (außer Whitelist/Admin)\n• Promo‑Code — /promo CODE\n\nEmpfehlungsprogramm:\n• Freund einladen — du +{ref_ref}, er/sie +{ref_new}\n• Dein Link: /refer\n\nRegeln & Datenschutz:\n• NSFW/Promis verboten\n• Fotos werden temporär gespeichert; /clear löscht temporär, /forget vollständig\n\nBrauchen Sie Hilfe? Schreiben Sie @piciriga — wir antworten schnell.",
         "need_photo": "Bitte zuerst ein Gesichts‑Foto senden.",
         "photo_ok": "Foto empfangen ✅ Beschreibe jetzt die Szene oder nutze /presets.",
         "gen": "Erzeuge… ⏳",
@@ -771,7 +771,24 @@ T = {
 }
 
 def L(chat_id: int) -> dict:
-    return T.get(USER_LANG.get(chat_id, LANG_DEFAULT), T[LANG_DEFAULT])
+    """Return language dict with safe fallback to default for missing keys.
+    Access via d["key"] won't KeyError — falls back to default lang or the key itself.
+    """
+    base = T.get(LANG_DEFAULT, {})
+    current = T.get(USER_LANG.get(chat_id, LANG_DEFAULT), base)
+
+    class _Lang(dict):
+        def __getitem__(self, k):  # type: ignore[override]
+            if dict.__contains__(self, k):
+                return dict.__getitem__(self, k)
+            return base.get(k, k)
+
+        def get(self, k, default=None):  # type: ignore[override]
+            if dict.__contains__(self, k):
+                return dict.__getitem__(self, k)
+            return base.get(k, default)
+
+    return _Lang(current)
 
 def locale_to_lang(code: Optional[str]) -> str:
     if not code:
