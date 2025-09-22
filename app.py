@@ -574,6 +574,7 @@ T = {
         "btn_publish": "Опубликовать",
         "btn_publish_group": "В группу",
         "published_recent": "Уже опубликовано недавно.",
+        "prompt_share_btn": "✨ По этому промпту",
         "menu_presets": "📸 Пресеты",
         "menu_help": "🆘 Помощь",
         "menu_refer": "🎁 Бесплатные генерации",
@@ -648,6 +649,7 @@ T = {
         "btn_publish": "Publish",
         "btn_publish_group": "To group",
         "published_recent": "Already published recently.",
+        "prompt_share_btn": "✨ From this prompt",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Help",
         "menu_refer": "🎁 Free credits",
@@ -722,6 +724,7 @@ T = {
         "btn_publish": "Publică",
         "btn_publish_group": "În grup",
         "published_recent": "Deja publicat recent.",
+        "prompt_share_btn": "✨ Din acest prompt",
         "menu_presets": "🎛 Preseturi",
         "menu_help": "🆘 Ajutor",
         "menu_refer": "🎁 Generații gratuite",
@@ -798,6 +801,7 @@ T = {
         "btn_publish": "Veröffentlichen",
         "btn_publish_group": "In Gruppe",
         "published_recent": "Kürzlich bereits veröffentlicht.",
+        "prompt_share_btn": "✨ Aus diesem Prompt",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Hilfe",
         "menu_refer": "🎁 Kostenlose Credits",
@@ -1885,7 +1889,7 @@ async def post_before_after_to_channel(user_id: int):
                 btns.append(InlineKeyboardButton(text=L(user_id)["style_share_btn"], url=link))
             if p_token:
                 link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
-                btns.append(InlineKeyboardButton(text="✨ По этому промпту", url=link2))
+                btns.append(InlineKeyboardButton(text=L(user_id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
             if btns:
                 try:
                     await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
@@ -1900,6 +1904,23 @@ async def post_before_after_to_channel(user_id: int):
             )
         except Exception as e:
             print("auto-post (single) error:", str(e)[:160])
+        # Share buttons (style + prompt) under single as well
+        if BOT_USERNAME_GLOBAL:
+            s_token = create_style_share(before) if before else None
+            ptext = USER_LAST_REFINED_PROMPT.get(user_id)
+            p_token = create_prompt_share(ptext) if ptext else None
+            btns = []
+            if s_token:
+                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
+                btns.append(InlineKeyboardButton(text=L(user_id)["style_share_btn"], url=link))
+            if p_token:
+                link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
+                btns.append(InlineKeyboardButton(text=L(user_id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
+            if btns:
+                try:
+                    await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
+                except Exception as e:
+                    print("channel share button error (single):", str(e)[:160])
     stats_incr("auto_post", 1)
 
 # ===================== UI ============================
@@ -2597,16 +2618,23 @@ async def cb_pub_yes(c: CallbackQuery):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("channel media group error:", str(e)[:160])
-        # Deep-link button to copy this style
-        if before and BOT_USERNAME_GLOBAL:
-            token = create_style_share(before)
-            if token:
-                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{token}"
-                btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link)]])
-                try:
-                    await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=btn)
-                except Exception as e:
-                    print("channel share button error:", str(e)[:160])
+    # Add deep‑links (style + prompt) after posting (single or album)
+    if BOT_USERNAME_GLOBAL:
+        s_token = create_style_share(before) if before else None
+        ptext = USER_LAST_REFINED_PROMPT.get(c.message.chat.id)
+        p_token = create_prompt_share(ptext) if ptext else None
+        btns = []
+        if s_token:
+            link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
+            btns.append(InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link))
+        if p_token:
+            link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
+            btns.append(InlineKeyboardButton(text=L(c.message.chat.id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
+        if btns:
+            try:
+                await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
+            except Exception as e:
+                print("channel share button error:", str(e)[:160])
     stats_incr("published_channel", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, L(c.message.chat.id)["published_ok"])
@@ -2660,27 +2688,23 @@ async def cb_pub_group(c: CallbackQuery):
             await bot.send_media_group(chat_id=PUBLISH_GROUP_ID, media=media)
         except Exception as e:
             print("group media group error:", str(e)[:160])
-        # Add deep-link button right after album
-        if before and BOT_USERNAME_GLOBAL:
-            # Style share
-            s_token = create_style_share(before)
-            # Prompt share (use last refined prompt)
-            ptext = USER_LAST_REFINED_PROMPT.get(c.message.chat.id)
-            p_token = create_prompt_share(ptext) if ptext else None
-            btns = []
-            if s_token:
-                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
-                btns.append(InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link))
-            if p_token:
-                link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
-                # Reuse style_share_btn if you want one button, else define new key
-                btns.append(InlineKeyboardButton(text="✨ По этому промпту", url=link2))
-            if btns:
-                btn = InlineKeyboardMarkup(inline_keyboard=[btns])
-                try:
-                    await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=" ", reply_markup=btn)
-                except Exception as e:
-                    print("group share button error:", str(e)[:160])
+    # Add deep‑link buttons after posting (single or album)
+    if BOT_USERNAME_GLOBAL:
+        s_token = create_style_share(before) if before else None
+        ptext = USER_LAST_REFINED_PROMPT.get(c.message.chat.id)
+        p_token = create_prompt_share(ptext) if ptext else None
+        btns = []
+        if s_token:
+            link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
+            btns.append(InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link))
+        if p_token:
+            link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
+            btns.append(InlineKeyboardButton(text=L(c.message.chat.id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
+        if btns:
+            try:
+                await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
+            except Exception as e:
+                print("group share button error:", str(e)[:160])
     stats_incr("published_group", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, L(c.message.chat.id)["published_group_ok"])
