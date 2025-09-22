@@ -125,24 +125,41 @@ def stats_save_totals():
         # Don't persist huge sets in totals
         to_save.pop("start_ts", None)
         _save_json_atomic(STATS_TOTALS_FILE, to_save)
+        try:
+            _s3_put_text(STATE_PREFIX + "stats_totals.json", json.dumps(to_save, ensure_ascii=False))
+        except Exception:
+            pass
     except Exception as e:
         print("[stats] save totals error:", str(e)[:160])
 
 def stats_save_daily():
     _save_json_atomic(STATS_DAILY_FILE, STATS_DAILY)
+    try:
+        _s3_put_text(STATE_PREFIX + "stats_daily.json", json.dumps(STATS_DAILY, ensure_ascii=False))
+    except Exception:
+        pass
 
 def users_save():
     try:
         _save_json_atomic(USERS_FILE, STATS_USERS_INFO)
+        try:
+            _s3_put_text(STATE_PREFIX + "users.json", json.dumps(STATS_USERS_INFO, ensure_ascii=False))
+        except Exception:
+            pass
     except Exception as e:
         print("[users] save error:", str(e)[:160])
 
 def stats_load():
     global STATS_DAILY
     try:
-        if os.path.exists(STATS_TOTALS_FILE):
+        loaded = None
+        txt = _s3_get_text(STATE_PREFIX + "stats_totals.json")
+        if txt:
+            loaded = json.loads(txt)
+        elif os.path.exists(STATS_TOTALS_FILE):
             with open(STATS_TOTALS_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
+        if loaded:
             for k, v in loaded.items():
                 try:
                     if isinstance(v, (int, float)):
@@ -152,7 +169,10 @@ def stats_load():
     except Exception as e:
         print("[stats] load totals error:", str(e)[:160])
     try:
-        if os.path.exists(STATS_DAILY_FILE):
+        txt = _s3_get_text(STATE_PREFIX + "stats_daily.json")
+        if txt:
+            STATS_DAILY = json.loads(txt) or {}
+        elif os.path.exists(STATS_DAILY_FILE):
             with open(STATS_DAILY_FILE, "r", encoding="utf-8") as f:
                 STATS_DAILY = json.load(f) or {}
         else:
@@ -161,9 +181,14 @@ def stats_load():
         print("[stats] load daily error:", str(e)[:160])
         STATS_DAILY = {}
     try:
-        if os.path.exists(USERS_FILE):
+        data = None
+        txt = _s3_get_text(STATE_PREFIX + "users.json")
+        if txt:
+            data = json.loads(txt) or {}
+        elif os.path.exists(USERS_FILE):
             with open(USERS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
+        if data:
             for uid_str, info in data.items():
                 try:
                     STATS_USERS_INFO[int(uid_str)] = info
@@ -250,6 +275,28 @@ _s3 = boto3.client(
     config=Config(s3={"addressing_style": "virtual"})
 )
 
+# Optional: persist state to S3 to survive ephemeral filesystems
+STATE_PREFIX = os.getenv("STATE_PREFIX", "state/")
+USE_S3_STATE = bool(S3_BUCKET and S3_KEY_ID and S3_SECRET)
+
+def _s3_put_text(key: str, text: str):
+    if not USE_S3_STATE:
+        return
+    try:
+        _s3.put_object(Bucket=S3_BUCKET, Key=key, Body=text.encode("utf-8"), ContentType="application/json; charset=utf-8")
+    except Exception as e:
+        print("[s3] put error:", key, str(e)[:160])
+
+def _s3_get_text(key: str) -> Optional[str]:
+    if not USE_S3_STATE:
+        return None
+    try:
+        obj = _s3.get_object(Bucket=S3_BUCKET, Key=key)
+        return obj["Body"].read().decode("utf-8")
+    except Exception as e:
+        # Not found or access issues → ignore
+        return None
+
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
@@ -332,14 +379,26 @@ def _credits_save():
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         tmp = CREDITS_FILE + ".tmp"
+        payload = json.dumps({str(k): int(v) for k, v in USER_CREDITS.items()}, ensure_ascii=False)
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({str(k): int(v) for k, v in USER_CREDITS.items()}, f, ensure_ascii=False)
+            f.write(payload)
         os.replace(tmp, CREDITS_FILE)
+        _s3_put_text(STATE_PREFIX + "credits.json", payload)
     except Exception as e:
         print("[credits] save error:", str(e)[:160])
 
 def _credits_load():
     try:
+        # Prefer S3 state if available
+        txt = _s3_get_text(STATE_PREFIX + "credits.json")
+        if txt:
+            data = json.loads(txt)
+            for k, v in (data or {}).items():
+                try:
+                    USER_CREDITS[int(k)] = int(v)
+                except Exception:
+                    continue
+            return
         if os.path.exists(CREDITS_FILE):
             with open(CREDITS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
