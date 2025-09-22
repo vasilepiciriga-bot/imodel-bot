@@ -464,14 +464,16 @@ T = {
         "menu_lang": "🌐 Язык",
         "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
         "onboard_btn": "🚀 Старт",
-        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1–4 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n💎 Тарифы — оптимальные пакеты для любых задач.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
-        "help": "📘 Советы:\n• 1–4 селфи без сильных фильтров\n• Опишите место, свет, стиль, кадрирование\n• Для точной копии сцены — /copy (сначала образец, затем селфи)",
+        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1–4 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n🎁 Бесплатные генерации — пригласите друзей: /refer\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
+        "help": "🆘 Помощь\n\nКак получить лучший результат:\n• Пришлите 1–4 селфи при ровном свете, без сильных фильтров\n• В описании укажите место, свет, стиль, кадрирование, настроение\n• Быстрый старт: откройте Пресеты и выберите стиль\n• Скопировать сцену: режим ‘Скопировать’ — сначала образец, затем селфи\n\nОплата и баланс:\n• Покупка — раздел ‘Купить’ (Telegram Stars)\n• Списание — только при успешной генерации (кроме whitelist/админ)\n• Промокоды — команда /promo КОД\n\nРеферальная программа:\n• Пригласи друга — ты +{ref_ref}, новый пользователь +{ref_new}\n• Твоя ссылка: /refer\n\nПравила и приватность:\n• Запрещены NSFW/селебы\n• Фото хранятся временно; /clear — очистка, /forget — полное удаление\n\nНужна помощь? Напишите @piciriga — ответим быстро.",
         "need_photo": "Сначала пришли фото лица.",
         "photo_ok": "Фото получено ✅ Теперь опишите сцену или используйте /presets.",
         "gen": "Генерирую… ⏳",
         "fail": "Не удалось сгенерировать. Попробуйте изменить описание или фото.",
         "ready": "Готово ✅",
-        "credits_none": "Нет кредитов. Используй /buy или /promo.",
+        "credits_none": "Нет кредитов. Используй /buy или /promo. Также можно пригласить друга: /refer",
+        "hint_refer_zero": "👥 У вас 0 генераций. Пригласите друга — +{ref_ref} вам и +{ref_new} ему: /refer",
+        "btn_invite": "👥 Пригласить друга",
         "choose_lang": "🌐 Выберите язык интерфейса:",
         "lang_ru": "Язык установлен: Русский",
         "lang_en": "Язык установлен: Английский",
@@ -486,6 +488,12 @@ T = {
         "btn_publish_group": "В группу",
         "menu_presets": "📸 Пресеты",
         "menu_help": "🆘 Помощь",
+        "menu_refer": "🎁 Бесплатные генерации",
+        "menu_invite": "👥 Пригласить друга",
+        "btn_support": "📨 Написать поддержку",
+        "btn_back": "⬅️ Назад",
+        "btn_refer": "🎁 Бесплатные генерации",
+        "hint_refer_pay": "🎁 Бонусы: пригласи друга — +{ref_ref} тебе и +{ref_new} другу",
         "menu_pricing": "💎 Тарифы",
         "buy_title": "💳 Покупка генераций (Telegram Stars)\nВыберите удобный пакет:",
         "buy_btn_10": "10 генераций — 200★",
@@ -519,13 +527,15 @@ T = {
         "onboard_welcome": "Welcome to iModel. Tap Start to begin.",
         "onboard_btn": "🚀 Start",
         "start": "👋 Welcome to iModel — professional photo generation.\n\nHow it works:\n1) Send 1–4 selfies (good lighting helps)\n2) Describe the scene or use Copy Mode (/copy)\n3) Get the result.\n\nQuick commands: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
-        "help": "📘 Tips:\n• 1–4 selfies, minimal filters/makeup\n• Describe location, light, style, framing\n• For exact scene copy — /copy (style first, then selfie)",
+        "help": "🆘 Help\n\nBest results:\n• Send 1–4 selfies in even lighting, minimal filters\n• In your prompt describe location, light, style, framing, mood\n• Quick start: open Presets and pick a style\n• Copy a scene: use ‘Copy’ — first the reference, then your selfie\n\nPayments & balance:\n• Buy in ‘Buy’ (Telegram Stars)\n• Credits are deducted only on successful generation (except whitelist/admin)\n• Promo codes — /promo CODE\n\nReferral program:\n• Invite a friend — you +{ref_ref}, they +{ref_new}\n• Your link: /refer\n\nRules & privacy:\n• NSFW/celebrities are forbidden\n• Photos are stored temporarily; /clear to purge temp, /forget for full delete\n\nNeed help? Message @piciriga — we’ll reply quickly.",
         "need_photo": "Please send a face photo first.",
         "photo_ok": "Photo received ✅ Now describe the scene or use /presets.",
         "gen": "Working… ⏳",
         "fail": "Generation failed. Try adjusting your description or selfie.",
         "ready": "Done ✅",
-        "credits_none": "No credits. Use /buy or /promo.",
+        "credits_none": "No credits. Use /buy or /promo. You can also invite a friend: /refer",
+        "hint_refer_zero": "👥 You have 0 credits. Invite a friend — +{ref_ref} you and +{ref_new} them: /refer",
+        "btn_invite": "👥 Invite a friend",
         "choose_lang": "🌐 Choose your interface language:",
         "lang_ru": "Language set: Russian",
         "lang_en": "Language set: English",
@@ -540,6 +550,12 @@ T = {
         "btn_publish_group": "To group",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Help",
+        "menu_refer": "🎁 Free credits",
+        "menu_invite": "👥 Invite a friend",
+        "btn_support": "📨 Contact support",
+        "btn_back": "⬅️ Back",
+        "btn_refer": "🎁 Free credits",
+        "hint_refer_pay": "🎁 Tip: invite a friend — +{ref_ref} you · +{ref_new} them",
         "menu_pricing": "💎 Pricing",
         "buy_title": "💳 Buy generations (Telegram Stars)\nChoose a value pack:",
         "buy_btn_10": "10 gens — 200★",
@@ -573,13 +589,15 @@ T = {
         "onboard_welcome": "Bine ai venit la iModel. Apasă Start pentru a începe.",
         "onboard_btn": "🚀 Start",
         "start": "👋 Bine ai venit la iModel — generare foto profesională.\n\nCum funcționează:\n1) Trimite 1–4 selfie‑uri (lumina bună ajută)\n2) Descrie scena sau folosește „Copiază” (/copy)\n3) Primești rezultatul.\n\nComenzi rapide: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
-        "help": "📘 Sfaturi:\n• 1–4 selfie‑uri, minim filtre/machiaj\n• Descrie scena: locație, lumină, stil, încadrare\n• Pentru copiere exactă — /copy (stil apoi selfie)",
+        "help": "🆘 Ajutor\n\nRezultate mai bune:\n• Trimite 1–4 selfie‑uri cu lumină uniformă, fără filtre puternice\n• În descriere: locație, lumină, stil, încadrare, mood\n• Start rapid: deschide Preseturi și alege un stil\n• Copiere scenă: ‘Copiază’ — mai întâi referința, apoi selfie‑ul\n\nPlăți & sold:\n• Cumpără în ‘Cumpără’ (Stele Telegram)\n• Creditul se scade doar la generare reușită (exceptând whitelist/admin)\n• Cod promo — /promo COD\n\nProgram de recomandări:\n• Invită un prieten — tu +{ref_ref}, el/ea +{ref_new}\n• Linkul tău: /refer\n\nReguli & confidențialitate:\n• NSFW/celebr. interzise\n• Pozele se păstrează temporar; /clear curăță, /forget ștergere totală\n\nAi nevoie de ajutor? Scrie la @piciriga — răspundem rapid.",
         "need_photo": "Trimite o poză cu fața mai întâi.",
         "photo_ok": "Poză primită ✅ Acum descrie scena sau folosește /presets.",
         "gen": "Generez… ⏳",
         "fail": "Nu am reușit. Încearcă altă descriere sau alt selfie.",
         "ready": "Gata ✅",
-        "credits_none": "Nu mai ai credite. /buy sau /promo.",
+        "credits_none": "Nu mai ai credite. /buy sau /promo. Poți invita un prieten: /refer",
+        "hint_refer_zero": "👥 Ai 0 credite. Invită un prieten — +{ref_ref} ție și +{ref_new} lui/ei: /refer",
+        "btn_invite": "👥 Invită un prieten",
         "choose_lang": "🌐 Alege limba interfeței:",
         "lang_ru": "Limba setată: Rusă",
         "lang_en": "Limba setată: Engleză",
@@ -594,6 +612,12 @@ T = {
         "btn_publish_group": "În grup",
         "menu_presets": "🎛 Preseturi",
         "menu_help": "🆘 Ajutor",
+        "menu_refer": "🎁 Generații gratuite",
+        "menu_invite": "👥 Invită un prieten",
+        "btn_support": "📨 Contact suport",
+        "btn_back": "⬅️ Înapoi",
+        "btn_refer": "🎁 Generații gratuite",
+        "hint_refer_pay": "🎁 Bonus: invită un prieten — +{ref_ref} ție · +{ref_new} lui/ei",
         "menu_pricing": "💎 Prețuri",
         "buy_title": "💳 Cumpără generații (Stele Telegram)\nAlege pachetul avantajos:",
         "buy_btn_10": "10 gen — 200★",
@@ -628,13 +652,15 @@ T = {
         "onboard_welcome": "Willkommen bei iModel. Tippe auf Start, um zu beginnen.",
         "onboard_btn": "🚀 Start",
         "start": "👋 Willkommen bei iModel — professionelle Fotogenerierung.\n\nSo geht’s:\n1) Sende 1–4 Selfies (gutes Licht hilft)\n2) Beschreibe die Szene oder nutze den Kopier‑Modus (/copy)\n3) Erhalte das Ergebnis.\n\nSchnellbefehle: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
-        "help": "📘 Tipps:\n• 1–4 Selfies, möglichst ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt\n• Für exaktes Szenen‑Copy: /copy (erst Stil‑Bild, dann Selfie)",
+        "help": "🆘 Hilfe\n\nBeste Ergebnisse:\n• 1–4 Selfies bei gleichmäßiger Beleuchtung, ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt, Stimmung\n• Schnellstart: Presets öffnen und Stil wählen\n• Szene kopieren: ‘Kopieren’ — zuerst Referenz, dann Selfie\n\nZahlung & Guthaben:\n• Kaufen in ‘Kaufen’ (Telegram Stars)\n• Abzug nur bei erfolgreicher Generierung (außer Whitelist/Admin)\n• Promo‑Code — /promo CODE\n\nEmpfehlungsprogramm:\n• Freund einladen — du +{ref_ref}, er/sie +{ref_new}\n• Dein Link: /refer\n\nRegeln & Datenschutz:\n• NSFW/Promis verboten\n• Fotos werden temporär gespeichert; /clear löscht temporär, /forget vollständig\n\nBrauchen Sie Hilfe? Schreiben Sie @piciriga — wir antworten schnell.",
         "need_photo": "Bitte zuerst ein Gesichts‑Foto senden.",
         "photo_ok": "Foto empfangen ✅ Beschreibe jetzt die Szene oder nutze /presets.",
         "gen": "Erzeuge… ⏳",
         "fail": "Erzeugung fehlgeschlagen. Bitte Beschreibung oder Selfie anpassen.",
         "ready": "Fertig ✅",
-        "credits_none": "Keine Credits. Nutze /buy oder /promo.",
+        "credits_none": "Keine Credits. Nutze /buy oder /promo. Du kannst auch einen Freund einladen: /refer",
+        "hint_refer_zero": "👥 Du hast 0 Credits. Lade einen Freund ein — +{ref_ref} dir und +{ref_new} ihm/ihr: /refer",
+        "btn_invite": "👥 Freund einladen",
         "choose_lang": "🌐 Sprache für die Oberfläche wählen:",
         "lang_ru": "Sprache gesetzt: Russisch",
         "lang_en": "Sprache gesetzt: Englisch",
@@ -649,6 +675,12 @@ T = {
         "btn_publish_group": "In Gruppe",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Hilfe",
+        "menu_refer": "🎁 Kostenlose Credits",
+        "menu_invite": "👥 Freund einladen",
+        "btn_support": "📨 Support kontaktieren",
+        "btn_back": "⬅️ Zurück",
+        "btn_refer": "🎁 Kostenlose Credits",
+        "hint_refer_pay": "🎁 Tipp: Freund einladen — +{ref_ref} dir · +{ref_new} ihm/ihr",
         "menu_pricing": "💎 Preise",
         "buy_title": "💳 Käufe (Telegram Stars)\nWähle ein passendes Paket:",
         "buy_btn_10": "10 Gen — 200★",
@@ -773,6 +805,26 @@ async def safe_send_text(chat_id: int, text: str, **kwargs):
     except TelegramBadRequest as e:
         print(f"[safe_send_text] bad request: {e}")
     return None
+
+# One-per-day referral hint
+async def maybe_send_referral_hint(uid: int):
+    try:
+        day = _date_key()
+        info = STATS_USERS_INFO.setdefault(uid, {})
+        if info.get("ref_hint_day") == day:
+            return
+        info["ref_hint_day"] = day
+        users_save()
+        lang = USER_LANG.get(uid, LANG_DEFAULT)
+        txt = {
+            "ru": f"👥 Рефералка: пригласи друга — +{REF_BONUS_REF} тебе и +{REF_BONUS_NEW} ему. /refer",
+            "en": f"👥 Referral: invite a friend — +{REF_BONUS_REF} you, +{REF_BONUS_NEW} friend. /refer",
+            "ro": f"👥 Recomandă: invită un prieten — +{REF_BONUS_REF} ție, +{REF_BONUS_NEW} lui/ei. /refer",
+            "de": f"👥 Empfehlung: lade Freund ein — +{REF_BONUS_REF} dir, +{REF_BONUS_NEW} ihm/ihr. /refer",
+        }.get(lang, f"Referral: invite a friend — +{REF_BONUS_REF} you, +{REF_BONUS_NEW} friend. /refer")
+        await safe_send_text(uid, txt)
+    except Exception as e:
+        print("referral hint error:", str(e)[:160])
 
 # ===================== S3 HELPERS ====================
 def s3_put_and_presign(img_bytes: bytes, key_prefix: str = "inputs/") -> Optional[str]:
@@ -1461,7 +1513,28 @@ def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text=lang.get("menu_lang", "🌐 /lang"), callback_data="lang_open"),
+            InlineKeyboardButton(text=lang.get("menu_refer", "🎁 /refer"), callback_data="refer_open"),
+            InlineKeyboardButton(text=lang.get("menu_invite", "👥 Invite"), callback_data="refer_open"),
         ],
+    ])
+
+def kb_help(chat_id: int) -> InlineKeyboardMarkup:
+    lang = L(chat_id)
+    # Localized support button + back
+    support_txt = lang.get("btn_support", "📨 Support")
+    back_txt = lang.get("btn_back", "⬅️ Back")
+    refer_txt = lang.get("btn_refer", "👥 Referral link")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=refer_txt, callback_data="refer_open")],
+        [InlineKeyboardButton(text=support_txt, url="https://t.me/piciriga")],
+        [InlineKeyboardButton(text=back_txt, callback_data="back_main")],
+    ])
+
+def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
+    lang = L(chat_id)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
+        [InlineKeyboardButton(text="⭐ " + lang.get("btn_buy", "Buy"), callback_data="buy_open")],
     ])
 
 def kb_lang_select(chat_id: int) -> InlineKeyboardMarkup:
@@ -1511,19 +1584,22 @@ async def cmd_buy(m: Message):
         [InlineKeyboardButton(text=lang["buy_btn_10"],  callback_data="buy_stars_10")],
         [InlineKeyboardButton(text=lang["buy_btn_30"],  callback_data="buy_stars_30")],
         [InlineKeyboardButton(text=lang["buy_btn_100"], callback_data="buy_stars_100")],
+        [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
     ])
     await safe_answer(m, lang["buy_title"], reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("buy_stars_"))
 async def cb_buy_stars(c: CallbackQuery):
     pack = c.data.split("_")[-1]
+    # subtle referral tooltip
+    txt = L(c.message.chat.id).get("hint_refer_pay", "Invite a friend for free credits").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
     if pack == "10":
         await send_stars_invoice(c.message.chat.id, "iModel — 10 генераций", "Пакет 10 генераций", "pack_10", 200)
     elif pack == "30":
         await send_stars_invoice(c.message.chat.id, "iModel — 30 генераций", "Пакет 30 генераций", "pack_30", 500)
     elif pack == "100":
         await send_stars_invoice(c.message.chat.id, "iModel — 100 генераций", "Пакет 100 генераций", "pack_100", 1200)
-    await safe_cb_answer(c)
+    await safe_cb_answer(c, txt)
 
 @dp.pre_checkout_query()
 async def process_pre_checkout_q(pcq: PreCheckoutQuery):
@@ -1553,6 +1629,12 @@ async def cmd_version(m: Message):
 async def cmd_pricing(m: Message):
     await safe_answer(m, L(m.chat.id)["pricing"])
     await cmd_buy(m)
+    # If user has zero credits, highlight Free credits option
+    n = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
+    if n <= 0 and not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+        lang = L(m.chat.id)
+        hint = lang.get("hint_refer_zero", "Invite a friend: /refer").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
+        await safe_answer(m, hint, reply_markup=kb_invite_buy(m.chat.id))
 
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
@@ -1602,6 +1684,8 @@ async def cmd_start(m: Message):
                 USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
                 _credits_save()
                 stats_incr("referrals", 1)
+                stats_incr("ref_bonus_ref", REF_BONUS_REF)
+                stats_incr("ref_bonus_invited", REF_BONUS_NEW)
         except Exception:
             pass
 
@@ -1617,7 +1701,8 @@ async def cmd_start(m: Message):
 
 @dp.message(Command("help"))
 async def cmd_help(m: Message):
-    await safe_answer(m, L(m.chat.id)["help"])
+    text = L(m.chat.id)["help"].format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
+    await safe_answer(m, text, reply_markup=kb_help(m.chat.id))
 
 @dp.message(Command("lang"))
 async def cmd_lang(m: Message):
@@ -1694,6 +1779,14 @@ async def cmd_balance(m: Message):
     free = L(m.chat.id)["balance_free"] if is_free_user(m.chat.id, getattr(m.from_user, "username", None)) else ""
     n = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
     await safe_answer(m, L(m.chat.id)["balance"].format(n=n, free=free))
+    if n <= 0 and not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+        lang = L(m.chat.id)
+        hint = lang.get("hint_refer_zero", "Invite a friend: /refer").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite"), callback_data="refer_open")],
+            [InlineKeyboardButton(text="⭐ " + lang["btn_buy"], callback_data="buy_open")],
+        ])
+        await safe_answer(m, hint, reply_markup=kb)
 
 @dp.message(Command("clear"))
 async def cmd_clear(m: Message):
@@ -1756,7 +1849,8 @@ async def cmd_refer(m: Message):
 @dp.callback_query(F.data == "help_open")
 async def cb_help(c: CallbackQuery):
     await safe_cb_answer(c)
-    await c.message.answer(L(c.message.chat.id)["help"])
+    text = L(c.message.chat.id)["help"].format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
+    await c.message.answer(text, reply_markup=kb_help(c.message.chat.id))
 
 @dp.callback_query(F.data == "presets_open")
 async def cb_presets(c: CallbackQuery):
@@ -1776,6 +1870,11 @@ async def cb_back_main(c: CallbackQuery):
     await safe_cb_answer(c)
     chat_id = c.message.chat.id
     await c.message.answer(L(chat_id)["start"], reply_markup=main_menu_inline(chat_id))
+
+@dp.callback_query(F.data == "refer_open")
+async def cb_refer_open(c: CallbackQuery):
+    await safe_cb_answer(c)
+    await cmd_refer(c.message)
 
 @dp.callback_query(F.data.startswith("preset_"))
 async def cb_preset_pick(c: CallbackQuery):
@@ -1803,7 +1902,7 @@ async def cb_preset_pick(c: CallbackQuery):
         return
     # Have a reference → generate now
     if not has_credit(chat_id, getattr(c.from_user, "username", None)):
-        return await c.message.answer(L(chat_id)["credits_none"])
+        return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
     seed_int = ((hash(chat_id) % 10_000_000) + idx)
@@ -1855,6 +1954,11 @@ async def cb_pricing(c: CallbackQuery):
     await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["pricing"])
     await cmd_buy(c.message)
+    n = USER_CREDITS.get(c.message.chat.id, FREE_QUOTA)
+    if n <= 0 and not is_free_user(c.message.chat.id, getattr(c.from_user, "username", None)):
+        lang = L(c.message.chat.id)
+        hint = lang.get("hint_refer_zero", "Invite a friend: /refer").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
+        await c.message.answer(hint, reply_markup=kb_invite_buy(c.message.chat.id))
 
 @dp.callback_query(F.data == "onboard_go")
 async def cb_onboard_go(c: CallbackQuery):
@@ -2002,7 +2106,7 @@ async def on_photo(m: Message):
 
             ensure_user_credit(m.chat.id)
             if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-                return await safe_answer(m, L(m.chat.id)["credits_none"])
+                return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
             wait = await safe_answer(m, L(m.chat.id)["gen"])
             seed = (hashlib.md5(style_bytes).hexdigest())
@@ -2058,6 +2162,7 @@ async def on_photo(m: Message):
                 caption=L(m.chat.id)["copy_done"],
                 reply_markup=kb_actions(m.chat.id),
             )
+            await maybe_send_referral_hint(m.chat.id)
 
             # выключаем режим
             USER_COPY_STYLE.pop(m.chat.id, None)
@@ -2084,7 +2189,7 @@ async def on_photo(m: Message):
             if 0 <= idx < len(PRESETS):
                 preset = PRESETS[idx]
                 if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-                    return await safe_answer(m, L(m.chat.id)["credits_none"])
+                    return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
                 seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
                 final_bytes = generate_image_from_bytes(
@@ -2119,6 +2224,7 @@ async def on_photo(m: Message):
                     caption=cap,
                     reply_markup=kb_actions(m.chat.id),
                 )
+                await maybe_send_referral_hint(m.chat.id)
                 if AUTO_POST and GALLERY_CHANNEL_ID:
                     try:
                         await post_before_after_to_channel(m.chat.id)
@@ -2132,7 +2238,7 @@ async def on_photo(m: Message):
 
     ensure_user_credit(m.chat.id)
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-        return await safe_answer(m, L(m.chat.id)["credits_none"])
+        return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     seed_int = (hash(m.chat.id) % 10_000_000)
@@ -2167,6 +2273,7 @@ async def on_photo(m: Message):
         caption="✅",
         reply_markup=kb_actions(m.chat.id),
     )
+    await maybe_send_referral_hint(m.chat.id)
 
     if AUTO_POST and GALLERY_CHANNEL_ID:
         try:
@@ -2260,7 +2367,7 @@ async def cb_more(c: CallbackQuery):
     ensure_user_credit(chat_id)
     if not has_credit(chat_id, getattr(c.from_user, "username", None)):
         await safe_cb_answer(c)
-        return await c.message.answer(L(chat_id)["credits_none"])
+        return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
 
     await safe_cb_answer(c)
     msg = await c.message.answer(L(chat_id)["gen"])
@@ -2296,6 +2403,7 @@ async def cb_more(c: CallbackQuery):
         caption="✅",
         reply_markup=kb_actions(chat_id),
     )
+    await maybe_send_referral_hint(chat_id)
 
 
 async def ensure_webhook():
@@ -2468,6 +2576,9 @@ async def admin_panel(request: Request):
             "photos": sum_daily(["photos"], days),
             "blocked": sum_daily(["blocked"], days),
             "payments": sum_daily(["payments"], days),
+            "referrals": sum_daily(["referrals"], days),
+            "ref_bonus_ref": sum_daily(["ref_bonus_ref"], days),
+            "ref_bonus_invited": sum_daily(["ref_bonus_invited"], days),
         }
     day_m = range_metrics(1)
     week_m = range_metrics(7)
@@ -2500,6 +2611,7 @@ async def admin_panel(request: Request):
     # Top users by generations and time
     items = []
     for uid, u in STATS_USERS_INFO.items():
+        refst = REF_STATS.get(uid, {})
         items.append({
             "uid": uid,
             "username": u.get("username") or str(uid),
@@ -2510,6 +2622,8 @@ async def admin_panel(request: Request):
             "payments": int(u.get("payments", 0)),
             "balance": USER_CREDITS.get(uid, FREE_QUOTA),
             "lang": USER_LANG.get(uid, LANG_DEFAULT),
+            "invited": int(refst.get("count", 0)),
+            "ref_earned": int(refst.get("earned", 0)),
         })
     top_gens = sorted(items, key=lambda x: x["gens"], reverse=True)[:10]
     top_time = sorted(items, key=lambda x: x["time"], reverse=True)[:10]
@@ -2563,6 +2677,13 @@ async def admin_panel(request: Request):
         <div class="card"><div class="muted">Day</div><div class="v">{day_m['processed']}</div><div class="muted">msg {day_m['messages']} · photo {day_m['photos']} · pay {day_m['payments']}</div></div>
         <div class="card"><div class="muted">Week</div><div class="v">{week_m['processed']}</div><div class="muted">msg {week_m['messages']} · photo {week_m['photos']} · pay {week_m['payments']}</div></div>
         <div class="card"><div class="muted">Month</div><div class="v">{month_m['processed']}</div><div class="muted">msg {month_m['messages']} · photo {month_m['photos']} · pay {month_m['payments']}</div></div>
+      </div>
+
+      <div class="grid kpi" style="grid-template-columns: repeat(4,1fr); margin-top:14px;">
+        <div class="card"><div class="muted">Referrals · Day</div><div class="v">{day_m['referrals']}</div><div class="muted">earned {day_m['ref_bonus_ref']} · new {day_m['ref_bonus_invited']}</div></div>
+        <div class="card"><div class="muted">Referrals · Week</div><div class="v">{week_m['referrals']}</div><div class="muted">earned {week_m['ref_bonus_ref']} · new {week_m['ref_bonus_invited']}</div></div>
+        <div class="card"><div class="muted">Referrals · Month</div><div class="v">{month_m['referrals']}</div><div class="muted">earned {month_m['ref_bonus_ref']} · new {month_m['ref_bonus_invited']}</div></div>
+        <div class="card"><div class="muted">Referrals · All</div><div class="v">{STATS.get('referrals',0)}</div><div class="muted">earned {STATS.get('ref_bonus_ref',0)} · new {STATS.get('ref_bonus_invited',0)}</div></div>
       </div>
       <div class="grid kpi">
         <div class="card"><div class="muted">Users total</div><div class="v">{users_total}</div><div class="muted">Active 24h: {users_active_24h} · Now: {users_active_5m}</div></div>
@@ -2623,12 +2744,14 @@ async def admin_panel(request: Request):
         <div class="card">
           <div class="muted">Buyers (payments > 0)</div>
           <table>
-            <tr><th>User</th><th>Lang</th><th>Payments</th><th>Gens</th><th>Balance</th><th>Sessions</th><th>Last seen</th></tr>
+            <tr><th>User</th><th>Lang</th><th>Payments</th><th>Invited</th><th>Earned</th><th>Gens</th><th>Balance</th><th>Sessions</th><th>Last seen</th></tr>
             {''.join(
               f'<tr>'
               f'<td>{uname_or_id(i["uid"], i["username"])}</td>'
               f'<td>{i.get("lang","-")}</td>'
               f'<td>{i.get("payments",0)}</td>'
+              f'<td>{i.get("invited",0)}</td>'
+              f'<td>{i.get("ref_earned",0)}</td>'
               f'<td>{i["gens"]}</td>'
               f'<td>{("∞" if is_free_user(i["uid"], i["username"]) else USER_CREDITS.get(i["uid"], FREE_QUOTA))}</td>'
               f'<td>{i["sessions"]}</td>'
