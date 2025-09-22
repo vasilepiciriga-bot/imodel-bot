@@ -439,6 +439,9 @@ _credits_load()
 LAST_REF: Dict[int, bytes]   = {}
 LAST_PHOTO: Dict[int, bytes] = {}
 
+# Style share tokens (deep-links)
+STYLE_SHARES: Dict[str, Dict[str, object]] = {}
+
 # Copy Mode
 USER_COPY_MODE: Set[int]         = set()
 USER_COPY_STYLE: Dict[int, bytes]= {}
@@ -599,6 +602,8 @@ T = {
         "copy_done": "Готово ✅",
         "copy_exit": "Режим «Скопировать фото» выключен.",
         "menu_copy": "📋 Скопировать",
+        "style_share_btn": "✨ Сделать в таком стиле",
+        "style_share_intro": "Стиль загружен ✅ Пришлите селфи — сделаю похожий результат.",
         "err_channel_not_configured": "Канал не настроен.",
         "err_group_not_configured": "Группа не настроена.",
         "err_no_result": "Нет результата для публикации.",
@@ -644,6 +649,8 @@ T = {
         "hint_refer_pay": "🎁 Tip: invite a friend — +{ref_ref} you · +{ref_new} them",
         "menu_pricing": "💎 Pricing",
         "refer_msg": "👥 Invite friends and earn bonus generations!\nYour link: {link}\n\nInvited: {count}\nBonuses earned: {earned} gens",
+        "style_share_btn": "✨ Make in this style",
+        "style_share_intro": "Style loaded ✅ Send a selfie — I'll create a similar result.",
         "buy_title": "💳 Buy generations (Telegram Stars)\nChoose a value pack:",
         "buy_btn_10": "10 gens — 200★",
         "buy_btn_30": "30 gens — 500★",
@@ -749,6 +756,9 @@ T = {
         "before_after": "Înainte / După ✨",
         "before": "Înainte",
         "copy_prompt_updated": "Prompt actualizat. Trimite selfie-ul.",
+        "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
+        "style_share_btn": "✨ În acest stil",
+        "style_share_intro": "Stil încărcat ✅ Trimite un selfie — generez un rezultat similar.",
     }
     ,
     "de": {
@@ -813,6 +823,8 @@ T = {
         "copy_done": "Fertig ✅",
         "copy_exit": "Kopier‑Modus AUS.",
         "menu_copy": "📋 Kopieren",
+        "style_share_btn": "✨ In diesem Stil",
+        "style_share_intro": "Stil geladen ✅ Sende ein Selfie — ich erstelle ein ähnliches Ergebnis.",
         "err_channel_not_configured": "Kanal ist nicht konfiguriert.",
         "err_group_not_configured": "Gruppe ist nicht konfiguriert.",
         "err_no_result": "Kein Ergebnis zum Veröffentlichen.",
@@ -1848,6 +1860,37 @@ def kb_help(chat_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=back_txt, callback_data="back_main")],
     ])
 
+def create_style_share(style_bytes: bytes) -> Optional[str]:
+    try:
+        token = hashlib.md5(style_bytes + os.urandom(4)).hexdigest()[:12]
+        entry: Dict[str, object] = {"bytes": style_bytes}
+        # Try S3 upload for resilience
+        try:
+            key = f"shares/{int(time.time())}_{token}.jpg"
+            _s3.put_object(Bucket=S3_BUCKET, Key=key, Body=style_bytes, ContentType="image/jpeg")
+            entry["s3key"] = key
+        except Exception as e:
+            print("style share s3 error:", str(e)[:120])
+        STYLE_SHARES[token] = entry
+        return token
+    except Exception as e:
+        print("create_style_share error:", str(e)[:120])
+    return None
+
+def resolve_style_share(token: str) -> Optional[bytes]:
+    entry = STYLE_SHARES.get(token)
+    if entry and isinstance(entry.get("bytes"), (bytes, bytearray)):
+        return bytes(entry["bytes"])  # type: ignore[index]
+    # Try S3 if key present
+    try:
+        key = entry.get("s3key") if entry else None  # type: ignore[assignment]
+        if key and S3_BUCKET:
+            obj = _s3.get_object(Bucket=S3_BUCKET, Key=key)
+            return obj["Body"].read()
+    except Exception as e:
+        print("resolve share s3 error:", str(e)[:120])
+    return None
+
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -2078,6 +2121,18 @@ async def cmd_start(m: Message):
                 stats_incr("ref_bonus_invited", REF_BONUS_NEW)
         except Exception:
             pass
+
+    # Deep-link: start=style_<token> → preload Copy Mode with style
+    if len(parts) > 1 and parts[1].startswith("style_"):
+        token = parts[1][6:]
+        sty = resolve_style_share(token)
+        if sty:
+            USER_COPY_MODE.add(m.chat.id)
+            USER_COPY_STYLE[m.chat.id] = sty
+            USER_COPY_PROMPT.pop(m.chat.id, None)
+            await safe_answer(m, L(m.chat.id)["style_share_intro"])
+            USER_ONBOARDED.add(m.chat.id)
+            return
 
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
@@ -2408,6 +2463,16 @@ async def cb_pub_yes(c: CallbackQuery):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("channel media group error:", str(e)[:160])
+        # Deep-link button to copy this style
+        if before and BOT_USERNAME_GLOBAL:
+            token = create_style_share(before)
+            if token:
+                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{token}"
+                btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(user_id)["style_share_btn"], url=link)]])
+                try:
+                    await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=btn)
+                except Exception as e:
+                    print("channel share button error:", str(e)[:160])
     stats_incr("published_channel", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, L(c.message.chat.id)["published_ok"])
@@ -2447,6 +2512,16 @@ async def cb_pub_group(c: CallbackQuery):
             await bot.send_media_group(chat_id=PUBLISH_GROUP_ID, media=media)
         except Exception as e:
             print("group media group error:", str(e)[:160])
+        # Add deep-link button right after album
+        if before and BOT_USERNAME_GLOBAL:
+            token = create_style_share(before)
+            if token:
+                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{token}"
+                btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link)]])
+                try:
+                    await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=" ", reply_markup=btn)
+                except Exception as e:
+                    print("group share button error:", str(e)[:160])
     stats_incr("published_group", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, L(c.message.chat.id)["published_group_ok"])
