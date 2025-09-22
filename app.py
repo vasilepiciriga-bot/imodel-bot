@@ -91,6 +91,98 @@ STATS = {
 STATS_USERS: Set[int] = set()
 STATS_USERS_INFO: Dict[int, Dict[str, object]] = {}
 
+# ===== Persistent stats storage =====
+DATA_DIR = os.getenv("DATA_DIR", "data")
+STATS_TOTALS_FILE = os.path.join(DATA_DIR, "stats_totals.json")
+STATS_DAILY_FILE  = os.path.join(DATA_DIR, "stats_daily.json")
+USERS_FILE        = os.path.join(DATA_DIR, "users.json")
+
+STATS_DAILY: Dict[str, Dict[str, int]] = {}
+
+def _date_key(ts: Optional[float] = None) -> str:
+    t = time.gmtime(ts or time.time())
+    return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+
+def _ensure_data_dir():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception as e:
+        print("[persist] mkdata error:", str(e)[:160])
+
+def _save_json_atomic(path: str, obj: object):
+    try:
+        _ensure_data_dir()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as e:
+        print("[persist] save error:", path, str(e)[:160])
+
+def stats_save_totals():
+    try:
+        to_save = dict(STATS)
+        # Don't persist huge sets in totals
+        to_save.pop("start_ts", None)
+        _save_json_atomic(STATS_TOTALS_FILE, to_save)
+    except Exception as e:
+        print("[stats] save totals error:", str(e)[:160])
+
+def stats_save_daily():
+    _save_json_atomic(STATS_DAILY_FILE, STATS_DAILY)
+
+def users_save():
+    try:
+        _save_json_atomic(USERS_FILE, STATS_USERS_INFO)
+    except Exception as e:
+        print("[users] save error:", str(e)[:160])
+
+def stats_load():
+    global STATS_DAILY
+    try:
+        if os.path.exists(STATS_TOTALS_FILE):
+            with open(STATS_TOTALS_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            for k, v in loaded.items():
+                try:
+                    if isinstance(v, (int, float)):
+                        STATS[k] = v
+                except Exception:
+                    pass
+    except Exception as e:
+        print("[stats] load totals error:", str(e)[:160])
+    try:
+        if os.path.exists(STATS_DAILY_FILE):
+            with open(STATS_DAILY_FILE, "r", encoding="utf-8") as f:
+                STATS_DAILY = json.load(f) or {}
+        else:
+            STATS_DAILY = {}
+    except Exception as e:
+        print("[stats] load daily error:", str(e)[:160])
+        STATS_DAILY = {}
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            for uid_str, info in data.items():
+                try:
+                    STATS_USERS_INFO[int(uid_str)] = info
+                except Exception:
+                    continue
+    except Exception as e:
+        print("[users] load error:", str(e)[:160])
+
+def stats_incr(key: str, n: int = 1):
+    try:
+        STATS[key] = int(STATS.get(key, 0)) + n
+        stats_save_totals()
+        day = _date_key()
+        d = STATS_DAILY.setdefault(day, {})
+        d[key] = int(d.get(key, 0)) + n
+        stats_save_daily()
+    except Exception as e:
+        print("[stats] incr error:", key, str(e)[:160])
+
 def _touch_user(uid: int, username: Optional[str] = None):
     now = time.time()
     info = STATS_USERS_INFO.get(uid)
@@ -122,6 +214,11 @@ def _touch_user(uid: int, username: Optional[str] = None):
         info["last_seen"] = now
         if username and not info.get("username"):
             info["username"] = username[:64]
+    # persist user info after updates
+    try:
+        users_save()
+    except Exception:
+        pass
 
 def _uadd(uid: int, key: str, n: int = 1):
     info = STATS_USERS_INFO.get(uid)
@@ -132,6 +229,10 @@ def _uadd(uid: int, key: str, n: int = 1):
         info[key] = int(info.get(key, 0)) + n
     except Exception:
         info[key] = n
+    try:
+        users_save()
+    except Exception:
+        pass
 
 # S3 (Backblaze B2 S3-compatible)
 S3_ENDPOINT = os.getenv("S3_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
@@ -957,13 +1058,13 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
             line2 = enforce_safe_prompt(line)
             if line2:
                 line = line2
-            STATS["mj_prompt_ok"] += 1
+            stats_incr("mj_prompt_ok", 1)
         except Exception:
-            STATS["mj_prompt_ok"] += 1
+            stats_incr("mj_prompt_ok", 1)
         return line
     except Exception as e:
         print("Vision MJ prompt error:", str(e)[:200])
-        STATS["mj_prompt_fail"] += 1
+        stats_incr("mj_prompt_fail", 1)
         return None
 
 # ===== Короткий caption (для канала) =================
@@ -1106,11 +1207,11 @@ async def _send_nudge(uid: int, lang: str):
     sent = await safe_send_text(uid, text)
     if sent:
         ni["last_sent"] = time.time()
-        STATS["nudges_sent"] += 1
+        stats_incr("nudges_sent", 1)
         if granted:
-            STATS["nudges_granted"] += 1
+            stats_incr("nudges_granted", 1)
     else:
-        STATS["nudges_errors"] += 1
+        stats_incr("nudges_errors", 1)
 
 async def nudge_loop():
     # Run hourly; send up to NUDGE_BATCH_LIMIT eligible nudges
@@ -1330,7 +1431,7 @@ async def post_before_after_to_channel(user_id: int):
             )
         except Exception as e:
             print("auto-post (single) error:", str(e)[:160])
-    STATS["auto_post"] += 1
+    stats_incr("auto_post", 1)
 
 # ===================== UI ============================
 def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
@@ -1435,10 +1536,12 @@ async def got_payment(m: Message):
     if payload == "pack_10": add = 10
     elif payload == "pack_30": add = 30
     elif payload == "pack_100": add = 100
+    # ensure user is recorded with username for admin visibility
+    _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
     _credits_save()
     await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
-    STATS["payments"] += 1
+    stats_incr("payments", 1)
     _uadd(m.chat.id, "payments", 1)
 
 # ===================== COMMANDS =======================
@@ -1498,7 +1601,7 @@ async def cmd_start(m: Message):
                 REF_STATS[ref_id]["earned"] += REF_BONUS_REF
                 USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
                 _credits_save()
-                STATS["referrals"] += 1
+                stats_incr("referrals", 1)
         except Exception:
             pass
 
@@ -1584,7 +1687,7 @@ async def cmd_promo(m: Message):
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
     _credits_save()
     await safe_answer(m, lang["promo_ok"].format(add=add, all=USER_CREDITS[m.chat.id]))
-    STATS["promo_used"] += 1
+    stats_incr("promo_used", 1)
 
 @dp.message(Command("balance"))
 async def cmd_balance(m: Message):
@@ -1709,7 +1812,7 @@ async def cb_preset_pick(c: CallbackQuery):
         seed=seed_int
     )
     if not result:
-        STATS["gens_fail"] += 1
+        stats_incr("gens_fail", 1)
         _uadd(chat_id, "gens_fail", 1)
         return await safe_edit_text(msg, L(chat_id)["fail"])
     if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
@@ -1718,7 +1821,7 @@ async def cb_preset_pick(c: CallbackQuery):
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = preset.prompt
     LAST_PHOTO[chat_id] = result
-    STATS["gens_ok"] += 1
+    stats_incr("gens_ok", 1)
     _uadd(chat_id, "gens_ok", 1)
     hist = USER_HISTORY.setdefault(chat_id, [])
     hist.append(result)
@@ -1816,7 +1919,7 @@ async def cb_pub_yes(c: CallbackQuery):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("channel media group error:", str(e)[:160])
-    STATS["published_channel"] += 1
+    stats_incr("published_channel", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, "Опубликовано")
 
@@ -1855,7 +1958,7 @@ async def cb_pub_group(c: CallbackQuery):
             await bot.send_media_group(chat_id=PUBLISH_GROUP_ID, media=media)
         except Exception as e:
             print("group media group error:", str(e)[:160])
-    STATS["published_group"] += 1
+    stats_incr("published_group", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, "Опубликовано в группе")
 
@@ -1868,7 +1971,7 @@ async def on_photo(m: Message):
     f = await bot.get_file(m.photo[-1].file_id)
     b = await bot.download_file(f.file_path)
     img_bytes = b.read()
-    STATS["photos"] += 1
+    stats_incr("photos", 1)
     STATS_USERS.add(m.chat.id)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     _uadd(m.chat.id, "photos", 1)
@@ -1929,7 +2032,7 @@ async def on_photo(m: Message):
                 )
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
-                    STATS["gens_copy_fail"] += 1
+                    stats_incr("gens_copy_fail", 1)
                     _uadd(m.chat.id, "gens_copy_fail", 1)
                     return
 
@@ -1939,7 +2042,7 @@ async def on_photo(m: Message):
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
             LAST_PHOTO[m.chat.id] = final_bytes
-            STATS["gens_copy_ok"] += 1
+            stats_incr("gens_copy_ok", 1)
             _uadd(m.chat.id, "gens_copy_ok", 1)
 
             # история
@@ -1990,7 +2093,7 @@ async def on_photo(m: Message):
                 )
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
-                    STATS["gens_fail"] += 1
+                    stats_incr("gens_fail", 1)
                     _uadd(m.chat.id, "gens_fail", 1)
                     return
                 if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
@@ -1999,7 +2102,7 @@ async def on_photo(m: Message):
                 USER_LAST_OUTPUT[m.chat.id] = final_bytes
                 USER_LAST_PROMPT[m.chat.id] = preset.prompt
                 LAST_PHOTO[m.chat.id] = final_bytes
-                STATS["gens_ok"] += 1
+                stats_incr("gens_ok", 1)
                 _uadd(m.chat.id, "gens_ok", 1)
                 hist = USER_HISTORY.setdefault(m.chat.id, [])
                 hist.append(final_bytes)
@@ -2024,7 +2127,7 @@ async def on_photo(m: Message):
                 return
         return await safe_answer(m, L(m.chat.id)["photo_ok"])
     if blocked(caption):
-        STATS["blocked"] += 1
+        stats_incr("blocked", 1)
         return await safe_answer(m, L(m.chat.id)["blocked"])
 
     ensure_user_credit(m.chat.id)
@@ -2039,7 +2142,7 @@ async def on_photo(m: Message):
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
-        STATS["gens_fail"] += 1
+        stats_incr("gens_fail", 1)
         _uadd(m.chat.id, "gens_fail", 1)
         return
 
@@ -2049,7 +2152,7 @@ async def on_photo(m: Message):
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
     LAST_PHOTO[m.chat.id] = final_bytes
-    STATS["gens_ok"] += 1
+    stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
 
     hist = USER_HISTORY.setdefault(m.chat.id, [])
@@ -2079,7 +2182,7 @@ async def on_prompt(m: Message):
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
         await safe_answer(m, "Промпт обновлён. Теперь пришлите селфи.")
         return
-    STATS["messages"] += 1
+    stats_incr("messages", 1)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     _uadd(m.chat.id, "messages", 1)
     text = m.text.strip()
@@ -2091,7 +2194,7 @@ async def on_prompt(m: Message):
             USER_LANG[m.chat.id] = detect_lang(text)
 
     if blocked(text):
-        STATS["blocked"] += 1
+        stats_incr("blocked", 1)
         _uadd(m.chat.id, "blocked", 1)
         return await safe_answer(m, L(m.chat.id)["blocked"])
 
@@ -2112,7 +2215,7 @@ async def on_prompt(m: Message):
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
-        STATS["gens_fail"] += 1
+        stats_incr("gens_fail", 1)
         _uadd(m.chat.id, "gens_fail", 1)
         return
 
@@ -2122,7 +2225,7 @@ async def on_prompt(m: Message):
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = text
     LAST_PHOTO[m.chat.id] = final_bytes
-    STATS["gens_ok"] += 1
+    stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
 
     hist = USER_HISTORY.setdefault(m.chat.id, [])
@@ -2231,6 +2334,12 @@ async def ensure_webhook():
 @app.on_event("startup")
 async def on_startup():
     print(f"=== {APP_VERSION} ===")
+    # Load persisted stats/users
+    try:
+        stats_load()
+        print("Loaded persisted stats.")
+    except Exception as e:
+        print("Stats load error:", str(e)[:160])
     print("ADMINS (IDs):", ADMIN_IDS)
     print("ADMINS (usernames):", ADMIN_USERNAMES)
     if GALLERY_CHANNEL_ID:
@@ -2289,7 +2398,7 @@ async def telegram_webhook(request: Request):
         return JSONResponse({"status": "forbidden"}, status_code=403)
     data = await request.json()
     try:
-        STATS["updates"] += 1
+        stats_incr("updates", 1)
         t = data.get("message", {}) or data.get("edited_message", {}) or data.get("callback_query", {})
         chat = (t.get("chat") or t.get("message", {}).get("chat") or {})
         print("[webhook] update received:", {
@@ -2340,6 +2449,30 @@ async def admin_panel(request: Request):
     avg_session_sec = int(active_seconds_total / sessions_total) if sessions_total else 0
     total_processed = STATS.get("gens_ok", 0) + STATS.get("gens_copy_ok", 0)
 
+    # Time range helpers from daily buckets
+    def sum_daily(keys: List[str], days: int) -> int:
+        if days <= 0:
+            return 0
+        out = 0
+        now_ts = time.time()
+        for d in range(days):
+            dk = _date_key(now_ts - d * 86400)
+            day_map = STATS_DAILY.get(dk) or {}
+            for k in keys:
+                out += int(day_map.get(k, 0))
+        return out
+    def range_metrics(days: int) -> Dict[str, int]:
+        return {
+            "processed": sum_daily(["gens_ok", "gens_copy_ok"], days),
+            "messages": sum_daily(["messages"], days),
+            "photos": sum_daily(["photos"], days),
+            "blocked": sum_daily(["blocked"], days),
+            "payments": sum_daily(["payments"], days),
+        }
+    day_m = range_metrics(1)
+    week_m = range_metrics(7)
+    month_m = range_metrics(30)
+
     # Helpers
     def fmt_sec(s):
         h = s // 3600; m = (s % 3600) // 60; sc = s % 60
@@ -2382,7 +2515,10 @@ async def admin_panel(request: Request):
     top_time = sorted(items, key=lambda x: x["time"], reverse=True)[:10]
 
     # Buyers and Online lists
-    buyers = [i for i in items if i.get("payments", 0) > 0]
+    buyers = [
+        i for i in items
+        if (i.get("payments", 0) > 0) or (not is_free_user(i["uid"], i.get("username")) and int(i.get("balance", 0)) > FREE_QUOTA)
+    ]
     buyers_sorted = sorted(buyers, key=lambda x: (x["payments"], x["gens"]), reverse=True)[:50]
     online_now = [i for i in items if now - float(i.get("last_seen", 0)) <= 300]
     online_sorted = sorted(online_now, key=lambda x: x.get("last_seen", 0), reverse=True)
@@ -2423,6 +2559,11 @@ async def admin_panel(request: Request):
   <body>
     <header><h1>iModel — Admin Panel</h1></header>
     <div class="wrap">
+      <div class="grid kpi" style="grid-template-columns: repeat(3,1fr);">
+        <div class="card"><div class="muted">Day</div><div class="v">{day_m['processed']}</div><div class="muted">msg {day_m['messages']} · photo {day_m['photos']} · pay {day_m['payments']}</div></div>
+        <div class="card"><div class="muted">Week</div><div class="v">{week_m['processed']}</div><div class="muted">msg {week_m['messages']} · photo {week_m['photos']} · pay {week_m['payments']}</div></div>
+        <div class="card"><div class="muted">Month</div><div class="v">{month_m['processed']}</div><div class="muted">msg {month_m['messages']} · photo {month_m['photos']} · pay {month_m['payments']}</div></div>
+      </div>
       <div class="grid kpi">
         <div class="card"><div class="muted">Users total</div><div class="v">{users_total}</div><div class="muted">Active 24h: {users_active_24h} · Now: {users_active_5m}</div></div>
         <div class="card"><div class="muted">Sessions</div><div class="v">{sessions_total}</div><div class="muted">Avg length: {fmt_sec(avg_session_sec)}</div></div>
