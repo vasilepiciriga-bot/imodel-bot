@@ -6,7 +6,7 @@ replicate
 boto3
 openai
 pillow
-opencv-python
+opencv-python-headless
 python-dotenv
 pydantic
 pip install pre-commit
