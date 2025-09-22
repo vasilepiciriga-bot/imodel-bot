@@ -554,6 +554,7 @@ T = {
         "btn_refer": "🎁 Бесплатные генерации",
         "hint_refer_pay": "🎁 Бонусы: пригласи друга — +{ref_ref} тебе и +{ref_new} другу",
         "menu_pricing": "💎 Тарифы",
+        "refer_msg": "👥 Пригласи друзей и получай бонусные генерации!\nТвоя ссылка: {link}\n\nПриглашено: {count}\nПолучено бонусов: {earned} генераций",
         "buy_title": "💳 Покупка генераций (Telegram Stars)\nВыберите удобный пакет:",
         "buy_btn_10": "10 генераций — 200★",
         "buy_btn_30": "30 генераций — 500★",
@@ -580,6 +581,14 @@ T = {
         "copy_done": "Готово ✅",
         "copy_exit": "Режим «Скопировать фото» выключен.",
         "menu_copy": "📋 Скопировать",
+        "err_channel_not_configured": "Канал не настроен.",
+        "err_group_not_configured": "Группа не настроена.",
+        "err_no_result": "Нет результата для публикации.",
+        "published_ok": "Опубликовано",
+        "published_group_ok": "Опубликовано в группе",
+        "before_after": "До / После ✨",
+        "before": "До",
+        "copy_prompt_updated": "Промпт обновлён. Теперь пришлите селфи.",
     },
     "en": {
         "menu_lang": "🌐 Language",
@@ -616,6 +625,7 @@ T = {
         "btn_refer": "🎁 Free credits",
         "hint_refer_pay": "🎁 Tip: invite a friend — +{ref_ref} you · +{ref_new} them",
         "menu_pricing": "💎 Pricing",
+        "refer_msg": "👥 Invite friends and earn bonus generations!\nYour link: {link}\n\nInvited: {count}\nBonuses earned: {earned} gens",
         "buy_title": "💳 Buy generations (Telegram Stars)\nChoose a value pack:",
         "buy_btn_10": "10 gens — 200★",
         "buy_btn_30": "30 gens — 500★",
@@ -642,6 +652,14 @@ T = {
         "copy_done": "Done ✅",
         "copy_exit": "Copy Mode OFF.",
         "menu_copy": "📋 Copy",
+        "err_channel_not_configured": "Channel is not configured.",
+        "err_group_not_configured": "Group is not configured.",
+        "err_no_result": "No result to publish.",
+        "published_ok": "Published",
+        "published_group_ok": "Published to group",
+        "before_after": "Before / After ✨",
+        "before": "Before",
+        "copy_prompt_updated": "Prompt updated. Now send a selfie.",
     },
     "ro": {
         "menu_lang": "🌐 Limba",
@@ -678,6 +696,7 @@ T = {
         "btn_refer": "🎁 Generații gratuite",
         "hint_refer_pay": "🎁 Bonus: invită un prieten — +{ref_ref} ție · +{ref_new} lui/ei",
         "menu_pricing": "💎 Prețuri",
+        "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
         "buy_title": "💳 Cumpără generații (Stele Telegram)\nAlege pachetul avantajos:",
         "buy_btn_10": "10 gen — 200★",
         "buy_btn_30": "30 gen — 500★",
@@ -704,6 +723,14 @@ T = {
         "copy_done": "Gata ✅",
         "copy_exit": "Modul „Copiază” oprit.",
         "menu_copy": "📋 Copiază",
+        "err_channel_not_configured": "Canalul nu este configurat.",
+        "err_group_not_configured": "Grupul nu este configurat.",
+        "err_no_result": "Nu există rezultat pentru publicare.",
+        "published_ok": "Publicat",
+        "published_group_ok": "Publicat în grup",
+        "before_after": "Înainte / După ✨",
+        "before": "Înainte",
+        "copy_prompt_updated": "Prompt actualizat. Trimite selfie-ul.",
     }
     ,
     "de": {
@@ -741,6 +768,7 @@ T = {
         "btn_refer": "🎁 Kostenlose Credits",
         "hint_refer_pay": "🎁 Tipp: Freund einladen — +{ref_ref} dir · +{ref_new} ihm/ihr",
         "menu_pricing": "💎 Preise",
+        "refer_msg": "👥 Lade Freunde ein und erhalte Bonus‑Generierungen!\nDein Link: {link}\n\nEingeladen: {count}\nErhaltene Boni: {earned}",
         "buy_title": "💳 Käufe (Telegram Stars)\nWähle ein passendes Paket:",
         "buy_btn_10": "10 Gen — 200★",
         "buy_btn_30": "30 Gen — 500★",
@@ -767,6 +795,14 @@ T = {
         "copy_done": "Fertig ✅",
         "copy_exit": "Kopier‑Modus AUS.",
         "menu_copy": "📋 Kopieren",
+        "err_channel_not_configured": "Kanal ist nicht konfiguriert.",
+        "err_group_not_configured": "Gruppe ist nicht konfiguriert.",
+        "err_no_result": "Kein Ergebnis zum Veröffentlichen.",
+        "published_ok": "Veröffentlicht",
+        "published_group_ok": "In Gruppe veröffentlicht",
+        "before_after": "Vorher / Nachher ✨",
+        "before": "Vorher",
+        "copy_prompt_updated": "Prompt aktualisiert. Bitte sende ein Selfie.",
     }
 }
 
@@ -1920,13 +1956,8 @@ async def cmd_refer(m: Message):
     my_id = m.chat.id
     link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{my_id}"
     st = REF_STATS.get(my_id, {"count": 0, "earned": 0})
-    await safe_answer(
-        m,
-        "👥 Пригласи друзей и получай бонусные генерации!\n"
-        f"Твоя ссылка: {link}\n\n"
-        f"Приглашено: {st['count']}\n"
-        f"Получено бонусов: {st['earned']} генераций"
-    )
+    msg = L(m.chat.id)["refer_msg"].format(link=link, count=st["count"], earned=st["earned"])
+    await safe_answer(m, msg)
 
 # ======= INLINE callbacks =======
 @dp.callback_query(F.data == "help_open")
@@ -2075,12 +2106,12 @@ async def cb_copy_open(c: CallbackQuery):
 async def cb_pub_yes(c: CallbackQuery):
     if not GALLERY_CHANNEL_ID:
         await safe_cb_answer(c)
-        return await c.message.answer("Канал не настроен.")
+        return await c.message.answer(L(c.message.chat.id)["err_channel_not_configured"])
     before = LAST_REF.get(c.message.chat.id)
     after  = LAST_PHOTO.get(c.message.chat.id)
     if not after:
         await safe_cb_answer(c)
-        return await c.message.answer("Нет результата для публикации.")
+        return await c.message.answer(L(c.message.chat.id)["err_no_result"])
     imgs = []
     if before:
         imgs.append(before)
@@ -2097,9 +2128,9 @@ async def cb_pub_yes(c: CallbackQuery):
     else:
         media = []
         for i, b in enumerate(imgs):
-            cap = "До / После ✨" if i == 1 else None
+            cap = L(c.message.chat.id)["before_after"] if i == 1 else None
             if i == 0:
-                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption="До"))
+                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption=L(c.message.chat.id)["before"]))
             else:
                 media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="after.jpg"), caption=cap))
         try:
@@ -2108,7 +2139,7 @@ async def cb_pub_yes(c: CallbackQuery):
             print("channel media group error:", str(e)[:160])
     stats_incr("published_channel", 1)
     _uadd(c.message.chat.id, "published", 1)
-    await safe_cb_answer(c, "Опубликовано")
+    await safe_cb_answer(c, L(c.message.chat.id)["published_ok"])
 
 @dp.callback_query(F.data == "pub_group")
 async def cb_pub_group(c: CallbackQuery):
@@ -2136,9 +2167,9 @@ async def cb_pub_group(c: CallbackQuery):
     else:
         media = []
         for i, b in enumerate(imgs):
-            cap = "До / После ✨" if i == 1 else None
+            cap = L(c.message.chat.id)["before_after"] if i == 1 else None
             if i == 0:
-                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption="До"))
+                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption=L(c.message.chat.id)["before"]))
             else:
                 media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="after.jpg"), caption=cap))
         try:
@@ -2147,7 +2178,7 @@ async def cb_pub_group(c: CallbackQuery):
             print("group media group error:", str(e)[:160])
     stats_incr("published_group", 1)
     _uadd(c.message.chat.id, "published", 1)
-    await safe_cb_answer(c, "Опубликовано в группе")
+    await safe_cb_answer(c, L(c.message.chat.id)["published_group_ok"])
 
 # ===================== FLOW: PHOTO ====================
 @dp.message(F.photo)
@@ -2370,7 +2401,7 @@ async def on_prompt(m: Message):
     # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
     if m.chat.id in USER_COPY_MODE:
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
-        await safe_answer(m, "Промпт обновлён. Теперь пришлите селфи.")
+        await safe_answer(m, L(m.chat.id)["copy_prompt_updated"])
         return
     stats_incr("messages", 1)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
