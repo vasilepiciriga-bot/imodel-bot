@@ -1701,6 +1701,13 @@ async def got_payment(m: Message):
 async def cmd_version(m: Message):
     await safe_answer(m, f"{L(m.chat.id)['version'].format(ver=APP_VERSION)}")
 
+@dp.message(Command("ping"))
+async def cmd_ping(m: Message):
+    try:
+        await safe_answer(m, "pong")
+    except Exception:
+        pass
+
 @dp.message(Command("pricing"))
 async def cmd_pricing(m: Message):
     await safe_answer(m, L(m.chat.id)["pricing"])
