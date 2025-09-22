@@ -439,6 +439,9 @@ _credits_load()
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
 LAST_PHOTO: Dict[int, bytes] = {}
+# Deduplication of published albums (md5 keys with TTL)
+RECENT_PUB: Dict[str, float] = {}
+RECENT_PUB_TTL = 600.0  # 10 minutes
 
 # Style share tokens (deep-links)
 STYLE_SHARES: Dict[str, Dict[str, object]] = {}
@@ -1801,6 +1804,21 @@ async def post_before_after_to_channel(user_id: int):
     lang = USER_LANG.get(user_id, LANG_DEFAULT)
     cap  = generate_instacaption(USER_LAST_PROMPT.get(user_id, ""), lang)
 
+    # Dedup key
+    try:
+        key_src = (before or b"") + (after or b"")
+        sig = hashlib.md5(key_src).hexdigest()
+        now = time.time()
+        # prune
+        for k,v in list(RECENT_PUB.items()):
+            if now - v > RECENT_PUB_TTL:
+                RECENT_PUB.pop(k, None)
+        if RECENT_PUB.get(sig) and now - RECENT_PUB[sig] < RECENT_PUB_TTL:
+            return
+        RECENT_PUB[sig] = now
+    except Exception:
+        pass
+
     if before:
         media = [
             InputMediaPhoto(type="photo", media=BufferedInputFile(before, filename="before.jpg"), caption="До"),
@@ -1810,6 +1828,23 @@ async def post_before_after_to_channel(user_id: int):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("auto-post (album) error:", str(e)[:160])
+        # Add share buttons (style + prompt) under album
+        if BOT_USERNAME_GLOBAL:
+            s_token = create_style_share(before)
+            ptext = USER_LAST_REFINED_PROMPT.get(user_id)
+            p_token = create_prompt_share(ptext) if ptext else None
+            btns = []
+            if s_token:
+                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
+                btns.append(InlineKeyboardButton(text=L(user_id)["style_share_btn"], url=link))
+            if p_token:
+                link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
+                btns.append(InlineKeyboardButton(text="✨ По этому промпту", url=link2))
+            if btns:
+                try:
+                    await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
+                except Exception as e:
+                    print("channel share button error:", str(e)[:160])
     else:
         try:
             await bot.send_photo(
