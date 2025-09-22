@@ -59,11 +59,11 @@ OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 
 # Auto posts to group (educational, witty)
-GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "0") == "1"
+GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "1") == "1"
 GROUP_POST_MIN_HOURS  = float(os.getenv("GROUP_POST_MIN_HOURS", "2"))
 GROUP_POST_MAX_HOURS  = float(os.getenv("GROUP_POST_MAX_HOURS", "3"))
 # Either a single lang like "ru" or a comma-list like "ru,ro" to rotate
-GROUP_POST_LANGS_RAW  = os.getenv("GROUP_POST_LANGS", os.getenv("GROUP_POST_LANG", "ru"))
+GROUP_POST_LANGS_RAW  = os.getenv("GROUP_POST_LANGS", os.getenv("GROUP_POST_LANG", "ru,ro"))
 _GROUP_LANGS          = [x.strip().lower() for x in GROUP_POST_LANGS_RAW.replace(";",",").split(",") if x.strip()]
 if not _GROUP_LANGS:
     _GROUP_LANGS = ["ru"]
@@ -72,7 +72,7 @@ _GROUP_LANG_IDX = 0
 GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
 GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
 # Debug: force fixed interval in minutes and ignore quiet hours if >0
-GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "0"))
+GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "5"))
 GROUP_POST_LOOP_RUNNING = False
 GROUP_POST_LAST_AT: float = 0.0
 
@@ -334,7 +334,7 @@ except Exception:
 AUTO_POST = os.getenv("AUTO_POST", "0") == "1"  # if 1: авто-пост в канал «до/после»
 
 # Optional group for manual publishing
-PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "")
+PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "-1003034544091")
 try:
     if PUBLISH_GROUP_ID:
         PUBLISH_GROUP_ID = int(PUBLISH_GROUP_ID)
@@ -383,7 +383,8 @@ api = app  # alias
 
 USER_REFS: Dict[int, List[bytes]]  = {}   # 1–4 селфи (последние)
 USER_LAST_OUTPUT: Dict[int, bytes] = {}   # последний результат
-USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt
+USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt (ввод пользователя/сцена)
+USER_LAST_REFINED_PROMPT: Dict[int, str] = {}  # фактический GPT-уточнённый промпт
 USER_LANG: Dict[int, str]          = {}   # язык
 USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
@@ -441,6 +442,8 @@ LAST_PHOTO: Dict[int, bytes] = {}
 
 # Style share tokens (deep-links)
 STYLE_SHARES: Dict[str, Dict[str, object]] = {}
+PROMPT_SHARES: Dict[str, str] = {}
+USER_PROMPT_PENDING: Dict[int, str] = {}
 
 # Copy Mode
 USER_COPY_MODE: Set[int]         = set()
@@ -1105,19 +1108,19 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
 
 # ===================== GROUP POSTS =====================
 PROMO_TOPICS_RU = [
-    "минималистичная гостиная, утренний свет, тёплые тона, журнал отелей",
-    "уютная спальня, мягкие тени, бежевые и кремовые оттенки",
-    "сканди‑кухня, чистые линии, натуральное дерево",
-    "лаунж‑зона отеля, низкая перспектива, кинематографичный контраст",
-    "рабочее место у окна, дневной свет, аккуратные акценты",
+    "портрет у окна, утренний мягкий свет, тёплый WB, естественные тона",
+    "портрет на закате, золотой час, контровой свет, мягкая линза",
+    "портрет при лампах, теплый свет, уют, мягкие тени",
+    "студийный портрет, мягкий софтбокс, чистый фон, журнальный стиль",
+    "уличный портрет, город на заднем плане, боке, кинематографичная гамма",
 ]
 
 PROMO_TOPICS_RO = [
-    "living minimalist, lumină de dimineață, tonuri calde, revistă de hotel",
-    "dormitor cozy, umbre moi, paletă bej‑crem",
-    "bucătărie scandi, linii curate, lemn natural",
-    "zonă lounge de hotel, unghi jos, contrast cinematic",
-    "birou la fereastră, lumină naturală, accente discrete",
+    "portret la fereastră, lumină de dimineață, WB cald, tonuri naturale",
+    "portret la apus, golden hour, lumină din spate, moale",
+    "portret la lămpi, lumină caldă, cozy, umbre delicate",
+    "portret de studio, softbox, fundal curat, stil editorial",
+    "portret urban, oraș în fundal, bokeh, paletă cinematografică",
 ]
 
 # Educational tip buckets per language
@@ -1192,8 +1195,8 @@ def craft_group_post_image_prompt(lang: str) -> str:
     topics = PROMO_TOPICS_RU if lang.startswith("ru") else PROMO_TOPICS_RO if lang.startswith("ro") else PROMO_TOPICS_RU
     theme = random.choice(topics)
     base = (
-        "ultra realistic interior photography, straight verticals, soft natural light, professional hotel magazine style, "
-        "high dynamic range, crisp textures, tasteful composition"
+        "ultra realistic editorial portrait photography of a person, SFW, no brands, no text, "
+        "soft flattering light, clean background, tasteful composition, magazine quality"
     )
     return f"{theme}. {base}"
 
@@ -1621,6 +1624,7 @@ def generate_image_from_bytes(
     strict: bool = False,
     style_bytes: Optional[bytes] = None,
     lock_scene: bool = True,
+    user_id: Optional[int] = None,
 ) -> Optional[bytes]:
     if blocked(user_prompt):
         print("⛔ Заблокировано фильтром")
@@ -1628,6 +1632,8 @@ def generate_image_from_bytes(
 
     # In strict (Copy Mode), avoid GPT rephrasing to keep scene constraints intact
     refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=not strict)
+    if user_id is not None:
+        USER_LAST_REFINED_PROMPT[user_id] = refined
     if strict and lock_scene:
         refined = f"{refined}. {SCENE_LOCK}. Exact same background, composition, lighting, color grading; only replace the face."
 
@@ -1891,6 +1897,18 @@ def resolve_style_share(token: str) -> Optional[bytes]:
         print("resolve share s3 error:", str(e)[:120])
     return None
 
+def create_prompt_share(prompt_text: str) -> Optional[str]:
+    try:
+        token = hashlib.md5((prompt_text + str(time.time())).encode("utf-8")).hexdigest()[:12]
+        PROMPT_SHARES[token] = prompt_text
+        return token
+    except Exception as e:
+        print("create_prompt_share error:", str(e)[:120])
+    return None
+
+def resolve_prompt_share(token: str) -> Optional[str]:
+    return PROMPT_SHARES.get(token)
+
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -2134,6 +2152,16 @@ async def cmd_start(m: Message):
             USER_ONBOARDED.add(m.chat.id)
             return
 
+    # Deep-link: start=prompt_<token> → preload prompt and ask for selfie
+    if len(parts) > 1 and parts[1].startswith("prompt_"):
+        token = parts[1][7:]
+        ptxt = resolve_prompt_share(token)
+        if ptxt:
+            USER_PROMPT_PENDING[m.chat.id] = ptxt
+            await safe_answer(m, L(m.chat.id)["style_share_intro"])  # reuse intro text
+            USER_ONBOARDED.add(m.chat.id)
+            return
+
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
     if m.chat.id not in USER_ONBOARDED:
@@ -2348,7 +2376,7 @@ async def cb_preset_pick(c: CallbackQuery):
     seed_int = ((hash(chat_id) % 10_000_000) + idx)
     result = generate_image_from_bytes(
         ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int
+        seed=seed_int, user_id=chat_id
     )
     if not result:
         stats_incr("gens_fail", 1)
@@ -2514,10 +2542,21 @@ async def cb_pub_group(c: CallbackQuery):
             print("group media group error:", str(e)[:160])
         # Add deep-link button right after album
         if before and BOT_USERNAME_GLOBAL:
-            token = create_style_share(before)
-            if token:
-                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{token}"
-                btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link)]])
+            # Style share
+            s_token = create_style_share(before)
+            # Prompt share (use last refined prompt)
+            ptext = USER_LAST_REFINED_PROMPT.get(c.message.chat.id)
+            p_token = create_prompt_share(ptext) if ptext else None
+            btns = []
+            if s_token:
+                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
+                btns.append(InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link))
+            if p_token:
+                link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
+                # Reuse style_share_btn if you want one button, else define new key
+                btns.append(InlineKeyboardButton(text="✨ По этому промпту", url=link2))
+            if btns:
+                btn = InlineKeyboardMarkup(inline_keyboard=[btns])
                 try:
                     await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=" ", reply_markup=btn)
                 except Exception as e:
@@ -2582,6 +2621,7 @@ async def on_photo(m: Message):
                 strict=True,
                 style_bytes=None,
                 lock_scene=False,
+                user_id=m.chat.id,
             )
             if not final_bytes:
                 # вторая попытка: ещё жёстче
@@ -2593,6 +2633,7 @@ async def on_photo(m: Message):
                     strict=True,
                     style_bytes=None,
                     lock_scene=False,
+                    user_id=m.chat.id,
                 )
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2643,6 +2684,47 @@ async def on_photo(m: Message):
 
     caption = (m.caption or "").strip()
     if not caption:
+        # If a prompt-share was chosen earlier, auto-generate using it
+        if m.chat.id in USER_PROMPT_PENDING:
+            ptxt = USER_PROMPT_PENDING.pop(m.chat.id)
+            if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+                return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+            wait = await safe_answer(m, L(m.chat.id)["gen"])
+            seed_int = (hash(m.chat.id) % 10_000_000)
+            final_bytes = generate_image_from_bytes(
+                img_bytes, ptxt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT), seed=seed_int, user_id=m.chat.id
+            )
+            if not final_bytes:
+                if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                stats_incr("gens_fail", 1)
+                _uadd(m.chat.id, "gens_fail", 1)
+                return
+            if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+                USER_CREDITS[m.chat.id] -= 1
+                _credits_save()
+            USER_LAST_OUTPUT[m.chat.id] = final_bytes
+            USER_LAST_PROMPT[m.chat.id] = ptxt
+            LAST_PHOTO[m.chat.id] = final_bytes
+            stats_incr("gens_ok", 1)
+            _uadd(m.chat.id, "gens_ok", 1)
+            hist = USER_HISTORY.setdefault(m.chat.id, [])
+            hist.append(final_bytes)
+            if len(hist) > GALLERY_LIMIT:
+                del hist[:-GALLERY_LIMIT]
+            if wait: await wait.delete()
+            await safe_answer_photo(
+                m,
+                BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
+                caption="✅",
+                reply_markup=kb_actions(m.chat.id),
+            )
+            await maybe_send_referral_hint(m.chat.id)
+            if AUTO_POST and GALLERY_CHANNEL_ID:
+                try:
+                    await post_before_after_to_channel(m.chat.id)
+                except Exception as e:
+                    print("AUTO_POST error:", str(e)[:160])
+            return
         # If a preset was chosen earlier, auto-generate using it
         if m.chat.id in USER_PRESET_PENDING:
             idx = USER_PRESET_PENDING.pop(m.chat.id)
@@ -2654,7 +2736,7 @@ async def on_photo(m: Message):
                 seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
                 final_bytes = generate_image_from_bytes(
                     img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    seed=seed_int
+                    seed=seed_int, user_id=m.chat.id
                 )
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2704,7 +2786,7 @@ async def on_photo(m: Message):
     seed_int = (hash(m.chat.id) % 10_000_000)
     final_bytes = generate_image_from_bytes(
         img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int
+        seed=seed_int, user_id=m.chat.id
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2778,7 +2860,7 @@ async def on_prompt(m: Message):
     seed_int = (hash(m.chat.id) % 10_000_000)
     final_bytes = generate_image_from_bytes(
         ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int
+        seed=seed_int, user_id=m.chat.id
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
