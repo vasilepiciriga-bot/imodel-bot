@@ -58,6 +58,20 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 
+# Auto posts to group (educational, witty)
+GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "0") == "1"
+GROUP_POST_MIN_HOURS  = float(os.getenv("GROUP_POST_MIN_HOURS", "2"))
+GROUP_POST_MAX_HOURS  = float(os.getenv("GROUP_POST_MAX_HOURS", "3"))
+# Either a single lang like "ru" or a comma-list like "ru,ro" to rotate
+GROUP_POST_LANGS_RAW  = os.getenv("GROUP_POST_LANGS", os.getenv("GROUP_POST_LANG", "ru"))
+_GROUP_LANGS          = [x.strip().lower() for x in GROUP_POST_LANGS_RAW.replace(";",",").split(",") if x.strip()]
+if not _GROUP_LANGS:
+    _GROUP_LANGS = ["ru"]
+_GROUP_LANG_IDX = 0
+# Quiet hours: do NOT post between END..START (e.g., 22..8)
+GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
+GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
+
 # Filter toggles
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
 ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "1") == "1"
@@ -1072,6 +1086,186 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
             pass
         time.sleep(base_sleep * (i + 1))
     return None
+
+# ===================== GROUP POSTS =====================
+PROMO_TOPICS_RU = [
+    "минималистичная гостиная, утренний свет, тёплые тона, журнал отелей",
+    "уютная спальня, мягкие тени, бежевые и кремовые оттенки",
+    "сканди‑кухня, чистые линии, натуральное дерево",
+    "лаунж‑зона отеля, низкая перспектива, кинематографичный контраст",
+    "рабочее место у окна, дневной свет, аккуратные акценты",
+]
+
+PROMO_TOPICS_RO = [
+    "living minimalist, lumină de dimineață, tonuri calde, revistă de hotel",
+    "dormitor cozy, umbre moi, paletă bej‑crem",
+    "bucătărie scandi, linii curate, lemn natural",
+    "zonă lounge de hotel, unghi jos, contrast cinematic",
+    "birou la fereastră, lumină naturală, accente discrete",
+]
+
+# Educational tip buckets per language
+TIPS_RU = {
+    "light_morning": "Лайфхак света: утром ставьте камеру так, чтобы солнечный блик шёл вдоль стены — мягкий объём без пересветов.",
+    "light_sunset": "Золотой час спасает даже простую комнату — тёплая боковая подсветка даёт глубину и уют.",
+    "light_lamps": "Лампы тёплого спектра + выключенный верхний свет = меньше плоских теней и больше атмосферы.",
+    "framing_wide": "Ширик — это аккуратность: выравнивайте вертикали и следите, чтобы углы мебели не ‘уезжали’.",
+    "framing_height": "Высота камеры ~90–110 см: линии столов и кроватей становятся ровнее, кадр — спокойнее.",
+    "color_wb": "Баланс белого держите нейтральным: смешение ламп и дневного света лечится точкой серого.",
+    "micro_contrast": "Немного микроконтраста подчёркивает текстуры дерева и ткани — не переборщите.",
+    "donts": "Не перегружайте кадр: уберите лишние предметы со столешниц и пола — воздух дороже.",
+}
+
+TIPS_RO = {
+    "light_morning": "Lumina de dimineață pe perete dă volum blând fără supraexpuneri.",
+    "light_sunset": "Ora de aur încălzește orice cameră — lumină laterală = profunzime & cozy.",
+    "light_lamps": "Becuri calde + fără lumină de tavan = umbre mai plăcute și atmosferă.",
+    "framing_wide": "Cu wide‑angle fii atent la verticale — colțurile mobilei să nu ‘alunece’.",
+    "framing_height": "Înălțimea camerei ~90–110 cm: linii mai drepte, cadru mai calm.",
+    "color_wb": "Ține WB neutru: mixul dintre lumină de zi și lămpi se corectează cu un punct de gri.",
+    "micro_contrast": "Puțin micro‑contrast scoate textura lemnului și a textilelor — cu măsură.",
+    "donts": "Nu încărca cadrul: eliberează blaturile și podeaua — aerul valorează mult.",
+}
+
+def _pick_tip(lang: str) -> str:
+    tips = TIPS_RU if lang.startswith("ru") else TIPS_RO if lang.startswith("ro") else None
+    if not tips:
+        return "Keep verticals straight and light soft — simple and classy."
+    key = random.choice(list(tips.keys()))
+    return tips[key]
+
+def craft_group_post_text(lang: str, bot_username: Optional[str]) -> str:
+    name = ("@" + bot_username) if bot_username else "the bot"
+    tip = _pick_tip(lang)
+    try:
+        if OPENAI_API_KEY and OpenAI is not None:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            sys = (
+                "You are a charismatic, witty teacher of interior photography and composition. "
+                "Write a short (2–3 sentences) educational Telegram post with a light joke and strong charisma. "
+                "Give one practical tip for interiors (light, verticals, framing, color). "
+                "End with an inviting CTA that mentions the bot handle. No hashtags."
+            )
+            user = f"Language: {lang}. Bot handle: {name}. Tone: playful, classy, helpful. Tip: {tip}"
+            r = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role":"system","content":sys},{"role":"user","content":user}],
+                temperature=0.9,
+                max_tokens=120,
+            )
+            out = (r.choices[0].message.content or "").strip()
+            if out:
+                return out
+    except Exception as e:
+        print("craft_group_post_text error:", str(e)[:160])
+    if lang.startswith("ru"):
+        return f"{tip} Попробуйте {name} — чуть юмора, много вкуса и идеальный кадр."
+    if lang.startswith("ro"):
+        return f"{tip} Încearcă {name} — puțin umor, mult stil și cadre curate."
+    if lang.startswith("de"):
+        return (
+            "Hotel‑Look in Minuten: klare Linien, schönes Licht, kein Stress. "
+            f"Teste {name} — macht Spaß!"
+        )
+    return (
+        "Make interiors and portraits look like a hotel magazine. "
+        f"Try {name} now — fast, tasteful, fun."
+    )
+
+def craft_group_post_image_prompt(lang: str) -> str:
+    topics = PROMO_TOPICS_RU if lang.startswith("ru") else PROMO_TOPICS_RO if lang.startswith("ro") else PROMO_TOPICS_RU
+    theme = random.choice(topics)
+    base = (
+        "ultra realistic interior photography, straight verticals, soft natural light, professional hotel magazine style, "
+        "high dynamic range, crisp textures, tasteful composition"
+    )
+    return f"{theme}. {base}"
+
+def generate_group_post_image(lang: str) -> Optional[bytes]:
+    if not REPLICATE_API_TOKEN or not NANOBANANA_MODEL:
+        return None
+    prompt = craft_group_post_image_prompt(lang)
+    try:
+        url = replicate_generate(NANOBANANA_MODEL, {"prompt": prompt})
+        if url and url.startswith("http"):
+            img = _download_with_retries(url)
+            if img:
+                # Optional upscale
+                try:
+                    up = replicate_generate(ESRGAN_MODEL, {"image": url, "scale": 2, "face_enhance": False, "model":"RealESRGAN_x4plus"})
+                    if up and up.startswith("http"):
+                        upb = _download_with_retries(up)
+                        if upb:
+                            return upb
+                except Exception as e:
+                    print("group ESRGAN error:", str(e)[:160])
+                return img
+    except Exception as e:
+        print("group image generate error:", str(e)[:160])
+    return None
+
+def _next_group_lang() -> str:
+    global _GROUP_LANG_IDX
+    if not _GROUP_LANGS:
+        return "ru"
+    lang = _GROUP_LANGS[_GROUP_LANG_IDX % len(_GROUP_LANGS)]
+    _GROUP_LANG_IDX = (_GROUP_LANG_IDX + 1) % max(1, len(_GROUP_LANGS))
+    return lang
+
+async def group_posts_loop():
+    # Post to group every 2-3 hours with light randomness
+    await asyncio.sleep(5)
+    while True:
+        try:
+            if not PUBLISH_GROUP_ID or not GROUP_POSTS_ENABLED:
+                await asyncio.sleep(60)
+                continue
+            # Rotate langs if list provided
+            lang = _next_group_lang()
+            # Skip during quiet hours (22:00..08:00) in the language's timezone
+            try:
+                from zoneinfo import ZoneInfo
+                import datetime as _dt
+                tzname = _lang_to_tz(lang)
+                now_loc = _dt.datetime.now(ZoneInfo(tzname))
+                hour = now_loc.hour
+                start_h = min(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
+                end_h = max(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
+                if not (start_h <= hour < end_h):
+                    # sleep until next window start
+                    next_start = now_loc.replace(hour=start_h, minute=0, second=0, microsecond=0)
+                    if hour >= end_h:
+                        next_start = next_start + _dt.timedelta(days=1)
+                    wait_sec = max(60, int((next_start - now_loc).total_seconds()))
+                    await asyncio.sleep(wait_sec)
+                    continue
+            except Exception:
+                pass
+            # Compose text
+            txt = craft_group_post_text(lang, BOT_USERNAME_GLOBAL)
+            img = generate_group_post_image(lang)
+            if img:
+                try:
+                    await bot.send_photo(
+                        chat_id=PUBLISH_GROUP_ID,
+                        photo=BufferedInputFile(img, filename="promo.jpg"),
+                        caption=txt
+                    )
+                    STATS["published_group"] = int(STATS.get("published_group", 0)) + 1
+                except Exception as e:
+                    print("group promo send error:", str(e)[:160])
+            else:
+                try:
+                    await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=txt)
+                    STATS["published_group"] = int(STATS.get("published_group", 0)) + 1
+                except Exception as e:
+                    print("group promo text error:", str(e)[:160])
+            # Sleep 2-3 hours
+            wait_h = random.uniform(GROUP_POST_MIN_HOURS, GROUP_POST_MAX_HOURS)
+            await asyncio.sleep(max(300, int(wait_h * 3600)))
+        except Exception as e:
+            print("group_posts_loop error:", str(e)[:160])
+            await asyncio.sleep(60)
 
 # ===================== PROMPTS ========================
 def _safe_suffix() -> str:
@@ -2603,6 +2797,9 @@ async def on_startup():
         if NUDGE_ENABLED:
             asyncio.create_task(nudge_loop())
             print("Nudge loop started")
+        if GROUP_POSTS_ENABLED:
+            asyncio.create_task(group_posts_loop())
+            print("Group posts loop started")
     except Exception as e:
         print("Nudge loop error on startup:", str(e)[:160])
 @app.on_event("shutdown")
