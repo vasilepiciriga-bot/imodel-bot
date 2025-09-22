@@ -1456,21 +1456,22 @@ def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
         return None
 
 def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
-    """Produce a detailed Midjourney-style prompt describing the style image (SFW)."""
+    """Produce an extremely detailed Midjourney-style prompt for Copy Mode with strong emphasis on clothing (SFW)."""
     if not OPENAI_API_KEY or OpenAI is None:
         return None
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         b64 = base64.b64encode(style_bytes).decode("utf-8")
         sys = (
-            "You are an expert Midjourney prompt engineer. Given a single reference photo, "
-            "write ONE LINE Midjourney-style prompt (concise but very detailed). "
-            "Focus on: subject description (generic, no names), environment, composition/framing, camera angle, lens/focal feel, "
-            "lighting direction/quality, color palette/color grading, mood, style/adjectives, textures, time of day. "
-            "Keep SFW (fully clothed), avoid any brand/celebrity names, keep it respectful. Do not mention 'reference' or 'face swap'."
+            "You are an expert fashion + photography prompt engineer for Midjourney‑style prompts. "
+            "Given ONE reference photo, return ONE LINE in English, comma‑separated attributes, extremely detailed, SFW. "
+            "Put special emphasis on CLOTHING: garment category, layers, silhouette/fit (oversized/slim/relaxed/tailored), drape, fabric/material (cotton, wool, denim, satin, knit, leather), texture (ribbed, cable‑knit, fuzzy, matte, glossy), pattern/print (solid, stripes, plaid, floral, logo‑free), construction details (collar type, lapel, cuffs, hems, seams, pleats), closures (buttons, zipper, laces), accessories (belt, jewelry, earrings, necklace, glasses, hat, bag), footwear, and the clothing color palette. "
+            "Also cover: subject (generic person, no names), environment/location, composition/framing (close‑up/half‑body/full), camera angle and lens/focal feel, pose and head orientation, time of day, lighting direction/quality, color grading/toning, mood, key background cues. "
+            "Strictly SFW (fully clothed), avoid any brand or celebrity names, no logos, no text in image. Do not mention 'reference' or 'face swap'. "
+            "Keep it ONE line, concise but information‑dense."
         )
         user_content = [
-            {"type": "text", "text": "Create a one-line Midjourney prompt capturing this photo's style."},
+            {"type": "text", "text": "Return one line with strong clothing detail first, then environment/composition/camera/light/mood."},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
         ]
         msg = [
@@ -1481,7 +1482,7 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
             model=OPENAI_MODEL_VISION,
             messages=msg,
             temperature=0.2,
-            max_tokens=200,
+            max_tokens=260,
         )
         line = (r.choices[0].message.content or "").strip()
         if not line:
