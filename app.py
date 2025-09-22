@@ -1495,8 +1495,8 @@ def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
     ],
     [
         InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
+        InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
         InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
-        InlineKeyboardButton(text="👥 " + lang.get("btn_publish_group", "To group"), callback_data="pub_group"),
     ]])
 
 def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
@@ -2540,7 +2540,8 @@ async def http_metrics(request: Request):
     if METRICS_SECRET and request.query_params.get("secret") != METRICS_SECRET:
         return JSONResponse({"status": "forbidden"}, status_code=403)
     resp = dict(STATS)
-    resp["users"] = len(STATS_USERS)
+    # Persisted users count (survives restarts)
+    resp["users"] = len(STATS_USERS_INFO)
     resp["uptime_sec"] = int(time.time() - STATS["start_ts"]) if STATS.get("start_ts") else 0
     return resp
 
@@ -2549,7 +2550,10 @@ async def admin_panel(request: Request):
     if ADMIN_PANEL_SECRET and request.query_params.get("secret") != ADMIN_PANEL_SECRET:
         return JSONResponse({"status": "forbidden"}, status_code=403)
     now = time.time()
-    users_total = len(STATS_USERS)
+    # Use persisted user info to avoid reset after restarts
+    users_total = len(STATS_USERS_INFO)
+    users_all_time = users_total
+    users_active_30d = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 30*86400)
     users_active_24h = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 86400)
     users_active_5m = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 300)
     sessions_total = sum(int(u.get("sessions", 0)) for u in STATS_USERS_INFO.values())
@@ -2690,6 +2694,10 @@ async def admin_panel(request: Request):
         <div class="card"><div class="muted">Sessions</div><div class="v">{sessions_total}</div><div class="muted">Avg length: {fmt_sec(avg_session_sec)}</div></div>
         <div class="card"><div class="muted">Processed</div><div class="v ok">{total_processed}</div><div class="muted">OK: {STATS.get('gens_ok',0)} · Copy OK: {STATS.get('gens_copy_ok',0)}</div></div>
         <div class="card"><div class="muted">Blocked</div><div class="v fail">{STATS.get('blocked',0)}</div><div class="muted">Updates: {STATS.get('updates',0)}</div></div>
+      </div>
+      <div class="grid kpi" style="grid-template-columns: repeat(2,1fr); margin-top:14px;">
+        <div class="card"><div class="muted">Users (all time)</div><div class="v">{users_all_time}</div></div>
+        <div class="card"><div class="muted">Active 30d</div><div class="v">{users_active_30d}</div></div>
       </div>
 
       <div class="grid section">
