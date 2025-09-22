@@ -73,6 +73,8 @@ GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
 GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
 # Debug: force fixed interval in minutes and ignore quiet hours if >0
 GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "0"))
+GROUP_POST_LOOP_RUNNING = False
+GROUP_POST_LAST_AT: float = 0.0
 
 # Filter toggles
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
@@ -1256,12 +1258,15 @@ async def group_posts_loop():
                         caption=txt
                     )
                     STATS["published_group"] = int(STATS.get("published_group", 0)) + 1
+                    global GROUP_POST_LAST_AT
+                    GROUP_POST_LAST_AT = time.time()
                 except Exception as e:
                     print("group promo send error:", str(e)[:160])
             else:
                 try:
                     await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=txt)
                     STATS["published_group"] = int(STATS.get("published_group", 0)) + 1
+                    GROUP_POST_LAST_AT = time.time()
                 except Exception as e:
                     print("group promo text error:", str(e)[:160])
             # Sleep
@@ -1944,6 +1949,44 @@ async def cmd_ping(m: Message):
         await safe_answer(m, "pong")
     except Exception:
         pass
+
+@dp.message(Command("diag"))
+async def cmd_diag(m: Message):
+    try:
+        langs = ",".join(_GROUP_LANGS) if ' _GROUP_LANGS' or _GROUP_LANGS else "-"
+    except Exception:
+        langs = "-"
+    last = int(time.time() - GROUP_POST_LAST_AT) if GROUP_POST_LAST_AT else None
+    lines = [
+        f"App: {APP_VERSION}",
+        f"Lang: {USER_LANG.get(m.chat.id, LANG_DEFAULT)}",
+        f"Webhook: {WEBHOOK_URL}",
+        f"Group posts: enabled={GROUP_POSTS_ENABLED} running={GROUP_POST_LOOP_RUNNING}",
+        f"Group id: {PUBLISH_GROUP_ID}",
+        f"Langs rotation: {langs}",
+        f"Every minutes: {GROUP_POST_EVERY_MINUTES}",
+        f"Window: {GROUP_POST_START_HOUR}-{GROUP_POST_END_HOUR}",
+        f"Last post: {last if last is not None else 'never'}s ago",
+    ]
+    await safe_answer(m, "\n".join(lines))
+
+@dp.message(Command("post_now"))
+async def cmd_post_now(m: Message):
+    if not PUBLISH_GROUP_ID:
+        return await safe_answer(m, "Group not configured")
+    lang = _next_group_lang()
+    txt = craft_group_post_text(lang, BOT_USERNAME_GLOBAL)
+    img = generate_group_post_image(lang)
+    try:
+        if img:
+            await bot.send_photo(chat_id=PUBLISH_GROUP_ID, photo=BufferedInputFile(img, filename="promo.jpg"), caption=txt)
+        else:
+            await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=txt)
+        global GROUP_POST_LAST_AT
+        GROUP_POST_LAST_AT = time.time()
+        await safe_answer(m, f"Posted ({lang})")
+    except Exception as e:
+        await safe_answer(m, f"Post error: {str(e)[:160]}")
 
 @dp.message(Command("pricing"))
 async def cmd_pricing(m: Message):
@@ -2806,6 +2849,8 @@ async def on_startup():
             print("Nudge loop started")
         if GROUP_POSTS_ENABLED:
             asyncio.create_task(group_posts_loop())
+            global GROUP_POST_LOOP_RUNNING
+            GROUP_POST_LOOP_RUNNING = True
             print("Group posts loop started")
     except Exception as e:
         print("Nudge loop error on startup:", str(e)[:160])
