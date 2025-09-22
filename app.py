@@ -71,6 +71,8 @@ _GROUP_LANG_IDX = 0
 # Quiet hours: do NOT post between END..START (e.g., 22..8)
 GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
 GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
+# Debug: force fixed interval in minutes and ignore quiet hours if >0
+GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "0"))
 
 # Filter toggles
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
@@ -1222,25 +1224,27 @@ async def group_posts_loop():
                 continue
             # Rotate langs if list provided
             lang = _next_group_lang()
-            # Skip during quiet hours (22:00..08:00) in the language's timezone
-            try:
-                from zoneinfo import ZoneInfo
-                import datetime as _dt
-                tzname = _lang_to_tz(lang)
-                now_loc = _dt.datetime.now(ZoneInfo(tzname))
-                hour = now_loc.hour
-                start_h = min(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
-                end_h = max(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
-                if not (start_h <= hour < end_h):
-                    # sleep until next window start
-                    next_start = now_loc.replace(hour=start_h, minute=0, second=0, microsecond=0)
-                    if hour >= end_h:
-                        next_start = next_start + _dt.timedelta(days=1)
-                    wait_sec = max(60, int((next_start - now_loc).total_seconds()))
-                    await asyncio.sleep(wait_sec)
-                    continue
-            except Exception:
-                pass
+            # If debug interval set, ignore quiet hours
+            if GROUP_POST_EVERY_MINUTES <= 0:
+                # Respect quiet hours (22:00..08:00) in the language's timezone
+                try:
+                    from zoneinfo import ZoneInfo
+                    import datetime as _dt
+                    tzname = _lang_to_tz(lang)
+                    now_loc = _dt.datetime.now(ZoneInfo(tzname))
+                    hour = now_loc.hour
+                    start_h = min(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
+                    end_h = max(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
+                    if not (start_h <= hour < end_h):
+                        # sleep until next window start
+                        next_start = now_loc.replace(hour=start_h, minute=0, second=0, microsecond=0)
+                        if hour >= end_h:
+                            next_start = next_start + _dt.timedelta(days=1)
+                        wait_sec = max(60, int((next_start - now_loc).total_seconds()))
+                        await asyncio.sleep(wait_sec)
+                        continue
+                except Exception:
+                    pass
             # Compose text
             txt = craft_group_post_text(lang, BOT_USERNAME_GLOBAL)
             img = generate_group_post_image(lang)
@@ -1260,9 +1264,12 @@ async def group_posts_loop():
                     STATS["published_group"] = int(STATS.get("published_group", 0)) + 1
                 except Exception as e:
                     print("group promo text error:", str(e)[:160])
-            # Sleep 2-3 hours
-            wait_h = random.uniform(GROUP_POST_MIN_HOURS, GROUP_POST_MAX_HOURS)
-            await asyncio.sleep(max(300, int(wait_h * 3600)))
+            # Sleep
+            if GROUP_POST_EVERY_MINUTES > 0:
+                await asyncio.sleep(max(60, GROUP_POST_EVERY_MINUTES * 60))
+            else:
+                wait_h = random.uniform(GROUP_POST_MIN_HOURS, GROUP_POST_MAX_HOURS)
+                await asyncio.sleep(max(300, int(wait_h * 3600)))
         except Exception as e:
             print("group_posts_loop error:", str(e)[:160])
             await asyncio.sleep(60)
