@@ -5,6 +5,7 @@
 # Безопасные отправки; Видео/анимация отключены. Доставка — байты.
 
 import os
+import json
 import re
 import time
 import uuid
@@ -222,6 +223,40 @@ USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
 USER_ONBOARDED: Set[int]           = set()
 
+# Persistent storage for credits
+DATA_DIR = os.getenv("DATA_DIR", "data")
+CREDITS_FILE = os.getenv("CREDITS_FILE", os.path.join(DATA_DIR, "credits.json"))
+
+def _credits_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = CREDITS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({str(k): int(v) for k, v in USER_CREDITS.items()}, f, ensure_ascii=False)
+        os.replace(tmp, CREDITS_FILE)
+    except Exception as e:
+        print("[credits] save error:", str(e)[:160])
+
+def _credits_load():
+    try:
+        if os.path.exists(CREDITS_FILE):
+            with open(CREDITS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for k, v in (data or {}).items():
+                try:
+                    USER_CREDITS[int(k)] = int(v)
+                except Exception:
+                    continue
+    except Exception as e:
+        print("[credits] load error:", str(e)[:160])
+
+def ensure_user_credit(uid: int):
+    if uid not in USER_CREDITS:
+        USER_CREDITS[uid] = FREE_QUOTA
+        _credits_save()
+
+_credits_load()
+
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
 LAST_PHOTO: Dict[int, bytes] = {}
@@ -255,13 +290,80 @@ REF_STATS: Dict[int, Dict[str, int]] = {}
 
 BOT_USERNAME_GLOBAL = None
 
+# ===================== PRESETS =======================
+# 24 styled presets: short labels and hidden prompts
+from dataclasses import dataclass
+
+@dataclass
+class Preset:
+    key: str
+    label_ru: str
+    label_en: str
+    label_ro: str
+    label_de: str
+    prompt: str
+
+PRESETS: List[Preset] = [
+    Preset("studio_soft", "📸 Студия", "📸 Studio", "📸 Studiou", "📸 Studio", "studio portrait photo of a person, soft beauty light, dark seamless backdrop, 85mm lens, f/1.8, crisp details, natural skin, editorial look, award‑winning photograph"),
+    Preset("cinematic", "🎬 Кинематик", "🎬 Cinematic", "🎬 Cinematic", "🎬 Cinematisch", "cinematic portrait, teal & orange color grade, rim light, shallow depth, dramatic mood, 50mm anamorphic look, high dynamic range"),
+    Preset("golden_hour", "🌅 Голден-ауэр", "🌅 Golden Hour", "🌅 Ora de aur", "🌅 Goldene Stunde", "outdoor portrait at golden hour, warm backlight, sun flare, soft haze, dreamy bokeh, natural colors, filmic rendering"),
+    Preset("editorial_highkey", "🧴 Эдиториал", "🧴 Editorial", "🧴 Editorial", "🧴 Editorial High‑Key", "high‑key studio fashion portrait, clean white backdrop, softboxes, glossy highlights, magazine editorial style, minimal shadows"),
+    Preset("bw_film", "⚫️ Ч/Б Плёнка", "⚫️ B/W Film", "⚫️ Film B/N", "⚫️ S/W Film", "black and white portrait, rich contrast, soft film grain, timeless classic look, ilford hp5 vibe, elegant"),
+    Preset("kodak_portra", "🎞 Portra", "🎞 Portra", "🎞 Portra", "🎞 Portra", "portrait in kodak portra 400 film style, warm skin tones, gentle contrast, natural colors, subtle grain"),
+    Preset("beauty_dish", "💄 Бьюти", "💄 Beauty", "💄 Beauty", "💄 Beauty", "beauty portrait, beauty dish, soft ring catchlights, flawless yet natural skin, glossy lips, editorial makeup, close‑up"),
+    Preset("headshot", "👔 Хэдшот", "👔 Headshot", "👔 Portret CV", "👔 Headshot", "corporate headshot, neutral gray background, flattering key light, 85mm, professional linkedin style, crisp focus"),
+    Preset("neon_night", "🌃 Неон", "🌃 Neon Night", "🌃 Noapte Neon", "🌃 Neon Nacht", "city night portrait, neon lights, cyberpunk colors, wet streets reflections, cinematic bokeh, moody atmosphere"),
+    Preset("cafe", "☕️ Кафе", "☕️ Cafe", "☕️ Cafenea", "☕️ Café", "cozy cafe portrait, warm tungsten lights, string lights bokeh, candid mood, shallow depth, lifestyle"),
+    Preset("forest", "🌲 Лес", "🌲 Forest", "🌲 Pădure", "🌲 Wald", "forest portrait, diffused light under trees, green tones, soft atmosphere, misty background"),
+    Preset("beach", "🏖 Пляж", "🏖 Beach", "🏖 Plajă", "🏖 Strand", "sunrise beach portrait, pastel colors, gentle breeze, fresh tones, soft backlight, cinematic"),
+    Preset("architecture", "🏛 Архитектура", "🏛 Architecture", "🏛 Arhitectură", "🏛 Architektur", "minimalist architecture backdrop, concrete and glass, symmetry, modern editorial street portrait"),
+    Preset("luxury_interior", "🏨 Интерьер", "🏨 Interior", "🏨 Interior", "🏨 Interieur", "luxury hotel lobby portrait, marble, warm ambient lights, elegant depth, upscale vibe"),
+    Preset("rain_window", "🌧 Дождь", "🌧 Rain", "🌧 Ploaie", "🌧 Regen", "portrait through rainy window, droplets bokeh, moody reflections, intimate cinematic feel"),
+    Preset("snow", "❄️ Снег", "❄️ Snow", "❄️ Zăpadă", "❄️ Schnee", "snow portrait, soft falling snowflakes, cool tones, cozy winter look, scarf, gentle light"),
+    Preset("rembrandt", "🕯 Рембрандт", "🕯 Rembrandt", "🕯 Rembrandt", "🕯 Rembrandt", "classic Rembrandt lighting portrait, chiaroscuro, painterly, timeless, museum quality"),
+    Preset("soft_glam", "✨ Глам", "✨ Soft Glam", "✨ Soft Glam", "✨ Soft Glam", "soft glam portrait, delicate highlights, pearly skin, subtle retouch, editorial beauty, cinematic glow"),
+    Preset("vintage70", "📼 70‑е", "📼 70s", "📼 Ani 70", "📼 70er", "vintage 1970s film look, muted colors, halation glow, analog feel, flare"),
+    Preset("mono_hicon", "⬛️ Моно Контраст", "⬛️ Mono High‑Contrast", "⬛️ Mono Contrast", "⬛️ Mono Kontrast", "high‑contrast monochrome portrait, deep blacks, punchy highlights, gallery style"),
+    Preset("park", "🌿 Парк", "🌿 Park", "🌿 Parc", "🌿 Park", "outdoor park portrait, gentle green bokeh, 85mm, soft light, lifestyle"),
+    Preset("fitness", "💪 Фитнес", "💪 Fitness", "💪 Fitness", "💪 Fitness", "dramatic gym portrait, hard light, textured muscles, moody shadows, grit"),
+    Preset("garage", "🚗 Гараж", "🚗 Garage", "🚗 Garaj", "🚗 Garage", "portrait in garage, glossy reflections, metallic textures, cinematic teal accents"),
+    Preset("bookstore", "📚 Книги", "📚 Bookstore", "📚 Librărie", "📚 Buchladen", "bookstore portrait, warm ambient tungsten, shelves bokeh, intellectual cozy vibe"),
+]
+
+USER_PRESET_PENDING: Dict[int, int] = {}
+
+def kb_presets_grid(chat_id: int) -> InlineKeyboardMarkup:
+    lang = USER_LANG.get(chat_id, LANG_DEFAULT)
+    def label(p: Preset) -> str:
+        if lang.startswith("ru"):
+            return p.label_ru
+        if lang.startswith("ro"):
+            return p.label_ro
+        if lang.startswith("de"):
+            return p.label_de
+        return p.label_en
+    rows: List[List[InlineKeyboardButton]] = []
+    for i, p in enumerate(PRESETS):
+        if i % 4 == 0:
+            rows.append([])
+        rows[-1].append(InlineKeyboardButton(text=label(p), callback_data=f"preset_{i}"))
+    # Back button
+    back_txt = {
+        "ru": "⬅️ Назад",
+        "en": "⬅️ Back",
+        "ro": "⬅️ Înapoi",
+        "de": "⬅️ Zurück",
+    }.get(lang, "⬅️ Back")
+    rows.append([InlineKeyboardButton(text=back_txt, callback_data="back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 # ===================== I18N =========================
 T = {
     "ru": {
         "menu_lang": "🌐 Язык",
         "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
         "onboard_btn": "🚀 Старт",
-        "start": "👋 Добро пожаловать в iModel — профессиональный фотогенератор.\n\nКак это работает:\n1) Пришлите 1–4 селфи (хороший свет помогает)\n2) Опишите сцену или включите «Скопировать» (/copy)\n3) Получите готовый результат.\n\nБыстрые команды: /help · /presets · /buy · /pricing · /promo · /balance · /gallery · /refer · /lang · /copy",
+        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1–4 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n💎 Тарифы — оптимальные пакеты для любых задач.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
         "help": "📘 Советы:\n• 1–4 селфи без сильных фильтров\n• Опишите место, свет, стиль, кадрирование\n• Для точной копии сцены — /copy (сначала образец, затем селфи)",
         "need_photo": "Сначала пришли фото лица.",
         "photo_ok": "Фото получено ✅ Теперь опишите сцену или используйте /presets.",
@@ -281,7 +383,7 @@ T = {
         "btn_more": "Ещё вариант",
         "btn_publish": "Опубликовать",
         "btn_publish_group": "В группу",
-        "menu_presets": "🎛 Пресеты",
+        "menu_presets": "📸 Пресеты",
         "menu_help": "🆘 Помощь",
         "menu_pricing": "💎 Тарифы",
         "buy_title": "💳 Покупка генераций (Telegram Stars)\nВыберите удобный пакет:",
@@ -991,6 +1093,7 @@ async def _send_nudge(uid: int, lang: str):
     granted = 0
     if offer["kind"] == "FREE1":
         USER_CREDITS[uid] = USER_CREDITS.get(uid, FREE_QUOTA) + 1
+        _credits_save()
         granted = 1
     elif offer["kind"] == "PROMO3":
         promo_code = _create_user_promo(uid, add=3, ttl_uses=1)
@@ -1249,7 +1352,6 @@ def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
             InlineKeyboardButton(text="💰 " + lang["btn_balance"],  callback_data="balance"),
-            InlineKeyboardButton(text=lang.get("menu_pricing", "💎 /pricing"), callback_data="pricing_open"),
         ],
         [
             InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
@@ -1334,6 +1436,7 @@ async def got_payment(m: Message):
     elif payload == "pack_30": add = 30
     elif payload == "pack_100": add = 100
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
+    _credits_save()
     await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
     STATS["payments"] += 1
     _uadd(m.chat.id, "payments", 1)
@@ -1387,17 +1490,19 @@ async def cmd_start(m: Message):
             invited_id = m.chat.id
             if ref_id != invited_id and invited_id not in REF_MAP:
                 REF_MAP[invited_id] = ref_id
-                USER_CREDITS.setdefault(invited_id, FREE_QUOTA)
+                ensure_user_credit(invited_id)
                 USER_CREDITS[invited_id] += REF_BONUS_NEW
+                _credits_save()
                 REF_STATS.setdefault(ref_id, {"count": 0, "earned": 0})
                 REF_STATS[ref_id]["count"] += 1
                 REF_STATS[ref_id]["earned"] += REF_BONUS_REF
                 USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
+                _credits_save()
                 STATS["referrals"] += 1
         except Exception:
             pass
 
-    USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
+    ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
     if m.chat.id not in USER_ONBOARDED:
         # Show minimal welcome with a single Start button
@@ -1455,7 +1560,14 @@ async def cb_set_lang(c: CallbackQuery):
 
 @dp.message(Command("presets"))
 async def cmd_presets(m: Message):
-    await safe_answer(m, L(m.chat.id)["presets"])
+    lang = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+    txt = {
+        "ru": "🎛 Пресеты — выберите стиль",
+        "en": "🎛 Presets — choose a style",
+        "ro": "🎛 Preseturi — alege stilul",
+        "de": "🎛 Presets — Stil wählen",
+    }.get(lang, "🎛 Presets — choose a style")
+    await safe_answer(m, txt, reply_markup=kb_presets_grid(m.chat.id))
 
 @dp.message(Command("promo"))
 async def cmd_promo(m: Message):
@@ -1470,6 +1582,7 @@ async def cmd_promo(m: Message):
     add = int(promo.get("add", 0))
     promo["uses"] = max(0, promo["uses"] - 1)
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
+    _credits_save()
     await safe_answer(m, lang["promo_ok"].format(add=add, all=USER_CREDITS[m.chat.id]))
     STATS["promo_used"] += 1
 
@@ -1545,7 +1658,84 @@ async def cb_help(c: CallbackQuery):
 @dp.callback_query(F.data == "presets_open")
 async def cb_presets(c: CallbackQuery):
     await safe_cb_answer(c)
-    await c.message.answer(L(c.message.chat.id)["presets"])
+    chat_id = c.message.chat.id
+    lang = USER_LANG.get(chat_id, LANG_DEFAULT)
+    txt = {
+        "ru": "🎛 Пресеты — выберите стиль",
+        "en": "🎛 Presets — choose a style",
+        "ro": "🎛 Preseturi — alege stilul",
+        "de": "🎛 Presets — Stil wählen",
+    }.get(lang, "🎛 Presets — choose a style")
+    await c.message.answer(txt, reply_markup=kb_presets_grid(chat_id))
+
+@dp.callback_query(F.data == "back_main")
+async def cb_back_main(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    await c.message.answer(L(chat_id)["start"], reply_markup=main_menu_inline(chat_id))
+
+@dp.callback_query(F.data.startswith("preset_"))
+async def cb_preset_pick(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    try:
+        idx = int(c.data.split("preset_")[-1])
+    except Exception:
+        return
+    if idx < 0 or idx >= len(PRESETS):
+        return
+    preset = PRESETS[idx]
+    refs = USER_REFS.get(chat_id, [])
+    # If no selfie yet — remember preset and prompt for a selfie
+    if not refs:
+        USER_PRESET_PENDING[chat_id] = idx
+        lang = USER_LANG.get(chat_id, LANG_DEFAULT)
+        txt = {
+            "ru": f"✅ Выбрано: {preset.label_ru}\nПришлите селфи — сразу сгенерирую.",
+            "en": f"✅ Selected: {preset.label_en}\nSend a selfie — I will generate immediately.",
+            "ro": f"✅ Selectat: {preset.label_en}\nTrimite un selfie — generez imediat.",
+            "de": f"✅ Ausgewählt: {preset.label_en}\nSende ein Selfie — ich generiere sofort.",
+        }.get(lang, f"Selected: {preset.label_en}. Send a selfie.")
+        await c.message.answer(txt)
+        return
+    # Have a reference → generate now
+    if not has_credit(chat_id, getattr(c.from_user, "username", None)):
+        return await c.message.answer(L(chat_id)["credits_none"])
+    msg = await c.message.answer(L(chat_id)["gen"])
+    ref = refs[-1]
+    seed_int = ((hash(chat_id) % 10_000_000) + idx)
+    result = generate_image_from_bytes(
+        ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
+        seed=seed_int
+    )
+    if not result:
+        STATS["gens_fail"] += 1
+        _uadd(chat_id, "gens_fail", 1)
+        return await safe_edit_text(msg, L(chat_id)["fail"])
+    if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
+        USER_CREDITS[chat_id] -= 1
+        _credits_save()
+    USER_LAST_OUTPUT[chat_id] = result
+    USER_LAST_PROMPT[chat_id] = preset.prompt
+    LAST_PHOTO[chat_id] = result
+    STATS["gens_ok"] += 1
+    _uadd(chat_id, "gens_ok", 1)
+    hist = USER_HISTORY.setdefault(chat_id, [])
+    hist.append(result)
+    if len(hist) > GALLERY_LIMIT:
+        del hist[:-GALLERY_LIMIT]
+    await msg.delete()
+    cap = {
+        "ru": f"✅ {preset.label_ru}",
+        "en": f"✅ {preset.label_en}",
+        "ro": "✅ Preset",
+        "de": "✅ Preset",
+    }.get(USER_LANG.get(chat_id, LANG_DEFAULT), "✅ Preset")
+    await c.message.answer_photo(
+        photo=BufferedInputFile(result, filename="imodel_result.jpg"),
+        caption=cap,
+        reply_markup=kb_actions(chat_id),
+    )
 
 @dp.callback_query(F.data == "promo_open")
 async def cb_promo(c: CallbackQuery):
@@ -1707,7 +1897,7 @@ async def on_photo(m: Message):
             USER_REFS[m.chat.id] = (USER_REFS[m.chat.id] + [img_bytes])[-4:]
             LAST_REF[m.chat.id] = img_bytes  # «до»
 
-            USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
+            ensure_user_credit(m.chat.id)
             if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
                 return await safe_answer(m, L(m.chat.id)["credits_none"])
 
@@ -1745,6 +1935,7 @@ async def on_photo(m: Message):
 
             if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
                 USER_CREDITS[m.chat.id] -= 1
+                _credits_save()
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
             LAST_PHOTO[m.chat.id] = final_bytes
@@ -1784,12 +1975,59 @@ async def on_photo(m: Message):
 
     caption = (m.caption or "").strip()
     if not caption:
+        # If a preset was chosen earlier, auto-generate using it
+        if m.chat.id in USER_PRESET_PENDING:
+            idx = USER_PRESET_PENDING.pop(m.chat.id)
+            if 0 <= idx < len(PRESETS):
+                preset = PRESETS[idx]
+                if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+                    return await safe_answer(m, L(m.chat.id)["credits_none"])
+                wait = await safe_answer(m, L(m.chat.id)["gen"])
+                seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
+                final_bytes = generate_image_from_bytes(
+                    img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+                    seed=seed_int
+                )
+                if not final_bytes:
+                    if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    STATS["gens_fail"] += 1
+                    _uadd(m.chat.id, "gens_fail", 1)
+                    return
+                if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+                    USER_CREDITS[m.chat.id] -= 1
+                    _credits_save()
+                USER_LAST_OUTPUT[m.chat.id] = final_bytes
+                USER_LAST_PROMPT[m.chat.id] = preset.prompt
+                LAST_PHOTO[m.chat.id] = final_bytes
+                STATS["gens_ok"] += 1
+                _uadd(m.chat.id, "gens_ok", 1)
+                hist = USER_HISTORY.setdefault(m.chat.id, [])
+                hist.append(final_bytes)
+                if len(hist) > GALLERY_LIMIT:
+                    del hist[:-GALLERY_LIMIT]
+                if wait: await wait.delete()
+                cap = {
+                    "ru": f"✅ {preset.label_ru}",
+                    "en": f"✅ {preset.label_en}",
+                }.get(USER_LANG.get(m.chat.id, LANG_DEFAULT), "✅ Preset")
+                await safe_answer_photo(
+                    m,
+                    BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
+                    caption=cap,
+                    reply_markup=kb_actions(m.chat.id),
+                )
+                if AUTO_POST and GALLERY_CHANNEL_ID:
+                    try:
+                        await post_before_after_to_channel(m.chat.id)
+                    except Exception as e:
+                        print("AUTO_POST error:", str(e)[:160])
+                return
         return await safe_answer(m, L(m.chat.id)["photo_ok"])
     if blocked(caption):
         STATS["blocked"] += 1
         return await safe_answer(m, L(m.chat.id)["blocked"])
 
-    USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
+    ensure_user_credit(m.chat.id)
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
         return await safe_answer(m, L(m.chat.id)["credits_none"])
 
@@ -1807,6 +2045,7 @@ async def on_photo(m: Message):
 
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
         USER_CREDITS[m.chat.id] -= 1
+        _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
     LAST_PHOTO[m.chat.id] = final_bytes
@@ -1860,7 +2099,7 @@ async def on_prompt(m: Message):
     if not refs:
         return await safe_answer(m, L(m.chat.id)["need_photo"])
 
-    USER_CREDITS.setdefault(m.chat.id, FREE_QUOTA)
+    ensure_user_credit(m.chat.id)
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
         return await safe_answer(m, L(m.chat.id)["credits_none"])
 
@@ -1879,6 +2118,7 @@ async def on_prompt(m: Message):
 
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
         USER_CREDITS[m.chat.id] -= 1
+        _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = text
     LAST_PHOTO[m.chat.id] = final_bytes
@@ -1914,7 +2154,7 @@ async def cb_more(c: CallbackQuery):
         await safe_cb_answer(c)
         return await c.message.answer(L(chat_id)["need_photo"])
 
-    USER_CREDITS.setdefault(chat_id, FREE_QUOTA)
+    ensure_user_credit(chat_id)
     if not has_credit(chat_id, getattr(c.from_user, "username", None)):
         await safe_cb_answer(c)
         return await c.message.answer(L(chat_id)["credits_none"])
@@ -1935,6 +2175,7 @@ async def cb_more(c: CallbackQuery):
 
     if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
         USER_CREDITS[chat_id] -= 1
+        _credits_save()
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = base_prompt
     LAST_PHOTO[chat_id] = result
@@ -2099,6 +2340,30 @@ async def admin_panel(request: Request):
     avg_session_sec = int(active_seconds_total / sessions_total) if sessions_total else 0
     total_processed = STATS.get("gens_ok", 0) + STATS.get("gens_copy_ok", 0)
 
+    # Helpers
+    def fmt_sec(s):
+        h = s // 3600; m = (s % 3600) // 60; sc = s % 60
+        return f"{h:02d}:{m:02d}:{sc:02d}"
+    def time_ago(ts: float) -> str:
+        if not ts:
+            return "—"
+        d = max(0, int(now - ts))
+        if d < 60:
+            return f"{d}s ago"
+        if d < 3600:
+            return f"{d//60}m ago"
+        if d < 86400:
+            return f"{d//3600}h ago"
+        return f"{d//86400}d ago"
+    def uname_or_id(uid: int, username: Optional[str]) -> str:
+        if username:
+            return f"@{username}"
+        return str(uid)
+    def balance_str(uid: int, username: Optional[str]) -> str:
+        if is_free_user(uid, username):
+            return "∞"
+        return str(USER_CREDITS.get(uid, FREE_QUOTA))
+
     # Top users by generations and time
     items = []
     for uid, u in STATS_USERS_INFO.items():
@@ -2108,19 +2373,25 @@ async def admin_panel(request: Request):
             "gens": int(u.get("gens_ok", 0)) + int(u.get("gens_copy_ok", 0)),
             "time": int(float(u.get("active_seconds", 0.0))),
             "sessions": int(u.get("sessions", 0)),
+            "last_seen": float(u.get("last_seen", 0.0)),
+            "payments": int(u.get("payments", 0)),
+            "balance": USER_CREDITS.get(uid, FREE_QUOTA),
+            "lang": USER_LANG.get(uid, LANG_DEFAULT),
         })
     top_gens = sorted(items, key=lambda x: x["gens"], reverse=True)[:10]
     top_time = sorted(items, key=lambda x: x["time"], reverse=True)[:10]
+
+    # Buyers and Online lists
+    buyers = [i for i in items if i.get("payments", 0) > 0]
+    buyers_sorted = sorted(buyers, key=lambda x: (x["payments"], x["gens"]), reverse=True)[:50]
+    online_now = [i for i in items if now - float(i.get("last_seen", 0)) <= 300]
+    online_sorted = sorted(online_now, key=lambda x: x.get("last_seen", 0), reverse=True)
 
     # Referrals
     ref_items = []
     for rid, st in REF_STATS.items():
         ref_items.append({"uid": rid, "count": st.get("count", 0), "earned": st.get("earned", 0)})
     top_ref = sorted(ref_items, key=lambda x: x["count"], reverse=True)[:10]
-
-    def fmt_sec(s):
-        h = s // 3600; m = (s % 3600) // 60; sc = s % 60
-        return f"{h:02d}:{m:02d}:{sc:02d}"
 
     html = f"""
 <!doctype html>
@@ -2146,6 +2417,7 @@ async def admin_panel(request: Request):
     th,td {{ padding:8px 10px; border-bottom:1px solid #242a3a; text-align:left; }}
     th {{ color:#aab4c2; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }}
     .section {{ margin-top:18px; }}
+    .pill {{ display:inline-block; padding:2px 6px; border-radius:6px; background:#202636; color:#b8c2d1; font-size:12px; }}
   </style>
   </head>
   <body>
@@ -2184,6 +2456,45 @@ async def admin_panel(request: Request):
           <div class="muted">Financial</div>
           <div>Payments: <b>{STATS.get('payments',0)}</b> · Promo used: <b>{STATS.get('promo_used',0)}</b></div>
           <div class="muted" style="margin-top:8px;">Published → channel: {STATS.get('published_channel',0)} · group: {STATS.get('published_group',0)} · auto: {STATS.get('auto_post',0)}</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="card">
+          <div class="muted">Online now ({len(online_sorted)})</div>
+          <table>
+            <tr><th>User</th><th>Lang</th><th>Gens</th><th>Balance</th><th>Sessions</th><th>Last seen</th></tr>
+            {''.join(
+              f'<tr>'
+              f'<td>{uname_or_id(i["uid"], i["username"])}</td>'
+              f'<td>{i.get("lang","-")}</td>'
+              f'<td>{i["gens"]}</td>'
+              f'<td>{("∞" if is_free_user(i["uid"], i["username"]) else USER_CREDITS.get(i["uid"], FREE_QUOTA))}</td>'
+              f'<td>{i["sessions"]}</td>'
+              f'<td>{time_ago(i.get("last_seen",0))}</td>'
+              f'</tr>' for i in online_sorted)
+            }
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="card">
+          <div class="muted">Buyers (payments > 0)</div>
+          <table>
+            <tr><th>User</th><th>Lang</th><th>Payments</th><th>Gens</th><th>Balance</th><th>Sessions</th><th>Last seen</th></tr>
+            {''.join(
+              f'<tr>'
+              f'<td>{uname_or_id(i["uid"], i["username"])}</td>'
+              f'<td>{i.get("lang","-")}</td>'
+              f'<td>{i.get("payments",0)}</td>'
+              f'<td>{i["gens"]}</td>'
+              f'<td>{("∞" if is_free_user(i["uid"], i["username"]) else USER_CREDITS.get(i["uid"], FREE_QUOTA))}</td>'
+              f'<td>{i["sessions"]}</td>'
+              f'<td>{time_ago(i.get("last_seen",0))}</td>'
+              f'</tr>' for i in buyers_sorted)
+            }
+          </table>
         </div>
       </div>
     </div>
