@@ -73,7 +73,7 @@ GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
 GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
 # Debug: force fixed interval in minutes and ignore quiet hours if >0
 GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "5"))
-GROUP_POST_TEXT_ONLY = os.getenv("GROUP_POST_TEXT_ONLY", "1") == "1"
+GROUP_POST_TEXT_ONLY = os.getenv("GROUP_POST_TEXT_ONLY", "0") == "1"
 GROUP_POST_LOOP_RUNNING = False
 GROUP_POST_LAST_AT: float = 0.0
 
@@ -446,8 +446,7 @@ RECENT_PUB_TTL = 600.0  # 10 minutes
 
 # Style share tokens (deep-links)
 STYLE_SHARES: Dict[str, Dict[str, object]] = {}
-PROMPT_SHARES: Dict[str, str] = {}
-USER_PROMPT_PENDING: Dict[int, str] = {}
+# prompt-share removed
 
 # Copy Mode
 USER_COPY_MODE: Set[int]         = set()
@@ -574,7 +573,6 @@ T = {
         "btn_publish": "Опубликовать",
         "btn_publish_group": "В группу",
         "published_recent": "Уже опубликовано недавно.",
-        "prompt_share_btn": "✨ По этому промпту",
         "menu_presets": "📸 Пресеты",
         "menu_help": "🆘 Помощь",
         "menu_refer": "🎁 Бесплатные генерации",
@@ -649,7 +647,6 @@ T = {
         "btn_publish": "Publish",
         "btn_publish_group": "To group",
         "published_recent": "Already published recently.",
-        "prompt_share_btn": "✨ From this prompt",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Help",
         "menu_refer": "🎁 Free credits",
@@ -724,7 +721,6 @@ T = {
         "btn_publish": "Publică",
         "btn_publish_group": "În grup",
         "published_recent": "Deja publicat recent.",
-        "prompt_share_btn": "✨ Din acest prompt",
         "menu_presets": "🎛 Preseturi",
         "menu_help": "🆘 Ajutor",
         "menu_refer": "🎁 Generații gratuite",
@@ -801,7 +797,6 @@ T = {
         "btn_publish": "Veröffentlichen",
         "btn_publish_group": "In Gruppe",
         "published_recent": "Kürzlich bereits veröffentlicht.",
-        "prompt_share_btn": "✨ Aus diesem Prompt",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Hilfe",
         "menu_refer": "🎁 Kostenlose Credits",
@@ -1878,23 +1873,7 @@ async def post_before_after_to_channel(user_id: int):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("auto-post (album) error:", str(e)[:160])
-        # Add share buttons (style + prompt) under album
-        if BOT_USERNAME_GLOBAL:
-            s_token = create_style_share(before)
-            ptext = USER_LAST_REFINED_PROMPT.get(user_id)
-            p_token = create_prompt_share(ptext) if ptext else None
-            btns = []
-            if s_token:
-                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
-                btns.append(InlineKeyboardButton(text=L(user_id)["style_share_btn"], url=link))
-            if p_token:
-                link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
-                btns.append(InlineKeyboardButton(text=L(user_id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
-            if btns:
-                try:
-                    await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
-                except Exception as e:
-                    print("channel share button error:", str(e)[:160])
+        # prompt-share removed
     else:
         try:
             await bot.send_photo(
@@ -1904,23 +1883,7 @@ async def post_before_after_to_channel(user_id: int):
             )
         except Exception as e:
             print("auto-post (single) error:", str(e)[:160])
-        # Share buttons (style + prompt) under single as well
-        if BOT_USERNAME_GLOBAL:
-            s_token = create_style_share(before) if before else None
-            ptext = USER_LAST_REFINED_PROMPT.get(user_id)
-            p_token = create_prompt_share(ptext) if ptext else None
-            btns = []
-            if s_token:
-                link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
-                btns.append(InlineKeyboardButton(text=L(user_id)["style_share_btn"], url=link))
-            if p_token:
-                link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
-                btns.append(InlineKeyboardButton(text=L(user_id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
-            if btns:
-                try:
-                    await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
-                except Exception as e:
-                    print("channel share button error (single):", str(e)[:160])
+        # prompt-share removed
     stats_incr("auto_post", 1)
 
 # ===================== UI ============================
@@ -2010,17 +1973,7 @@ def resolve_style_share(token: str) -> Optional[bytes]:
         print("resolve share s3 error:", str(e)[:120])
     return None
 
-def create_prompt_share(prompt_text: str) -> Optional[str]:
-    try:
-        token = hashlib.md5((prompt_text + str(time.time())).encode("utf-8")).hexdigest()[:12]
-        PROMPT_SHARES[token] = prompt_text
-        return token
-    except Exception as e:
-        print("create_prompt_share error:", str(e)[:120])
-    return None
-
-def resolve_prompt_share(token: str) -> Optional[str]:
-    return PROMPT_SHARES.get(token)
+# prompt-share removed
 
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
@@ -2265,15 +2218,7 @@ async def cmd_start(m: Message):
             USER_ONBOARDED.add(m.chat.id)
             return
 
-    # Deep-link: start=prompt_<token> → preload prompt and ask for selfie
-    if len(parts) > 1 and parts[1].startswith("prompt_"):
-        token = parts[1][7:]
-        ptxt = resolve_prompt_share(token)
-        if ptxt:
-            USER_PROMPT_PENDING[m.chat.id] = ptxt
-            await safe_answer(m, L(m.chat.id)["style_share_intro"])  # reuse intro text
-            USER_ONBOARDED.add(m.chat.id)
-            return
+    # prompt-share deep-link removed
 
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
@@ -2618,23 +2563,7 @@ async def cb_pub_yes(c: CallbackQuery):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("channel media group error:", str(e)[:160])
-    # Add deep‑links (style + prompt) after posting (single or album)
-    if BOT_USERNAME_GLOBAL:
-        s_token = create_style_share(before) if before else None
-        ptext = USER_LAST_REFINED_PROMPT.get(c.message.chat.id)
-        p_token = create_prompt_share(ptext) if ptext else None
-        btns = []
-        if s_token:
-            link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
-            btns.append(InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link))
-        if p_token:
-            link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
-            btns.append(InlineKeyboardButton(text=L(c.message.chat.id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
-        if btns:
-            try:
-                await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
-            except Exception as e:
-                print("channel share button error:", str(e)[:160])
+    # prompt-share removed
     stats_incr("published_channel", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, L(c.message.chat.id)["published_ok"])
@@ -2688,23 +2617,7 @@ async def cb_pub_group(c: CallbackQuery):
             await bot.send_media_group(chat_id=PUBLISH_GROUP_ID, media=media)
         except Exception as e:
             print("group media group error:", str(e)[:160])
-    # Add deep‑link buttons after posting (single or album)
-    if BOT_USERNAME_GLOBAL:
-        s_token = create_style_share(before) if before else None
-        ptext = USER_LAST_REFINED_PROMPT.get(c.message.chat.id)
-        p_token = create_prompt_share(ptext) if ptext else None
-        btns = []
-        if s_token:
-            link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{s_token}"
-            btns.append(InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link))
-        if p_token:
-            link2 = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=prompt_{p_token}"
-            btns.append(InlineKeyboardButton(text=L(c.message.chat.id).get("prompt_share_btn", "✨ По этому промпту"), url=link2))
-        if btns:
-            try:
-                await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[btns]))
-            except Exception as e:
-                print("group share button error:", str(e)[:160])
+    # prompt-share removed
     stats_incr("published_group", 1)
     _uadd(c.message.chat.id, "published", 1)
     await safe_cb_answer(c, L(c.message.chat.id)["published_group_ok"])
@@ -2828,47 +2741,6 @@ async def on_photo(m: Message):
 
     caption = (m.caption or "").strip()
     if not caption:
-        # If a prompt-share was chosen earlier, auto-generate using it
-        if m.chat.id in USER_PROMPT_PENDING:
-            ptxt = USER_PROMPT_PENDING.pop(m.chat.id)
-            if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-                return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
-            wait = await safe_answer(m, L(m.chat.id)["gen"])
-            seed_int = (hash(m.chat.id) % 10_000_000)
-            final_bytes = generate_image_from_bytes(
-                img_bytes, ptxt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT), seed=seed_int, user_id=m.chat.id
-            )
-            if not final_bytes:
-                if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
-                stats_incr("gens_fail", 1)
-                _uadd(m.chat.id, "gens_fail", 1)
-                return
-            if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
-                USER_CREDITS[m.chat.id] -= 1
-                _credits_save()
-            USER_LAST_OUTPUT[m.chat.id] = final_bytes
-            USER_LAST_PROMPT[m.chat.id] = ptxt
-            LAST_PHOTO[m.chat.id] = final_bytes
-            stats_incr("gens_ok", 1)
-            _uadd(m.chat.id, "gens_ok", 1)
-            hist = USER_HISTORY.setdefault(m.chat.id, [])
-            hist.append(final_bytes)
-            if len(hist) > GALLERY_LIMIT:
-                del hist[:-GALLERY_LIMIT]
-            if wait: await wait.delete()
-            await safe_answer_photo(
-                m,
-                BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
-                caption="✅",
-                reply_markup=kb_actions(m.chat.id),
-            )
-            await maybe_send_referral_hint(m.chat.id)
-            if AUTO_POST and GALLERY_CHANNEL_ID:
-                try:
-                    await post_before_after_to_channel(m.chat.id)
-                except Exception as e:
-                    print("AUTO_POST error:", str(e)[:160])
-            return
         # If a preset was chosen earlier, auto-generate using it
         if m.chat.id in USER_PRESET_PENDING:
             idx = USER_PRESET_PENDING.pop(m.chat.id)
