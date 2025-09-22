@@ -5,3 +5,9 @@ requests
 replicate
 boto3
 openai
+pillow
+opencv-python
+python-dotenv
+pydantic
+pip install pre-commit
+pre-commit install
