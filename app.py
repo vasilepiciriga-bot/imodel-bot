@@ -73,6 +73,7 @@ GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
 GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
 # Debug: force fixed interval in minutes and ignore quiet hours if >0
 GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "5"))
+GROUP_POST_TEXT_ONLY = os.getenv("GROUP_POST_TEXT_ONLY", "1") == "1"
 GROUP_POST_LOOP_RUNNING = False
 GROUP_POST_LAST_AT: float = 0.0
 
@@ -572,6 +573,7 @@ T = {
         "btn_more": "Ещё вариант",
         "btn_publish": "Опубликовать",
         "btn_publish_group": "В группу",
+        "published_recent": "Уже опубликовано недавно.",
         "menu_presets": "📸 Пресеты",
         "menu_help": "🆘 Помощь",
         "menu_refer": "🎁 Бесплатные генерации",
@@ -645,6 +647,7 @@ T = {
         "btn_more": "More",
         "btn_publish": "Publish",
         "btn_publish_group": "To group",
+        "published_recent": "Already published recently.",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Help",
         "menu_refer": "🎁 Free credits",
@@ -718,6 +721,7 @@ T = {
         "btn_more": "Încă una",
         "btn_publish": "Publică",
         "btn_publish_group": "În grup",
+        "published_recent": "Deja publicat recent.",
         "menu_presets": "🎛 Preseturi",
         "menu_help": "🆘 Ajutor",
         "menu_refer": "🎁 Generații gratuite",
@@ -793,6 +797,7 @@ T = {
         "btn_more": "Mehr",
         "btn_publish": "Veröffentlichen",
         "btn_publish_group": "In Gruppe",
+        "published_recent": "Kürzlich bereits veröffentlicht.",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Hilfe",
         "menu_refer": "🎁 Kostenlose Credits",
@@ -1111,19 +1116,19 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
 
 # ===================== GROUP POSTS =====================
 PROMO_TOPICS_RU = [
-    "портрет у окна, утренний мягкий свет, тёплый WB, естественные тона",
-    "портрет на закате, золотой час, контровой свет, мягкая линза",
-    "портрет при лампах, теплый свет, уют, мягкие тени",
-    "студийный портрет, мягкий софтбокс, чистый фон, журнальный стиль",
-    "уличный портрет, город на заднем плане, боке, кинематографичная гамма",
+    "instagram aesthetic lifestyle portrait, candid smile, soft natural window light, airy pastel palette",
+    "street style portrait, soft overcast light, shallow depth, subtle film grain, tasteful colors",
+    "clean studio look, softbox glow, pastel backdrop, minimalist composition, editorial yet casual",
+    "golden hour portrait, warm rim light, gentle haze, teal‑orange touch, modern influencer vibe",
+    "coffee shop lifestyle portrait, warm tungsten, cozy mood, creamy bokeh, natural skin tones",
 ]
 
 PROMO_TOPICS_RO = [
-    "portret la fereastră, lumină de dimineață, WB cald, tonuri naturale",
-    "portret la apus, golden hour, lumină din spate, moale",
-    "portret la lămpi, lumină caldă, cozy, umbre delicate",
-    "portret de studio, softbox, fundal curat, stil editorial",
-    "portret urban, oraș în fundal, bokeh, paletă cinematografică",
+    "instagram aesthetic lifestyle portrait, candid laugh, soft daylight, airy pastels, minimal retouch",
+    "urban portrait, overcast soft light, creamy bokeh, subtle grain, fashionable yet natural",
+    "studio portrait, soft beauty light, clean pastel background, minimalist composition",
+    "sunset golden hour, warm backlight, dreamy haze, modern influencer color grade",
+    "cafe lifestyle portrait, warm lights, cozy atmosphere, shallow depth of field",
 ]
 
 # Educational tip buckets per language
@@ -1158,52 +1163,93 @@ def _pick_tip(lang: str) -> str:
 
 def craft_group_post_text(lang: str, bot_username: Optional[str]) -> str:
     name = ("@" + bot_username) if bot_username else "the bot"
-    tip = _pick_tip(lang)
+
+    # Instagram‑style witty quotes per language (short, charismatic, playful)
+    QUOTES_RU = [
+        "Красота — это когда лишнего нет, а ты есть.",
+        "Харизма — это фильтр, который всегда ‘вкл’.",
+        "Жизнь как лента — главное, что в кадре ты.",
+        "Юмор — мой софтбокс. Подсвечивает даже понедельник.",
+        "Идеального света не бывает. Бывает твоё настроение в кадре.",
+        "Главный секрет стиля? Делать вид, что это не секрет.",
+    ]
+    QUOTES_RO = [
+        "Frumusețea începe când dispare ‘prea mult’. Tu rămâi.",
+        "Carisma e filtrul meu preferat — mereu ON.",
+        "Viața e un feed — important e că ești în cadru.",
+        "Umorul e softbox‑ul meu. Pune lumină pe orice zi.",
+        "Lumina perfectă? Starea ta în cadru.",
+    ]
+    QUOTES_DE = [
+        "Stil ist, wenn nichts zu viel ist — und du bleibst.",
+        "Charisma ist mein Lieblingsfilter — immer an.",
+        "Das Leben ist ein Feed. Hauptsache: du bist im Bild.",
+        "Humor ist mein Softbox — beleuchtet jeden Montag.",
+        "Perfektes Licht? Deine Stimmung im Bild.",
+    ]
+    QUOTES_EN = [
+        "Style is when nothing’s extra — and you still shine.",
+        "Charisma is my favorite filter — always on.",
+        "Life is a feed. The point is: you’re in frame.",
+        "Humor is my softbox — lights up any Monday.",
+        "Perfect light? Your mood in the shot.",
+    ]
+
+    def pick_quote() -> str:
+        if lang.startswith("ru"):
+            return random.choice(QUOTES_RU)
+        if lang.startswith("ro"):
+            return random.choice(QUOTES_RO)
+        if lang.startswith("de"):
+            return random.choice(QUOTES_DE)
+        return random.choice(QUOTES_EN)
+
+    quote = pick_quote()
+
+    # Try LLM if available — but ask for IG‑style quote
     try:
         if OPENAI_API_KEY and OpenAI is not None:
             client = OpenAI(api_key=OPENAI_API_KEY)
             sys = (
-                "You are a charismatic, witty teacher of interior photography and composition. "
-                "Write a short (2–3 sentences) educational Telegram post with a light joke and strong charisma. "
-                "Give one practical tip for interiors (light, verticals, framing, color). "
-                "End with an inviting CTA that mentions the bot handle. No hashtags."
+                "You craft short Instagram‑style quotes: witty, charismatic, playful. "
+                "Return 1–2 sentences only. No hashtags, no emojis overload. "
+                "Close with a soft CTA mentioning the bot handle."
             )
-            user = f"Language: {lang}. Bot handle: {name}. Tone: playful, classy, helpful. Tip: {tip}"
+            user = f"Language: {lang}. Bot handle: {name}. Example tone: '{quote}'."
             r = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[{"role":"system","content":sys},{"role":"user","content":user}],
                 temperature=0.9,
-                max_tokens=120,
+                max_tokens=80,
             )
             out = (r.choices[0].message.content or "").strip()
             if out:
                 return out
     except Exception as e:
         print("craft_group_post_text error:", str(e)[:160])
+
+    # Fallback: static quote + CTA
     if lang.startswith("ru"):
-        return f"{tip} Попробуйте {name} — чуть юмора, много вкуса и идеальный кадр."
+        return f"{quote}\nПопробуй {name} — чуть юмора, много стиля."
     if lang.startswith("ro"):
-        return f"{tip} Încearcă {name} — puțin umor, mult stil și cadre curate."
+        return f"{quote}\nÎncearcă {name} — un strop de umor, mult stil."
     if lang.startswith("de"):
-        return (
-            "Hotel‑Look in Minuten: klare Linien, schönes Licht, kein Stress. "
-            f"Teste {name} — macht Spaß!"
-        )
-    return (
-        "Make interiors and portraits look like a hotel magazine. "
-        f"Try {name} now — fast, tasteful, fun."
-    )
+        return f"{quote}\nTeste {name} — leicht, stilvoll, sympathisch."
+    return f"{quote}\nTry {name} — tasteful, playful, you."
 
 def craft_group_post_image_prompt(lang: str) -> str:
     topics = PROMO_TOPICS_RU if lang.startswith("ru") else PROMO_TOPICS_RO if lang.startswith("ro") else PROMO_TOPICS_RU
     theme = random.choice(topics)
     base = (
-        "ultra realistic editorial portrait photography of a person, SFW, no brands, no text, "
-        "soft flattering light, clean background, tasteful composition, magazine quality"
+        "instagram aesthetic lifestyle portrait, 4:5 vertical, candid, tasteful and modern, "
+        "soft natural light, airy pastel palette, subtle film grain, shallow depth of field, "
+        "clean composition, natural skin tones, SFW, no brands, no text"
     )
     return f"{theme}. {base}"
 
 def generate_group_post_image(lang: str) -> Optional[bytes]:
+    if GROUP_POST_TEXT_ONLY:
+        return None
     if not REPLICATE_API_TOKEN or not NANOBANANA_MODEL:
         return None
     prompt = craft_group_post_image_prompt(lang)
@@ -1807,7 +1853,7 @@ async def post_before_after_to_channel(user_id: int):
     # Dedup key
     try:
         key_src = (before or b"") + (after or b"")
-        sig = hashlib.md5(key_src).hexdigest()
+        sig = "ch:" + hashlib.md5(key_src).hexdigest()
         now = time.time()
         # prune
         for k,v in list(RECENT_PUB.items()):
@@ -1859,16 +1905,27 @@ async def post_before_after_to_channel(user_id: int):
 # ===================== UI ============================
 def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 " + lang.get("btn_more", "More"),   callback_data="more"),
-        InlineKeyboardButton(text="💰 " + lang["btn_balance"], callback_data="balance"),
-        InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
-    ],
-    [
-        InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
-        InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
-        InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
-    ]])
+    rows = [
+        [
+            InlineKeyboardButton(text="🔄 " + lang.get("btn_more", "More"),   callback_data="more"),
+            InlineKeyboardButton(text="💰 " + lang["btn_balance"], callback_data="balance"),
+            InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
+        ],
+        [
+            InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
+            InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
+            InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
+        ],
+    ]
+    # Optional: publish to group button if configured
+    try:
+        if PUBLISH_GROUP_ID:
+            rows.append([
+                InlineKeyboardButton(text=lang.get("btn_publish_group", "To group"), callback_data="pub_group"),
+            ])
+    except Exception:
+        pass
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
@@ -2501,6 +2558,20 @@ async def cb_pub_yes(c: CallbackQuery):
     if not after:
         await safe_cb_answer(c)
         return await c.message.answer(L(c.message.chat.id)["err_no_result"])
+    # Deduplicate recent publishes (same before/after) to avoid repeats
+    try:
+        key_src = (before or b"") + (after or b"")
+        sig = "ch:" + hashlib.md5(key_src).hexdigest()
+        now = time.time()
+        for k, v in list(RECENT_PUB.items()):
+            if now - v > RECENT_PUB_TTL:
+                RECENT_PUB.pop(k, None)
+        if RECENT_PUB.get(sig) and now - RECENT_PUB[sig] < RECENT_PUB_TTL:
+            await safe_cb_answer(c, L(c.message.chat.id)["published_recent"])
+            return
+        RECENT_PUB[sig] = now
+    except Exception:
+        pass
     imgs = []
     if before:
         imgs.append(before)
@@ -2531,7 +2602,7 @@ async def cb_pub_yes(c: CallbackQuery):
             token = create_style_share(before)
             if token:
                 link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=style_{token}"
-                btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(user_id)["style_share_btn"], url=link)]])
+                btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(c.message.chat.id)["style_share_btn"], url=link)]])
                 try:
                     await bot.send_message(chat_id=GALLERY_CHANNEL_ID, text=" ", reply_markup=btn)
                 except Exception as e:
@@ -2544,12 +2615,26 @@ async def cb_pub_yes(c: CallbackQuery):
 async def cb_pub_group(c: CallbackQuery):
     if not PUBLISH_GROUP_ID:
         await safe_cb_answer(c)
-        return await c.message.answer("Группа не настроена.")
+        return await c.message.answer(L(c.message.chat.id)["err_group_not_configured"])
     before = LAST_REF.get(c.message.chat.id)
     after  = LAST_PHOTO.get(c.message.chat.id)
     if not after:
         await safe_cb_answer(c)
-        return await c.message.answer("Нет результата для публикации.")
+        return await c.message.answer(L(c.message.chat.id)["err_no_result"])
+    # Deduplicate recent publishes (same before/after)
+    try:
+        key_src = (before or b"") + (after or b"")
+        sig = "gr:" + hashlib.md5(key_src).hexdigest()
+        now = time.time()
+        for k, v in list(RECENT_PUB.items()):
+            if now - v > RECENT_PUB_TTL:
+                RECENT_PUB.pop(k, None)
+        if RECENT_PUB.get(sig) and now - RECENT_PUB[sig] < RECENT_PUB_TTL:
+            await safe_cb_answer(c, L(c.message.chat.id)["published_recent"])
+            return
+        RECENT_PUB[sig] = now
+    except Exception:
+        pass
     imgs = []
     if before:
         imgs.append(before)
