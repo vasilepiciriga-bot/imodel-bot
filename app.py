@@ -1541,6 +1541,49 @@ def _nudge_pick_offer(uid: int) -> Dict[str, object]:
         return {"kind": "PROMO3"}
     return {"kind": "FREE1"}
 
+# ===================== ADMIN NOTIFY ==================
+async def notify_admins_payment(
+    user_id: int,
+    username: Optional[str],
+    name: Optional[str],
+    pack: str,
+    gens: int,
+    balance: int,
+    stars: Optional[int] = None,
+):
+    try:
+        # Collect recipients: explicit ADMIN_IDS + known chat ids by admin usernames
+        recips: Set[int] = set(ADMIN_IDS)
+        try:
+            for uid, info in STATS_USERS_INFO.items():
+                u = (info.get("username") or "").strip().lstrip("@").lower()
+                if u and u in ADMIN_USERNAMES:
+                    recips.add(int(uid))
+        except Exception:
+            pass
+        if not recips:
+            return
+        who = username or (name or "user")
+        stars_note = f", {stars}★" if stars else ""
+        text = (
+            f"💳 Покупка: +{gens} ген ({pack}{stars_note})\n"
+            f"Пользователь: {who} (id {user_id})\n"
+            f"Баланс после: {balance}"
+        )
+        for rid in recips:
+            try:
+                await bot.send_message(chat_id=rid, text=text)
+            except TelegramForbiddenError:
+                continue
+            except TelegramNotFound:
+                continue
+            except TelegramBadRequest as e:
+                print("notify_admins_payment bad request:", str(e)[:160])
+            except Exception as e:
+                print("notify_admins_payment error:", str(e)[:160])
+    except Exception as e:
+        print("notify_admins_payment outer error:", str(e)[:160])
+
 def _lang_to_tz(lang: str) -> str:
     base = (lang or "").lower()
     if base.startswith("ru") or base.startswith("uk") or base.startswith("be"):
@@ -2065,6 +2108,26 @@ async def got_payment(m: Message):
     await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
     stats_incr("payments", 1)
     _uadd(m.chat.id, "payments", 1)
+    # Notify admins about the purchase
+    try:
+        uname = getattr(m.from_user, "username", None)
+        name = getattr(m.from_user, "full_name", None) or getattr(m.from_user, "first_name", "")
+        xtr = None
+        try:
+            xtr = int(getattr(m.successful_payment, "total_amount", 0))
+        except Exception:
+            xtr = None
+        await notify_admins_payment(
+            user_id=m.chat.id,
+            username=("@" + uname) if uname else None,
+            name=name,
+            pack=payload,
+            gens=add,
+            balance=USER_CREDITS.get(m.chat.id, 0),
+            stars=xtr,
+        )
+    except Exception as e:
+        print("notify admins (payment) error:", str(e)[:160])
 
 # ===================== COMMANDS =======================
 @dp.message(Command("version"))
