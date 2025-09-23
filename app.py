@@ -72,7 +72,7 @@ _GROUP_LANG_IDX = 0
 GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
 GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
 # Debug: force fixed interval in minutes and ignore quiet hours if >0
-GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "5"))
+GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "0"))
 GROUP_POST_TEXT_ONLY = os.getenv("GROUP_POST_TEXT_ONLY", "0") == "1"
 GROUP_POST_LOOP_RUNNING = False
 GROUP_POST_LAST_AT: float = 0.0
