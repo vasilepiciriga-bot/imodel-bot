@@ -59,7 +59,7 @@ OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 
 # Auto posts to group (educational, witty)
-GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "1") == "1"
+GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "0") == "1"
 GROUP_POST_MIN_HOURS  = float(os.getenv("GROUP_POST_MIN_HOURS", "2"))
 GROUP_POST_MAX_HOURS  = float(os.getenv("GROUP_POST_MAX_HOURS", "3"))
 # Either a single lang like "ru" or a comma-list like "ru,ro" to rotate
@@ -335,10 +335,9 @@ except Exception:
 AUTO_POST = os.getenv("AUTO_POST", "0") == "1"  # if 1: авто-пост в канал «до/после»
 
 # Optional group for manual publishing
-PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "-1003034544091")
+PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "")
 try:
-    if PUBLISH_GROUP_ID:
-        PUBLISH_GROUP_ID = int(PUBLISH_GROUP_ID)
+    PUBLISH_GROUP_ID = int(PUBLISH_GROUP_ID) if PUBLISH_GROUP_ID else None
 except Exception:
     PUBLISH_GROUP_ID = None
 
