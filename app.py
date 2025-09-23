@@ -1432,50 +1432,20 @@ def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
         client = OpenAI(api_key=OPENAI_API_KEY)
         b64 = base64.b64encode(style_bytes).decode("utf-8")
         sys = (
-            "You are a senior photographer. Extract a ONE-LINE SCENE SPEC for exact recreation with a different face. "
-            "Be concrete and visual, avoid prose. Include in order: environment/location; composition & framing (closeup/half-body/etc); "
-            "camera angle and focal length feel; pose & head orientation; time of day; lighting direction/quality; color palette/color grading; "
-            "style adjectives; any distinctive background cues. Keep subject generic (person). SFW only."
+            "You are a senior photographer and lighting designer. Extract ONE LONG LINE (comma‑separated) SCENE SPEC for exact recreation "
+            "with a different face. Be concrete and visual, no filler prose. Include in order: environment/location with key background cues "
+            "(materials, furniture, depth, distance), composition & framing (portrait 4:5, close‑up/half‑body/full, headroom, negative space), "
+            "camera angle (eye‑level/low/high) and lens/focal length feel (e.g., 85mm), exposure metadata (aperture, shutter, ISO), pose & head orientation, "
+            "time of day, lighting design (key/fill/rim/back, source type like window/softbox/neon, direction/height/size/softness, Kelvin temperature), "
+            "color palette and grading (film‑like, teal‑orange, pastel, muted, high contrast), mood, and style adjectives. Keep subject generic (adult person). "
+            "Strictly SFW (fully clothed). No brands, no logos, no text, no celebrity. Keep it ONE line, information‑dense."
         )
         msg = [
             {"role": "system", "content": sys},
             {"role": "user", "content": [
-                {"type": "text", "text": "Describe the scene for 1:1 copy."},
+                {"type": "text", "text": "Produce one detailed line for 1:1 scene copy (no face/identity notes)."},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
             ]}
-        ]
-        r = client.chat.completions.create(model=OPENAI_MODEL_VISION, messages=msg, temperature=0.2, max_tokens=180)
-        line = (r.choices[0].message.content or "").strip()
-        if not line:
-            return None
-        line = enforce_safe_prompt(line)
-        return f"{line}. {SCENE_LOCK}"
-    except Exception as e:
-        print("Vision scene error:", str(e)[:200])
-        return None
-
-def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
-    """Produce an extremely detailed Midjourney-style prompt for Copy Mode with strong emphasis on clothing (SFW)."""
-    if not OPENAI_API_KEY or OpenAI is None:
-        return None
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        b64 = base64.b64encode(style_bytes).decode("utf-8")
-        sys = (
-            "You are an expert fashion + photography prompt engineer for Midjourney‑style prompts. "
-            "Given ONE reference photo, return ONE LINE in English, comma‑separated attributes, extremely detailed, SFW. "
-            "Put special emphasis on CLOTHING: garment category, layers, silhouette/fit (oversized/slim/relaxed/tailored), drape, fabric/material (cotton, wool, denim, satin, knit, leather), texture (ribbed, cable‑knit, fuzzy, matte, glossy), pattern/print (solid, stripes, plaid, floral, logo‑free), construction details (collar type, lapel, cuffs, hems, seams, pleats), closures (buttons, zipper, laces), accessories (belt, jewelry, earrings, necklace, glasses, hat, bag), footwear, and the clothing color palette. "
-            "Also cover: subject (generic person, no names), environment/location, composition/framing (close‑up/half‑body/full), camera angle and lens/focal feel, pose and head orientation, time of day, lighting direction/quality, color grading/toning, mood, key background cues. "
-            "Strictly SFW (fully clothed), avoid any brand or celebrity names, no logos, no text in image. Do not mention 'reference' or 'face swap'. "
-            "Keep it ONE line, concise but information‑dense."
-        )
-        user_content = [
-            {"type": "text", "text": "Return one line with strong clothing detail first, then environment/composition/camera/light/mood."},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        ]
-        msg = [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": user_content},
         ]
         r = client.chat.completions.create(
             model=OPENAI_MODEL_VISION,
@@ -1486,7 +1456,47 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
         line = (r.choices[0].message.content or "").strip()
         if not line:
             return None
-        # Ensure SFW suffix but do not force age
+        line = enforce_safe_prompt(line)
+        return f"{line}. {SCENE_LOCK}"
+    except Exception as e:
+        print("Vision scene error:", str(e)[:200])
+        return None
+
+def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
+    """Produce an extra‑detailed, longer one‑line prompt for Copy Mode with very strong clothing and scene detail (SFW)."""
+    if not OPENAI_API_KEY or OpenAI is None:
+        return None
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        b64 = base64.b64encode(style_bytes).decode("utf-8")
+        sys = (
+            "You are an expert fashion + photography prompt engineer. Given ONE reference photo, return ONE LONG LINE in English, "
+            "comma‑separated attributes, extremely detailed and information‑dense. Start with CLOTHING (garment category, layering, silhouette and fit, "
+            "drape, materials/fabrics and weave, texture, pattern/print, construction details like collar/lapel/cuffs/hem/seams/pleats/darts, closures and hardware, "
+            "accessories (belt, jewelry, earrings, necklace, watch, glasses, hat, scarf, bag), footwear, and a concise clothing color palette). Then cover: subject (generic 'adult person'), "
+            "environment/location with distinctive background cues (materials, furniture, signage/bokeh shapes, depth, distance), composition/framing (portrait 4:5, close‑up/half‑body/full, headroom, negative space, rule of thirds), "
+            "camera angle and lens/focal length feel (e.g., 85mm), exposure metadata (aperture f/.., shutter 1/..s, ISO ..), pose and head orientation, time of day, "
+            "lighting design (key/fill/rim/back, source type window/softbox/neon, direction/height/size/softness, Kelvin temperature), color grading/toning (pastel, muted, teal‑orange, filmic), mood, and tiny styling cues. "
+            "Strictly SFW (fully clothed). No brands, no logos, no celebrity, no text. Do not mention 'reference', 'swap', or 'face'. Keep it ONE single line, long but precise."
+        )
+        user_content = [
+            {"type": "text", "text": "Return one long, comma‑separated line: clothing first (very detailed), then environment/composition/camera/exposure/lighting/grading/mood."},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ]
+        msg = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user_content},
+        ]
+        r = client.chat.completions.create(
+            model=OPENAI_MODEL_VISION,
+            messages=msg,
+            temperature=0.2,
+            max_tokens=380,
+        )
+        line = (r.choices[0].message.content or "").strip()
+        if not line:
+            return None
+        # Ensure SFW suffix but do not force age or break structure
         try:
             line2 = enforce_safe_prompt(line)
             if line2:
