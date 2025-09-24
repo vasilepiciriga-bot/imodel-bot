@@ -1259,21 +1259,49 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
 # ===================== VIDEO GEN =====================
 def generate_video_from_bytes(img_bytes: bytes, prompt: Optional[str] = None) -> Optional[bytes]:
     if not REPLICATE_API_TOKEN or not VIDEO_MODEL:
+        print("video: missing replicate token or model")
         return None
-    url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
-    if not url:
-        return None
-    try:
-        inputs = {"image": url}
-        if prompt:
-            inputs["prompt"] = enforce_safe_prompt(prompt)
-        vurl = replicate_generate(VIDEO_MODEL, inputs)
-        if not vurl or not str(vurl).startswith("http"):
-            return None
-        vb = _download_with_retries(vurl)
-        return vb
-    except Exception:
-        return None
+    # Prepare sources: S3 URL if configured, and data URL fallback
+    s3_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    data_url = f"data:image/jpeg;base64,{b64}"
+    safe_prompt = enforce_safe_prompt(prompt or "") if prompt else None
+    seed = int(hashlib.md5(img_bytes).hexdigest()[:8], 16)
+
+    models = [VIDEO_MODEL, "stability-ai/stable-video-diffusion-img2vid", "stability-ai/stable-video-diffusion"]
+    # common parameter variants used across SVD forks on Replicate
+    image_keys = ["image", "input_image"]
+    cfg_variants = [
+        {},
+        {"frames": 14},
+        {"fps": 8},
+        {"motion_bucket_id": 32},
+        {"cond_aug": 0.15},
+        {"seed": seed},
+    ]
+
+    for model in models:
+        for src in (s3_url, data_url):
+            if not src:
+                continue
+            for ikey in image_keys:
+                base_inp = {ikey: src}
+                if safe_prompt:
+                    base_inp["prompt"] = safe_prompt
+                for extra in cfg_variants:
+                    inp = dict(base_inp); inp.update(extra)
+                    try:
+                        vurl = replicate_generate(model, inp)
+                        if vurl and str(vurl).startswith("http"):
+                            vb = _download_with_retries(vurl)
+                            if vb:
+                                print("video ok via", model, ikey, extra)
+                                return vb
+                    except Exception as e:
+                        print("video gen error:", str(e)[:160])
+                        continue
+    print("video: no url from replicate; last error:", REPLICATE_LAST_ERROR[:160])
+    return None
 
 # ===================== GROUP POSTS =====================
 PROMO_TOPICS_RU = [
