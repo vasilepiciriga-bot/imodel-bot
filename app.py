@@ -321,9 +321,16 @@ NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
+# Video (image → short clip)
+VIDEO_MODEL      = os.getenv("VIDEO_MODEL", "stability-ai/stable-video-diffusion")
+VIDEO_COST       = int(os.getenv("VIDEO_COST", "2"))
+
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
 FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "3"))
+# Batch settings
+BATCH_MAX    = int(os.getenv("BATCH_MAX", "5"))
+BATCH_MIN    = int(os.getenv("BATCH_MIN", "2"))
 
 # Channel & autopost
 GALLERY_CHANNEL_ID = os.getenv("GALLERY_CHANNEL_ID", "")
@@ -390,6 +397,9 @@ USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
 USER_ONBOARDED: Set[int]           = set()
 
+# Video Mode
+USER_VIDEO_MODE: Set[int] = set()
+
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
 CREDITS_FILE = os.getenv("CREDITS_FILE", os.path.join(DATA_DIR, "credits.json"))
@@ -454,6 +464,18 @@ USER_COPY_PROMPT: Dict[int, str] = {}
 
 # Retouch Mode
  
+
+# Batch Mode
+USER_BATCH_MODE: Set[int] = set()
+USER_BATCH_PHOTOS: Dict[int, List[bytes]] = {}
+
+# Outfit Try-On (via clothing photo)
+USER_OUTFIT_CLOTHES: Dict[int, bytes] = {}
+
+# Outfit Try-On Mode
+USER_OUTFIT_MODE: Set[int] = set()
+USER_OUTFIT_STYLE: Dict[int, str] = {}
+USER_OUTFIT_TEXT: Dict[int, str] = {}
 
 # Whitelist
 FREE_USERS: set[int] = set()
@@ -608,6 +630,11 @@ T = {
         "copy_done": "Готово ✅",
         "copy_exit": "Режим «Скопировать фото» выключен.",
         "menu_copy": "📋 Скопировать",
+        "menu_outfit": "👗 Смена одежды",
+        "outfit_intro": "👗 Примерка одежды\nШаг 1: пришлите фото одежды из интернет‑магазина (товар на ровном фоне).\nШаг 2: пришлите своё селфи.\nОпционально: добавьте описание (цвет/фон/настроение) одним сообщением.",
+        "outfit_clothes_ok": "Фото одежды принято ✅ Теперь пришлите селфи.",
+        "outfit_need_clothes": "Сначала пришлите фото одежды (из магазина).",
+        "outfit_prompt_updated": "Описание учтено. Теперь пришлите селфи.",
         "style_share_btn": "✨ Сделать в таком стиле",
         "style_share_intro": "Стиль загружен ✅ Пришлите селфи — сделаю похожий результат.",
         "err_channel_not_configured": "Канал не настроен.",
@@ -618,6 +645,16 @@ T = {
         "before_after": "До / После ✨",
         "before": "До",
         "copy_prompt_updated": "Промпт обновлён. Теперь пришлите селфи.",
+        "video_intro": "🎬 Видео‑режим\nПришлите селфи — сделаю короткую SFW‑анимацию (для Reels/TikTok). Подпись к фото можно использовать как идею.",
+        "video_off": "Видео‑режим выключен.",
+        "batch_intro": "📦 Пакетная генерация\nОтправьте 2–5 селфи подряд, затем пришлите описание сцены — сгенерирую результат для каждого фото.",
+        "batch_added": "Фото добавлено ({n}/{limit}). Пришлите ещё или отправьте описание.",
+        "batch_limit": "Достигнут лимит {limit}. Теперь пришлите описание.",
+        "batch_need_photos": "Сначала отправьте 2–5 фото для пакетной обработки.",
+        "batch_processing": "Генерирую пакет… ⏳",
+        "batch_done": "Готово ✅ Отправил {count} результатов.",
+        "batch_insufficient": "Недостаточно кредитов: нужно {need}, доступно {have}.",
+        "batch_exit": "Пакетный режим выключен.",
     },
     "en": {
         "menu_lang": "🌐 Language",
@@ -684,6 +721,11 @@ T = {
         "copy_done": "Done ✅",
         "copy_exit": "Copy Mode OFF.",
         "menu_copy": "📋 Copy",
+        "menu_outfit": "👗 Outfit",
+        "outfit_intro": "👗 Try‑On\nStep 1: send a clothing photo from an online store (product on clean background).\nStep 2: send your selfie.\nOptional: add description (color/background/mood) as one text message.",
+        "outfit_clothes_ok": "Clothing received ✅ Now send your selfie.",
+        "outfit_need_clothes": "Please send a clothing photo first.",
+        "outfit_prompt_updated": "Description saved. Now send a selfie.",
         "err_channel_not_configured": "Channel is not configured.",
         "err_group_not_configured": "Group is not configured.",
         "err_no_result": "No result to publish.",
@@ -692,6 +734,16 @@ T = {
         "before_after": "Before / After ✨",
         "before": "Before",
         "copy_prompt_updated": "Prompt updated. Now send a selfie.",
+        "video_intro": "🎬 Video Mode\nSend a selfie — I’ll make a short SFW animation (great for Reels/TikTok). You can use the photo caption as an idea.",
+        "video_off": "Video Mode OFF.",
+        "batch_intro": "📦 Batch mode\nSend 2–5 selfies, then send a description — I will generate results for each photo.",
+        "batch_added": "Photo added ({n}/{limit}). Send more or send your description.",
+        "batch_limit": "Limit {limit} reached. Now send your description.",
+        "batch_need_photos": "Please send 2–5 photos first for batch processing.",
+        "batch_processing": "Processing batch… ⏳",
+        "batch_done": "Done ✅ Sent {count} results.",
+        "batch_insufficient": "Not enough credits: need {need}, have {have}.",
+        "batch_exit": "Batch mode OFF.",
     },
     "ro": {
         "menu_lang": "🌐 Limba",
@@ -756,6 +808,11 @@ T = {
         "copy_done": "Gata ✅",
         "copy_exit": "Modul „Copiază” oprit.",
         "menu_copy": "📋 Copiază",
+        "menu_outfit": "👗 Ținute",
+        "outfit_intro": "👗 Probă de ținute\nPasul 1: trimite o poză a hainelor dintr‑un magazin online (produs pe fundal curat).\nPasul 2: trimite selfie‑ul tău.\nOpțional: adaugă descriere (culoare/fundal/stare) într‑un mesaj.",
+        "outfit_clothes_ok": "Îmbrăcăminte primită ✅ Trimite selfie‑ul.",
+        "outfit_need_clothes": "Trimite mai întâi poza cu îmbrăcămintea.",
+        "outfit_prompt_updated": "Descriere salvată. Trimite un selfie.",
         "err_channel_not_configured": "Canalul nu este configurat.",
         "err_group_not_configured": "Grupul nu este configurat.",
         "err_no_result": "Nu există rezultat pentru publicare.",
@@ -764,6 +821,16 @@ T = {
         "before_after": "Înainte / După ✨",
         "before": "Înainte",
         "copy_prompt_updated": "Prompt actualizat. Trimite selfie-ul.",
+        "video_intro": "🎬 Mod Video\nTrimite un selfie — creez o animație SFW scurtă (pentru Reels/TikTok). Poți pune ideea în descriere.",
+        "video_off": "Modul Video oprit.",
+        "batch_intro": "📦 Pachet de generare\nTrimite 2–5 selfie-uri, apoi descrierea — generez pentru fiecare poză.",
+        "batch_added": "Poză adăugată ({n}/{limit}). Mai trimite sau trimite descrierea.",
+        "batch_limit": "S-a atins limita {limit}. Acum trimite descrierea.",
+        "batch_need_photos": "Trimite mai întâi 2–5 poze pentru procesare în pachet.",
+        "batch_processing": "Procesez pachetul… ⏳",
+        "batch_done": "Gata ✅ Am trimis {count} rezultate.",
+        "batch_insufficient": "Credite insuficiente: necesare {need}, ai {have}.",
+        "batch_exit": "Modul pachet oprit.",
         "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
         "style_share_btn": "✨ În acest stil",
         "style_share_intro": "Stil încărcat ✅ Trimite un selfie — generez un rezultat similar.",
@@ -832,6 +899,11 @@ T = {
         "copy_done": "Fertig ✅",
         "copy_exit": "Kopier‑Modus AUS.",
         "menu_copy": "📋 Kopieren",
+        "menu_outfit": "👗 Outfit",
+        "outfit_intro": "👗 Outfit‑Anprobe\nSchritt 1: Foto der Kleidung aus einem Onlineshop senden (Produkt auf neutralem Hintergrund).\nSchritt 2: Dein Selfie senden.\nOptional: kurze Beschreibung (Farbe/Hintergrund/Stimmung) als Text.",
+        "outfit_clothes_ok": "Kleidung empfangen ✅ Jetzt ein Selfie senden.",
+        "outfit_need_clothes": "Bitte zuerst ein Foto der Kleidung senden.",
+        "outfit_prompt_updated": "Beschreibung gespeichert. Jetzt ein Selfie senden.",
         "style_share_btn": "✨ In diesem Stil",
         "style_share_intro": "Stil geladen ✅ Sende ein Selfie — ich erstelle ein ähnliches Ergebnis.",
         "err_channel_not_configured": "Kanal ist nicht konfiguriert.",
@@ -842,6 +914,16 @@ T = {
         "before_after": "Vorher / Nachher ✨",
         "before": "Vorher",
         "copy_prompt_updated": "Prompt aktualisiert. Bitte sende ein Selfie.",
+        "video_intro": "🎬 Video‑Modus\nSende ein Selfie — ich erstelle eine kurze SFW‑Animation (für Reels/TikTok). Bildunterschrift kann als Idee dienen.",
+        "video_off": "Video‑Modus AUS.",
+        "batch_intro": "📦 Stapel‑Modus\nSende 2–5 Selfies, dann eine Beschreibung — ich generiere für jedes Foto.",
+        "batch_added": "Foto hinzugefügt ({n}/{limit}). Sende mehr oder deine Beschreibung.",
+        "batch_limit": "Limit {limit} erreicht. Jetzt Beschreibung senden.",
+        "batch_need_photos": "Bitte zuerst 2–5 Fotos für die Stapelverarbeitung senden.",
+        "batch_processing": "Stapel wird verarbeitet… ⏳",
+        "batch_done": "Fertig ✅ {count} Ergebnisse gesendet.",
+        "batch_insufficient": "Nicht genug Guthaben: benötigt {need}, vorhanden {have}.",
+        "batch_exit": "Stapel‑Modus AUS.",
     }
 }
 
@@ -931,6 +1013,15 @@ async def safe_answer_photo(m: Message, photo: BufferedInputFile, **kwargs):
         print(f"[safe_answer_photo] blocked/not found: chat_id={m.chat.id}")
     except TelegramBadRequest as e:
         print(f"[safe_answer_photo] bad request: {e}")
+    return None
+
+async def safe_answer_video(m: Message, video: BufferedInputFile, **kwargs):
+    try:
+        return await m.answer_video(video=video, **kwargs)
+    except (TelegramForbiddenError, TelegramNotFound):
+        print(f"[safe_answer_video] blocked/not found: chat_id={m.chat.id}")
+    except TelegramBadRequest as e:
+        print(f"[safe_answer_video] bad request: {e}")
     return None
 
 async def safe_edit_text(msg: Message, text: str):
@@ -1111,6 +1202,25 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
             pass
         time.sleep(base_sleep * (i + 1))
     return None
+
+# ===================== VIDEO GEN =====================
+def generate_video_from_bytes(img_bytes: bytes, prompt: Optional[str] = None) -> Optional[bytes]:
+    if not REPLICATE_API_TOKEN or not VIDEO_MODEL:
+        return None
+    url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
+    if not url:
+        return None
+    try:
+        inputs = {"image": url}
+        if prompt:
+            inputs["prompt"] = enforce_safe_prompt(prompt)
+        vurl = replicate_generate(VIDEO_MODEL, inputs)
+        if not vurl or not str(vurl).startswith("http"):
+            return None
+        vb = _download_with_retries(vurl)
+        return vb
+    except Exception:
+        return None
 
 # ===================== GROUP POSTS =====================
 PROMO_TOPICS_RU = [
@@ -1396,6 +1506,72 @@ def safer_variant(prompt: str) -> str:
     base = re.sub(r",?\s*no celebrity.*$", "", prompt, flags=re.I)
     extra = " | conservative clothing, neutral pose, documentary portrait, editorial style"
     return f"{base}{extra}"
+
+# ===== Outfit prompts =====
+OUTFIT_PROMPTS: Dict[str, str] = {
+    "evening": (
+        "studio fashion portrait, neutral seamless backdrop (gray/black), waist-up or full-body, "
+        "elegant evening dress, fitted waist, flowing skirt, clean silhouette, satin/silk or matte crepe, "
+        "minimal jewelry, tasteful styling, editorial look, soft beauty light, 85mm look, fully clothed"
+    ),
+    "suit": (
+        "corporate headshot / fashion portrait, neutral gray backdrop, tailored business suit (single-breasted blazer and trousers), "
+        "crisp white shirt, tie optional, structured shoulders, clean lines, subtle pocket square, "
+        "professional lighting (key+fill), 85mm look, fully clothed"
+    ),
+    "casual": (
+        "casual lifestyle portrait, neutral studio or minimal interior, cotton t-shirt or knit sweater, denim jacket or relaxed blazer, "
+        "jeans, clean sneakers, simple accessories, soft natural-looking light, 50–85mm look, fully clothed"
+    ),
+}
+
+def build_outfit_prompt(style_key: str, extra: str | None = None) -> str:
+    base = OUTFIT_PROMPTS.get(style_key, OUTFIT_PROMPTS["casual"])  # default safe
+    extra_clean = (extra or "").strip().strip("., ")
+    text = f"{base}, {extra_clean}" if extra_clean else base
+    # Allow brand marks/lettering if present; still enforce SFW
+    text = f"{text}, respectful"
+    return enforce_safe_prompt(text)
+
+def craft_outfit_prompt_from_image(clothes_bytes: bytes, extra: Optional[str] = None) -> Optional[str]:
+    if not OPENAI_API_KEY or OpenAI is None:
+        return None
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        b64 = base64.b64encode(clothes_bytes).decode("utf-8")
+        sys = (
+            "You are a fashion stylist + VTO prompt engineer. Given ONE clothing/product photo, output ONE LONG LINE in English, "
+            "comma-separated, describing EXACT garments to WEAR on a person: garment category and components (top/bottom/one-piece/outerwear), layering, "
+            "silhouette and proportions (oversized/relaxed/slim/tailored), fit and size impression, pattern/print (including brand lettering/logos if visible and any text content with placement), "
+            "materials/fabrics (cotton, wool, denim, leather, satin, knit, etc), weave/weight/drape, texture (ribbed, cable-knit, brushed, matte/glossy), "
+            "color palette (primary/accent/trim), construction details (collar/lapel/cuffs/hem/pleats/darts/panels/seams), closures/hardware (buttons, zipper, snaps, laces, drawstrings, buckles), "
+            "pockets and trims, accessories pairing (belt/jewelry/hat/scarf/bag), shoes if implied, overall styling note. "
+            "Write it as a WEAR specification for the subject. Do NOT mention 'reference', 'swap', or 'face'. Keep SFW (fully clothed)."
+        )
+        utext = ""
+        if extra and extra.strip():
+            utext = f"Add user preferences: {extra.strip()}"
+        msg = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": [
+                {"type": "text", "text": ("Return the one long line. " + utext).strip()},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]},
+        ]
+        r = client.chat.completions.create(
+            model=OPENAI_MODEL_VISION,
+            messages=msg,
+            temperature=0.2,
+            max_tokens=380,
+        )
+        line = (r.choices[0].message.content or "").strip()
+        if not line:
+            return None
+        # Add identity preservation and safety suffix downstream via enforce
+        return enforce_safe_prompt(line)
+    except Exception as e:
+        print("Outfit Vision prompt error:", str(e)[:200])
+        return None
 
 def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = True) -> str:
     safe_raw = enforce_safe_prompt(raw_prompt)
@@ -1950,6 +2126,7 @@ def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
+            InlineKeyboardButton(text=lang.get("menu_outfit", "👗 Outfit"), callback_data="outfit_open"),
             InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
             InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
         ],
@@ -1974,6 +2151,7 @@ def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
             InlineKeyboardButton(text="📋 " + lang["menu_copy"],   callback_data="copy_open"),
+            InlineKeyboardButton(text=lang.get("menu_outfit", "👗 Outfit"),   callback_data="outfit_open"),
             InlineKeyboardButton(text=lang.get("menu_help", "🆘 /help"),    callback_data="help_open"),
         ],
         [
@@ -2252,6 +2430,55 @@ async def cmd_copy(m: Message):
     USER_COPY_PROMPT.pop(m.chat.id, None)
     await safe_answer(m, L(m.chat.id)["copy_intro"])
 
+@dp.message(Command("batch"))
+async def cmd_batch(m: Message):
+    # Toggle Batch Mode
+    uid = m.chat.id
+    if uid in USER_BATCH_MODE:
+        USER_BATCH_MODE.discard(uid)
+        USER_BATCH_PHOTOS.pop(uid, None)
+        await safe_answer(m, L(uid)["batch_exit"])
+        return
+    # Disable Copy Mode to avoid conflicts
+    USER_COPY_MODE.discard(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_BATCH_MODE.add(uid)
+    USER_BATCH_PHOTOS[uid] = []
+    await safe_answer(m, L(uid)["batch_intro"])
+
+@dp.message(Command("video"))
+async def cmd_video(m: Message):
+    uid = m.chat.id
+    # Toggle Video Mode; disable conflicting modes
+    if uid in USER_VIDEO_MODE:
+        USER_VIDEO_MODE.discard(uid)
+        await safe_answer(m, L(uid)["video_off"])
+        return
+    USER_BATCH_MODE.discard(uid)
+    USER_BATCH_PHOTOS.pop(uid, None)
+    USER_COPY_MODE.discard(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_VIDEO_MODE.add(uid)
+    await safe_answer(m, L(uid)["video_intro"])
+
+@dp.message(Command("outfit"))
+async def cmd_outfit(m: Message):
+    uid = m.chat.id
+    # Toggle Outfit Mode; disable conflicting modes
+    if uid in USER_OUTFIT_MODE:
+        USER_OUTFIT_MODE.discard(uid)
+        USER_OUTFIT_STYLE.pop(uid, None)
+        USER_OUTFIT_TEXT.pop(uid, None)
+        await safe_answer(m, L(uid)["batch_exit"])  # reuse Off text
+        return
+    USER_BATCH_MODE.discard(uid)
+    USER_BATCH_PHOTOS.pop(uid, None)
+    USER_COPY_MODE.discard(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_VIDEO_MODE.discard(uid)
+    USER_OUTFIT_MODE.add(uid)
+    await safe_answer(m, L(uid)["outfit_intro"], reply_markup=kb_outfit_styles(uid))
+
 
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
@@ -2402,6 +2629,8 @@ async def cmd_clear(m: Message):
     LAST_PHOTO.pop(m.chat.id, None)
     USER_COPY_STYLE.pop(m.chat.id, None)
     USER_COPY_MODE.discard(m.chat.id)
+    USER_BATCH_PHOTOS.pop(m.chat.id, None)
+    USER_BATCH_MODE.discard(m.chat.id)
     await safe_answer(m, L(m.chat.id)["cleared"])
 
 @dp.message(Command("tos"))
@@ -2464,6 +2693,15 @@ async def cb_presets(c: CallbackQuery):
     }.get(lang, "🎛 Presets — choose a style")
     await c.message.answer(txt, reply_markup=kb_presets_grid(chat_id))
 
+def kb_outfit_styles(chat_id: int) -> InlineKeyboardMarkup:
+    lang = L(chat_id)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lang.get("outfit_style_evening", "Evening dress"), callback_data="outfit_pick_evening")],
+        [InlineKeyboardButton(text=lang.get("outfit_style_suit", "Business suit"), callback_data="outfit_pick_suit")],
+        [InlineKeyboardButton(text=lang.get("outfit_style_casual", "Casual"), callback_data="outfit_pick_casual")],
+        [InlineKeyboardButton(text=lang.get("btn_back", "⬅️ Back"), callback_data="back_main")],
+    ])
+
 @dp.callback_query(F.data == "back_main")
 async def cb_back_main(c: CallbackQuery):
     await safe_cb_answer(c)
@@ -2474,6 +2712,21 @@ async def cb_back_main(c: CallbackQuery):
 async def cb_refer_open(c: CallbackQuery):
     await safe_cb_answer(c)
     await cmd_refer(c.message)
+
+@dp.callback_query(F.data == "outfit_open")
+async def cb_outfit_open(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_OUTFIT_MODE.add(chat_id)
+    await c.message.answer(L(chat_id)["outfit_intro"])  # photo-first flow, no catalog
+
+# Deprecated: style catalog callbacks are kept for compatibility but redirect to intro
+@dp.callback_query(F.data.startswith("outfit_pick_"))
+async def cb_outfit_pick(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_OUTFIT_MODE.add(chat_id)
+    await c.message.answer(L(chat_id)["outfit_intro"])  # instruct to send clothing photo
 
 @dp.callback_query(F.data.startswith("preset_"))
 async def cb_preset_pick(c: CallbackQuery):
@@ -2709,6 +2962,50 @@ async def on_photo(m: Message):
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     _uadd(m.chat.id, "photos", 1)
 
+    # ----- Video Mode: one photo → short animation -----
+    if m.chat.id in USER_VIDEO_MODE:
+        ensure_user_credit(m.chat.id)
+        is_free = is_free_user(m.chat.id, getattr(m.from_user, "username", None))
+        have = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
+        if (not is_free) and have < VIDEO_COST:
+            return await safe_answer(m, L(m.chat.id)["batch_insufficient"].format(need=VIDEO_COST, have=have), reply_markup=kb_invite_buy(m.chat.id))
+        wait = await safe_answer(m, L(m.chat.id)["gen"])
+        caption = (m.caption or "").strip()
+        if blocked(caption):
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["blocked"])
+            return
+        vid_bytes = generate_video_from_bytes(img_bytes, prompt=caption or None)
+        if not vid_bytes:
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["fail"])
+            stats_incr("gens_fail", 1)
+            _uadd(m.chat.id, "gens_fail", 1)
+            return
+        if not is_free:
+            USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, FREE_QUOTA) - VIDEO_COST
+            _credits_save()
+        if wait:
+            await wait.delete()
+        await safe_answer_video(m, BufferedInputFile(vid_bytes, filename="imodel_anim.mp4"), caption="✅", reply_markup=kb_actions(m.chat.id))
+        # save last for optional posting (photo/video mixed not posted)
+        LAST_REF[m.chat.id] = img_bytes
+        STATS["gens_ok"] = int(STATS.get("gens_ok", 0)) + 1
+        _uadd(m.chat.id, "gens_ok", 1)
+        await maybe_send_referral_hint(m.chat.id)
+        return
+
+    # ----- Batch Mode: collect selfies, generate later on text -----
+    if m.chat.id in USER_BATCH_MODE:
+        arr = USER_BATCH_PHOTOS.setdefault(m.chat.id, [])
+        if len(arr) >= BATCH_MAX:
+            return await safe_answer(m, L(m.chat.id)["batch_limit"].format(limit=BATCH_MAX))
+        arr.append(img_bytes)
+        n = len(arr)
+        if n >= BATCH_MAX:
+            return await safe_answer(m, L(m.chat.id)["batch_limit"].format(limit=BATCH_MAX))
+        return await safe_answer(m, L(m.chat.id)["batch_added"].format(n=n, limit=BATCH_MAX))
+
     # ----- Copy Mode -----
     if m.chat.id in USER_COPY_MODE:
         if m.chat.id not in USER_COPY_STYLE:
@@ -2806,6 +3103,84 @@ async def on_photo(m: Message):
                 except Exception as e:
                     print("AUTO_POST error:", str(e)[:160])
             return
+
+    # ----- Outfit Try-On (photo-first) -----
+    if m.chat.id in USER_OUTFIT_MODE:
+        # If no clothing reference yet — treat this photo as clothing
+        if m.chat.id not in USER_OUTFIT_CLOTHES:
+            USER_OUTFIT_CLOTHES[m.chat.id] = img_bytes
+            return await safe_answer(m, L(m.chat.id)["outfit_clothes_ok"])
+
+        # Have clothing → this is the selfie
+        clothes = USER_OUTFIT_CLOTHES.get(m.chat.id)
+        if not clothes:
+            return await safe_answer(m, L(m.chat.id)["outfit_need_clothes"])
+
+        ensure_user_credit(m.chat.id)
+        if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+            return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+
+        USER_REFS.setdefault(m.chat.id, [])
+        USER_REFS[m.chat.id] = (USER_REFS[m.chat.id] + [img_bytes])[-4:]
+        LAST_REF[m.chat.id] = img_bytes
+
+        wait = await safe_answer(m, L(m.chat.id)["gen"])
+        extra = USER_OUTFIT_TEXT.get(m.chat.id, "").strip()
+        cap = (m.caption or "").strip()
+        if cap and not blocked(cap):
+            extra = (extra + ", " + cap) if extra else cap
+        outfit_prompt = craft_outfit_prompt_from_image(clothes, extra)
+        if not outfit_prompt:
+            # fallback to simple build if vision unavailable
+            outfit_prompt = build_outfit_prompt("casual", extra)
+        seed_int = int(hashlib.md5(clothes).hexdigest()[:8], 16)
+        final_bytes = generate_image_from_bytes(
+            img_bytes,
+            outfit_prompt,
+            lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+            seed=seed_int,
+            strict=True,
+            style_bytes=None,
+            lock_scene=False,
+            user_id=m.chat.id,
+        )
+        if not final_bytes:
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["fail"])
+            stats_incr("gens_fail", 1)
+            _uadd(m.chat.id, "gens_fail", 1)
+            return
+        if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+            USER_CREDITS[m.chat.id] -= 1
+            _credits_save()
+        USER_OUTFIT_CLOTHES.pop(m.chat.id, None)
+        USER_LAST_OUTPUT[m.chat.id] = final_bytes
+        USER_LAST_PROMPT[m.chat.id] = outfit_prompt
+        LAST_PHOTO[m.chat.id] = final_bytes
+        stats_incr("gens_ok", 1)
+        _uadd(m.chat.id, "gens_ok", 1)
+
+        hist = USER_HISTORY.setdefault(m.chat.id, [])
+        hist.append(final_bytes)
+        if len(hist) > GALLERY_LIMIT:
+            del hist[:-GALLERY_LIMIT]
+
+        if wait:
+            await wait.delete()
+        await safe_answer_photo(
+            m,
+            BufferedInputFile(final_bytes, filename="imodel_outfit.jpg"),
+            caption="✅",
+            reply_markup=kb_actions(m.chat.id),
+        )
+        await maybe_send_referral_hint(m.chat.id)
+
+        if AUTO_POST and GALLERY_CHANNEL_ID:
+            try:
+                await post_before_after_to_channel(m.chat.id)
+            except Exception as e:
+                print("AUTO_POST error:", str(e)[:160])
+        return
 
     # ----- Обычный режим -----
     USER_REFS.setdefault(m.chat.id, [])
@@ -2915,6 +3290,95 @@ async def on_photo(m: Message):
 # ===================== FLOW: TEXT =====================
 @dp.message(F.text & ~F.text.startswith("/"))
 async def on_prompt(m: Message):
+    # Если включён Batch Mode — генерим пакет по накопленным фото
+    if m.chat.id in USER_BATCH_MODE:
+        text = m.text.strip()
+        if blocked(text):
+            stats_incr("blocked", 1)
+            _uadd(m.chat.id, "blocked", 1)
+            return await safe_answer(m, L(m.chat.id)["blocked"])
+        photos = USER_BATCH_PHOTOS.get(m.chat.id, [])
+        if not photos or len(photos) < BATCH_MIN:
+            return await safe_answer(m, L(m.chat.id)["batch_need_photos"])
+        ensure_user_credit(m.chat.id)
+        free = is_free_user(m.chat.id, getattr(m.from_user, "username", None))
+        have = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
+        need = len(photos)
+        if not free and have < need:
+            return await safe_answer(m, L(m.chat.id)["batch_insufficient"].format(need=need, have=have), reply_markup=kb_invite_buy(m.chat.id))
+
+        wait = await safe_answer(m, L(m.chat.id)["batch_processing"])
+        results: List[bytes] = []
+        first_ref: Optional[bytes] = None
+        for i, ph in enumerate(photos):
+            if first_ref is None:
+                first_ref = ph
+            seed_int = int(hashlib.md5(ph).hexdigest()[:8], 16)
+            out = generate_image_from_bytes(ph, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT), seed=seed_int, user_id=m.chat.id)
+            if out:
+                results.append(out)
+                if not free:
+                    USER_CREDITS[m.chat.id] -= 1
+                    _credits_save()
+                USER_LAST_OUTPUT[m.chat.id] = out
+                USER_LAST_PROMPT[m.chat.id] = text
+                LAST_PHOTO[m.chat.id] = out
+                stats_incr("gens_ok", 1)
+                _uadd(m.chat.id, "gens_ok", 1)
+                hist = USER_HISTORY.setdefault(m.chat.id, [])
+                hist.append(out)
+                if len(hist) > GALLERY_LIMIT:
+                    del hist[:-GALLERY_LIMIT]
+            else:
+                stats_incr("gens_fail", 1)
+                _uadd(m.chat.id, "gens_fail", 1)
+        # reset photos but keep mode ON for convenience
+        USER_BATCH_PHOTOS[m.chat.id] = []
+
+        if not results:
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["fail"])
+            return
+
+        # Send album (or single photo if only one)
+        try:
+            if len(results) == 1:
+                if wait:
+                    await wait.delete()
+                await safe_answer_photo(m, BufferedInputFile(results[0], filename="imodel_result.jpg"), caption="✅")
+            else:
+                media = []
+                for idx, rb in enumerate(results):
+                    cap = "✅" if idx == 0 else None
+                    media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(rb, filename=f"batch_{idx+1}.jpg"), caption=cap))
+                if wait:
+                    await wait.delete()
+                await bot.send_media_group(chat_id=m.chat.id, media=media)
+        except Exception:
+            # Fallback to individual sends
+            if wait:
+                await wait.delete()
+            for idx, rb in enumerate(results):
+                cap = "✅" if idx == 0 else None
+                await safe_answer_photo(m, BufferedInputFile(rb, filename=f"batch_{idx+1}.jpg"), caption=cap)
+
+        await safe_answer(m, L(m.chat.id)["batch_done"].format(count=len(results)), reply_markup=kb_actions(m.chat.id))
+        await maybe_send_referral_hint(m.chat.id)
+        # optional auto-post first pair
+        if AUTO_POST and GALLERY_CHANNEL_ID and first_ref and results:
+            LAST_REF[m.chat.id] = first_ref
+            try:
+                await post_before_after_to_channel(m.chat.id)
+            except Exception as e:
+                print("AUTO_POST error:", str(e)[:160])
+        return
+
+    # Если включён Outfit Mode — считаем текст уточнением стиля
+    if m.chat.id in USER_OUTFIT_MODE:
+        USER_OUTFIT_TEXT[m.chat.id] = m.text.strip()
+        await safe_answer(m, L(m.chat.id)["outfit_prompt_updated"])
+        return
+
     # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
     if m.chat.id in USER_COPY_MODE:
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
@@ -3109,6 +3573,9 @@ async def on_startup():
             BotCommand(command="refer",   description="Реферальная ссылка"),
             BotCommand(command="pricing", description="Тарифы"),
             BotCommand(command="copy",    description="Скопировать фото"),
+            BotCommand(command="video",   description="Видео‑анимация"),
+            BotCommand(command="outfit",  description="Смена одежды"),
+            BotCommand(command="batch",   description="Пакетная генерация"),
             BotCommand(command="help",    description="Помощь"),
             BotCommand(command="clear",   description="Очистить память"),
             BotCommand(command="version", description="Версия"),
