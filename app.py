@@ -397,6 +397,11 @@ USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
 USER_ONBOARDED: Set[int]           = set()
 
+# Optional user body profile (height/weight)
+USER_BODY: Dict[int, Dict[str, object]] = {}
+USER_BODY_WAIT: Set[int] = set()
+USER_BODY_ASKED: Set[int] = set()
+
 # Video Mode
 USER_VIDEO_MODE: Set[int] = set()
 
@@ -601,6 +606,18 @@ T = {
         "btn_support": "📨 Написать поддержку",
         "btn_back": "⬅️ Назад",
         "btn_refer": "🎁 Бесплатные генерации",
+        "body_ask": "👤 Хотите добавить рост и вес для более точной посадки одежды? Это необязательно.",
+        "btn_body_yes": "📏 Указать рост/вес",
+        "btn_skip": "🙈 Не сейчас",
+        "body_intro": "👤 Профиль тела (необязательно)\nПришлите рост и вес в любом формате (например: 178 см, 72 кг или 5'10 160 lb). Эти данные помогут точнее подбирать пропорции/посадку одежды в промптах. Напишите 'пропустить' чтобы отменить.",
+        "body_saved": "Сохранено: {info}.",
+        "body_cleared": "Профиль тела удалён.",
+        "body_bad": "Не распознал формат. Примеры: 178 см 72 кг или 5'10 160 lb.",
+        "body_skip_ok": "Окей! Можно добавить позже командой /body.",
+        "body_intro": "👤 Профиль тела (необязательно)\nПришлите рост и вес в любом формате (например: 178 см, 72 кг или 5'10 160 lb). Эти данные помогут точнее подбирать пропорции/посадку одежды в промптах. Напишите 'пропустить' чтобы отменить.",
+        "body_saved": "Сохранено: {info}.",
+        "body_cleared": "Профиль тела удалён.",
+        "body_bad": "Не распознал формат. Примеры: 178 см 72 кг или 5'10 160 lb.",
         "hint_refer_pay": "🎁 Бонусы: пригласи друга — +{ref_ref} тебе и +{ref_new} другу",
         "menu_pricing": "💎 Тарифы",
         "refer_msg": "👥 Пригласи друзей и получай бонусные генерации!\nТвоя ссылка: {link}\n\nПриглашено: {count}\nПолучено бонусов: {earned} генераций",
@@ -690,6 +707,18 @@ T = {
         "btn_support": "📨 Contact support",
         "btn_back": "⬅️ Back",
         "btn_refer": "🎁 Free credits",
+        "body_ask": "👤 Do you want to add height & weight for better garment fit? Optional.",
+        "btn_body_yes": "📏 Add height/weight",
+        "btn_skip": "🙈 Not now",
+        "body_intro": "👤 Body profile (optional)\nSend height and weight in any format (e.g., 178 cm, 72 kg or 5'10 160 lb). I will use it to infer proportions/fit in prompts. Type 'skip' to cancel.",
+        "body_saved": "Saved: {info}.",
+        "body_cleared": "Body profile cleared.",
+        "body_bad": "Could not parse. Examples: 178 cm 72 kg or 5'10 160 lb.",
+        "body_skip_ok": "Got it! You can add later with /body.",
+        "body_intro": "👤 Body profile (optional)\nSend height and weight in any format (e.g., 178 cm, 72 kg or 5'10 160 lb). I will use it to infer proportions/fit in prompts. Type 'skip' to cancel.",
+        "body_saved": "Saved: {info}.",
+        "body_cleared": "Body profile cleared.",
+        "body_bad": "Could not parse. Examples: 178 cm 72 kg or 5'10 160 lb.",
         "hint_refer_pay": "🎁 Tip: invite a friend — +{ref_ref} you · +{ref_new} them",
         "menu_pricing": "💎 Pricing",
         "refer_msg": "👥 Invite friends and earn bonus generations!\nYour link: {link}\n\nInvited: {count}\nBonuses earned: {earned} gens",
@@ -779,6 +808,18 @@ T = {
         "btn_support": "📨 Contact suport",
         "btn_back": "⬅️ Înapoi",
         "btn_refer": "🎁 Generații gratuite",
+        "body_ask": "👤 Vrei să adaugi înălțime și greutate pentru o potrivire mai exactă? Opțional.",
+        "btn_body_yes": "📏 Adaugă înălțime/greutate",
+        "btn_skip": "🙈 Nu acum",
+        "body_intro": "👤 Profil corp (opțional)\nTrimite înălțime și greutate în orice format (ex.: 178 cm, 72 kg sau 5'10 160 lb). Le folosesc pentru proporții/fit în prompturi. Scrie 'skip' pentru anulare.",
+        "body_saved": "Salvat: {info}.",
+        "body_cleared": "Profil corp șters.",
+        "body_bad": "Nu am putut interpreta. Exemple: 178 cm 72 kg sau 5'10 160 lb.",
+        "body_skip_ok": "Am înțeles! Poți adăuga mai târziu cu /body.",
+        "body_intro": "👤 Profil corp (opțional)\nTrimite înălțime și greutate în orice format (ex.: 178 cm, 72 kg sau 5'10 160 lb). Le folosesc pentru proporții/fit în prompturi. Scrie 'skip' pentru anulare.",
+        "body_saved": "Salvat: {info}.",
+        "body_cleared": "Profil corp șters.",
+        "body_bad": "Nu am putut interpreta. Exemple: 178 cm 72 kg sau 5'10 160 lb.",
         "hint_refer_pay": "🎁 Bonus: invită un prieten — +{ref_ref} ție · +{ref_new} lui/ei",
         "menu_pricing": "💎 Prețuri",
         "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
@@ -870,6 +911,18 @@ T = {
         "btn_support": "📨 Support kontaktieren",
         "btn_back": "⬅️ Zurück",
         "btn_refer": "🎁 Kostenlose Credits",
+        "body_ask": "👤 Größe und Gewicht für bessere Passform hinzufügen? Optional.",
+        "btn_body_yes": "📏 Größe/Gewicht angeben",
+        "btn_skip": "🙈 Nicht jetzt",
+        "body_intro": "👤 Körperprofil (optional)\nSende Größe und Gewicht (z.B. 178 cm, 72 kg oder 5'10 160 lb). Wird genutzt für realistische Proportionen/Fit. Schreibe 'skip' zum Abbrechen.",
+        "body_saved": "Gespeichert: {info}.",
+        "body_cleared": "Körperprofil gelöscht.",
+        "body_bad": "Konnte nicht erkennen. Beispiele: 178 cm 72 kg oder 5'10 160 lb.",
+        "body_skip_ok": "Alles klar! Du kannst später per /body ergänzen.",
+        "body_intro": "👤 Körperprofil (optional)\nSende Größe und Gewicht (z.B. 178 cm, 72 kg oder 5'10 160 lb). Wird genutzt für realistische Proportionen/Fit. Schreibe 'skip' zum Abbrechen.",
+        "body_saved": "Gespeichert: {info}.",
+        "body_cleared": "Körperprofil gelöscht.",
+        "body_bad": "Konnte nicht erkennen. Beispiele: 178 cm 72 kg oder 5'10 160 lb.",
         "hint_refer_pay": "🎁 Tipp: Freund einladen — +{ref_ref} dir · +{ref_new} ihm/ihr",
         "menu_pricing": "💎 Preise",
         "refer_msg": "👥 Lade Freunde ein und erhalte Bonus‑Generierungen!\nDein Link: {link}\n\nEingeladen: {count}\nErhaltene Boni: {earned}",
@@ -1533,6 +1586,82 @@ def build_outfit_prompt(style_key: str, extra: str | None = None) -> str:
     text = f"{text}, respectful"
     return enforce_safe_prompt(text)
 
+# ===== Body parsing/helpers =====
+_RE_NUM = re.compile(r"(?:(\d+(?:[\.,]\d+)?)\s*(cm|мм|mm|m|метр|метров|см)\b|(?:(\d+))\s*(ft|feet|')\s*(\d+)?\s*(in|inch|inches|\")?|(?:(\d+(?:[\.,]\d+)?))\s*(kg|кг|килограмм|lb|lbs|pound|pounds|фунт[а-я]*)\b|\b(\d{2,3})\b)", re.I)
+
+def _parse_body(text: str) -> Dict[str, object]:
+    t = (text or "").lower().strip()
+    height_cm: float | None = None
+    weight_kg: float | None = None
+
+    # simple heuristics for formats: "180 cm", "1.78 m", "5'10", "5 ft 10 in"
+    # and weights: "72 kg", "160 lb"
+    # fallbacks: bare numbers with ranges
+
+    # feet/inches
+    m = re.search(r"(\d+)\s*(?:ft|feet|')\s*(\d+)?\s*(?:in|inch|inches|\")?", t)
+    if m:
+        ft = int(m.group(1))
+        inc = int(m.group(2) or 0)
+        height_cm = ft * 30.48 + inc * 2.54
+    # meters
+    m = re.search(r"(\d+[\.,]\d+)\s*m\b", t)
+    if (not height_cm) and m:
+        height_cm = float(m.group(1).replace(',', '.')) * 100.0
+    # centimeters
+    m = re.search(r"(\d{2,3})\s*(?:cm|см|мм|mm)\b", t)
+    if (not height_cm) and m:
+        val = int(m.group(1))
+        height_cm = float(val if 'cm' in m.group(0) or 'см' in m.group(0) else val / 10.0)
+    # bare height candidate 140..220
+    if not height_cm:
+        m = re.search(r"\b(1\d{2}|2[0-2]\d)\b", t)
+        if m:
+            height_cm = float(m.group(1))
+
+    # weight kg
+    m = re.search(r"(\d+[\.,]?\d*)\s*(?:kg|кг|килограм)", t)
+    if m:
+        weight_kg = float(m.group(1).replace(',', '.'))
+    # weight lb
+    m = re.search(r"(\d+[\.,]?\d*)\s*(?:lb|lbs|pound)", t)
+    if (not weight_kg) and m:
+        weight_kg = float(m.group(1).replace(',', '.')) * 0.45359237
+    # bare weight candidate 40..200 (assume kg)
+    if not weight_kg:
+        m = re.search(r"\b([4-9]\d|1\d{2}|200)\b", t)
+        if m:
+            weight_kg = float(m.group(1))
+
+    out: Dict[str, object] = {}
+    if height_cm and 120.0 <= height_cm <= 230.0:
+        out['height_cm'] = round(height_cm, 1)
+    if weight_kg and 35.0 <= weight_kg <= 250.0:
+        out['weight_kg'] = round(weight_kg, 1)
+    if out:
+        out['raw'] = text.strip()
+    return out
+
+def _body_to_userline(d: Dict[str, object]) -> str:
+    h = d.get('height_cm')
+    w = d.get('weight_kg')
+    parts = []
+    if isinstance(h, (int, float)):
+        parts.append(f"рост ~ {h:.0f} см")
+    if isinstance(w, (int, float)):
+        parts.append(f"вес ~ {w:.0f} кг")
+    return ", ".join(parts)
+
+def _body_to_gpt_hint(d: Dict[str, object]) -> str:
+    h = d.get('height_cm')
+    w = d.get('weight_kg')
+    segs = []
+    if isinstance(h, (int, float)):
+        segs.append(f"height ~{h:.0f} cm")
+    if isinstance(w, (int, float)):
+        segs.append(f"weight ~{w:.0f} kg")
+    return "; ".join(segs)
+
 def craft_outfit_prompt_from_image(clothes_bytes: bytes, extra: Optional[str] = None) -> Optional[str]:
     if not OPENAI_API_KEY or OpenAI is None:
         return None
@@ -1573,7 +1702,7 @@ def craft_outfit_prompt_from_image(clothes_bytes: bytes, extra: Optional[str] = 
         print("Outfit Vision prompt error:", str(e)[:200])
         return None
 
-def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = True) -> str:
+def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = True, body_hint: Optional[str] = None) -> str:
     safe_raw = enforce_safe_prompt(raw_prompt)
     if not allow_refine or os.getenv("DISABLE_GPT_REFINE") == "1" or not OPENAI_API_KEY or OpenAI is None:
         base = safe_raw
@@ -1582,9 +1711,13 @@ def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = Tru
             client = OpenAI(api_key=OPENAI_API_KEY)
             sys = ("You are a prompt writer for a face-preserving image generation pipeline. "
                    "Rewrite the user's brief into a concise, vivid, SFW English prompt that "
-                   "keeps the same person and the same intent. Ensure: fully clothed, SFW.")
-            user = (f"User prompt: {raw_prompt}\n\n"
-                    "Rewrite to one line. Add environment, mood, lighting, camera. Keep it respectful and SFW.")
+                   "keeps the same person and the same intent. Ensure: fully clothed, SFW. "
+                   "If body information is provided, infer realistic body proportions and garment fit from it, "
+                   "but do NOT mention any numeric measurements explicitly.")
+            body_line = (f"User body: {body_hint}.\n" if body_hint else "")
+            user = (f"{body_line}User prompt: {raw_prompt}\n\n"
+                    "Rewrite to one line. Add environment, mood, lighting, camera. Keep it respectful and SFW. "
+                    "Use the body info implicitly (fit, proportions), without quoting numbers.")
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[{"role": "system", "content": sys},
@@ -1908,7 +2041,15 @@ def generate_image_from_bytes(
         return None
 
     # In strict (Copy Mode), avoid GPT rephrasing to keep scene constraints intact
-    refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=not strict)
+    # Optional user body profile
+    body_hint = None
+    try:
+        if user_id is not None and USER_BODY.get(user_id):
+            body_hint = _body_to_gpt_hint(USER_BODY[user_id])
+    except Exception:
+        body_hint = None
+    allow_refine = (not strict) or (strict and bool(body_hint))
+    refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=allow_refine, body_hint=body_hint)
     if user_id is not None:
         USER_LAST_REFINED_PROMPT[user_id] = refined
     if strict and lock_scene:
@@ -2171,6 +2312,13 @@ def kb_help(chat_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=refer_txt, callback_data="refer_open")],
         [InlineKeyboardButton(text=support_txt, url="https://t.me/piciriga")],
         [InlineKeyboardButton(text=back_txt, callback_data="back_main")],
+    ])
+
+def kb_body_ask(chat_id: int) -> InlineKeyboardMarkup:
+    lang = L(chat_id)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lang.get("btn_body_yes", "📏 Add height/weight"), callback_data="body_open")],
+        [InlineKeyboardButton(text=lang.get("btn_skip", "🙈 Not now"), callback_data="body_skip")],
     ])
 
 def create_style_share(style_bytes: bytes) -> Optional[str]:
@@ -2477,7 +2625,19 @@ async def cmd_outfit(m: Message):
     USER_COPY_STYLE.pop(uid, None)
     USER_VIDEO_MODE.discard(uid)
     USER_OUTFIT_MODE.add(uid)
-    await safe_answer(m, L(uid)["outfit_intro"], reply_markup=kb_outfit_styles(uid))
+    await safe_answer(m, L(uid)["outfit_intro"])  # photo-first flow
+
+@dp.message(Command("body"))
+async def cmd_body(m: Message):
+    uid = m.chat.id
+    txt = (m.text or "").strip().lower()
+    # Quick clear: /body clear
+    if txt.split()[-1:] == ["clear"]:
+        USER_BODY.pop(uid, None)
+        USER_BODY_WAIT.discard(uid)
+        return await safe_answer(m, L(uid)["body_cleared"])
+    USER_BODY_WAIT.add(uid)
+    await safe_answer(m, L(uid)["body_intro"])
 
 
 @dp.message(Command("start"))
@@ -2631,6 +2791,11 @@ async def cmd_clear(m: Message):
     USER_COPY_MODE.discard(m.chat.id)
     USER_BATCH_PHOTOS.pop(m.chat.id, None)
     USER_BATCH_MODE.discard(m.chat.id)
+    USER_OUTFIT_CLOTHES.pop(m.chat.id, None)
+    USER_OUTFIT_MODE.discard(m.chat.id)
+    USER_OUTFIT_TEXT.pop(m.chat.id, None)
+    USER_BODY_WAIT.discard(m.chat.id)
+    USER_BODY.pop(m.chat.id, None)
     await safe_answer(m, L(m.chat.id)["cleared"])
 
 @dp.message(Command("tos"))
@@ -2712,6 +2877,20 @@ async def cb_back_main(c: CallbackQuery):
 async def cb_refer_open(c: CallbackQuery):
     await safe_cb_answer(c)
     await cmd_refer(c.message)
+
+@dp.callback_query(F.data == "body_open")
+async def cb_body_open(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_BODY_WAIT.add(chat_id)
+    await c.message.answer(L(chat_id)["body_intro"])
+
+@dp.callback_query(F.data == "body_skip")
+async def cb_body_skip(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_BODY_ASKED.add(chat_id)
+    await c.message.answer(L(chat_id)["body_skip_ok"])
 
 @dp.callback_query(F.data == "outfit_open")
 async def cb_outfit_open(c: CallbackQuery):
@@ -2953,6 +3132,14 @@ async def cb_pub_group(c: CallbackQuery):
 async def on_photo(m: Message):
     if m.chat.id not in USER_LANG:
         USER_LANG[m.chat.id] = locale_to_lang(getattr(m.from_user, "language_code", None))
+
+    # Optionally nudge for body profile once
+    try:
+        if (m.chat.id not in USER_BODY) and (m.chat.id not in USER_BODY_ASKED):
+            USER_BODY_ASKED.add(m.chat.id)
+            await safe_answer(m, L(m.chat.id)["body_ask"], reply_markup=kb_body_ask(m.chat.id))
+    except Exception:
+        pass
 
     f = await bot.get_file(m.photo[-1].file_id)
     b = await bot.download_file(f.file_path)
@@ -3290,6 +3477,24 @@ async def on_photo(m: Message):
 # ===================== FLOW: TEXT =====================
 @dp.message(F.text & ~F.text.startswith("/"))
 async def on_prompt(m: Message):
+    # If waiting for body profile input
+    if m.chat.id in USER_BODY_WAIT:
+        s = (m.text or "").strip()
+        if s.lower() in ("skip", "пропустить", "нет", "no"):
+            USER_BODY_WAIT.discard(m.chat.id)
+            return await safe_answer(m, L(m.chat.id)["body_cleared"])  # cancel
+        if s.lower() in ("clear", "очистить"):
+            USER_BODY.pop(m.chat.id, None)
+            USER_BODY_WAIT.discard(m.chat.id)
+            return await safe_answer(m, L(m.chat.id)["body_cleared"])
+        data = _parse_body(s)
+        if data:
+            USER_BODY[m.chat.id] = data
+            USER_BODY_WAIT.discard(m.chat.id)
+            return await safe_answer(m, L(m.chat.id)["body_saved"].format(info=_body_to_userline(data)))
+        else:
+            return await safe_answer(m, L(m.chat.id)["body_bad"])
+
     # Если включён Batch Mode — генерим пакет по накопленным фото
     if m.chat.id in USER_BATCH_MODE:
         text = m.text.strip()
@@ -3378,6 +3583,14 @@ async def on_prompt(m: Message):
         USER_OUTFIT_TEXT[m.chat.id] = m.text.strip()
         await safe_answer(m, L(m.chat.id)["outfit_prompt_updated"])
         return
+
+    # Optional one-time body profile ask if no body stored
+    try:
+        if (m.chat.id not in USER_BODY) and (m.chat.id not in USER_BODY_ASKED):
+            USER_BODY_ASKED.add(m.chat.id)
+            await safe_answer(m, L(m.chat.id)["body_ask"], reply_markup=kb_body_ask(m.chat.id))
+    except Exception:
+        pass
 
     # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
     if m.chat.id in USER_COPY_MODE:
@@ -3576,6 +3789,7 @@ async def on_startup():
             BotCommand(command="video",   description="Видео‑анимация"),
             BotCommand(command="outfit",  description="Смена одежды"),
             BotCommand(command="batch",   description="Пакетная генерация"),
+            BotCommand(command="body",    description="Рост/вес (по желанию)"),
             BotCommand(command="help",    description="Помощь"),
             BotCommand(command="clear",   description="Очистить память"),
             BotCommand(command="version", description="Версия"),
