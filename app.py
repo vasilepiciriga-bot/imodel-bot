@@ -2601,10 +2601,17 @@ async def cmd_stats(m: Message):
 
 @dp.message(Command("copy"))
 async def cmd_copy(m: Message):
-    USER_COPY_MODE.add(m.chat.id)
-    USER_COPY_STYLE.pop(m.chat.id, None)
-    USER_COPY_PROMPT.pop(m.chat.id, None)
-    await safe_answer(m, L(m.chat.id)["copy_intro"])
+    # Toggle Copy Mode for convenience
+    uid = m.chat.id
+    if uid in USER_COPY_MODE:
+        USER_COPY_MODE.discard(uid)
+        USER_COPY_STYLE.pop(uid, None)
+        USER_COPY_PROMPT.pop(uid, None)
+        return await safe_answer(m, L(uid)["copy_exit"])
+    USER_COPY_MODE.add(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_COPY_PROMPT.pop(uid, None)
+    await safe_answer(m, L(uid)["copy_intro"])
 
 @dp.message(Command("batch"))
 async def cmd_batch(m: Message):
@@ -3042,10 +3049,17 @@ async def cb_buy_open(c: CallbackQuery):
 
 @dp.callback_query(F.data == "copy_open")
 async def cb_copy_open(c: CallbackQuery):
-    USER_COPY_MODE.add(c.message.chat.id)
-    USER_COPY_STYLE.pop(c.message.chat.id, None)
+    uid = c.message.chat.id
+    if uid in USER_COPY_MODE:
+        USER_COPY_MODE.discard(uid)
+        USER_COPY_STYLE.pop(uid, None)
+        await safe_cb_answer(c)
+        await c.message.answer(L(uid)["copy_exit"])
+        return
+    USER_COPY_MODE.add(uid)
+    USER_COPY_STYLE.pop(uid, None)
     await safe_cb_answer(c)
-    await c.message.answer(L(c.message.chat.id)["copy_intro"])
+    await c.message.answer(L(uid)["copy_intro"])
 
 @dp.callback_query(F.data == "pub_yes")
 async def cb_pub_yes(c: CallbackQuery):
@@ -3221,8 +3235,8 @@ async def on_photo(m: Message):
             return await safe_answer(m, L(m.chat.id)["batch_limit"].format(limit=BATCH_MAX))
         return await safe_answer(m, L(m.chat.id)["batch_added"].format(n=n, limit=BATCH_MAX))
 
-    # ----- Copy Mode -----
-    if m.chat.id in USER_COPY_MODE:
+    # ----- Copy Mode (only when no caption provided) -----
+    if (m.chat.id in USER_COPY_MODE) and not ((m.caption or "").strip()):
         if m.chat.id not in USER_COPY_STYLE:
             # это style-reference
             USER_COPY_STYLE[m.chat.id] = img_bytes
@@ -3460,6 +3474,9 @@ async def on_photo(m: Message):
     ensure_user_credit(m.chat.id)
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
         return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+
+    # If user had Copy Mode ON but provided a caption, prefer standard flow and exit Copy Mode to avoid confusion
+    USER_COPY_MODE.discard(m.chat.id)
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     seed_int = (hash(m.chat.id) % 10_000_000)
