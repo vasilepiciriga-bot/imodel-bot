@@ -454,6 +454,8 @@ _credits_load()
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
 LAST_PHOTO: Dict[int, bytes] = {}
+# Track which reference photo the last prompt belonged to (md5)
+USER_LAST_REF_HASH: Dict[int, str] = {}
 # Deduplication of published albums (md5 keys with TTL)
 RECENT_PUB: Dict[str, float] = {}
 RECENT_PUB_TTL = 600.0  # 10 minutes
@@ -2985,6 +2987,10 @@ async def cb_preset_pick(c: CallbackQuery):
         _credits_save()
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = preset.prompt
+    try:
+        USER_LAST_REF_HASH[chat_id] = hashlib.md5(ref).hexdigest()
+    except Exception:
+        pass
     LAST_PHOTO[chat_id] = result
     stats_incr("gens_ok", 1)
     _uadd(chat_id, "gens_ok", 1)
@@ -3303,6 +3309,10 @@ async def on_photo(m: Message):
                 _credits_save()
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
+            try:
+                USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+            except Exception:
+                pass
             LAST_PHOTO[m.chat.id] = final_bytes
             stats_incr("gens_copy_ok", 1)
             _uadd(m.chat.id, "gens_copy_ok", 1)
@@ -3386,6 +3396,10 @@ async def on_photo(m: Message):
         USER_OUTFIT_CLOTHES.pop(m.chat.id, None)
         USER_LAST_OUTPUT[m.chat.id] = final_bytes
         USER_LAST_PROMPT[m.chat.id] = outfit_prompt
+        try:
+            USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+        except Exception:
+            pass
         LAST_PHOTO[m.chat.id] = final_bytes
         stats_incr("gens_ok", 1)
         _uadd(m.chat.id, "gens_ok", 1)
@@ -3442,6 +3456,10 @@ async def on_photo(m: Message):
                     _credits_save()
                 USER_LAST_OUTPUT[m.chat.id] = final_bytes
                 USER_LAST_PROMPT[m.chat.id] = preset.prompt
+                try:
+                    USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+                except Exception:
+                    pass
                 LAST_PHOTO[m.chat.id] = final_bytes
                 stats_incr("gens_ok", 1)
                 _uadd(m.chat.id, "gens_ok", 1)
@@ -3498,6 +3516,10 @@ async def on_photo(m: Message):
         _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
+    try:
+        USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+    except Exception:
+        pass
     LAST_PHOTO[m.chat.id] = final_bytes
     stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
@@ -3624,6 +3646,12 @@ async def on_prompt(m: Message):
                 await post_before_after_to_channel(m.chat.id)
             except Exception as e:
                 print("AUTO_POST error:", str(e)[:160])
+        # Track last ref hash for additive prompt continuity (use first photo of batch)
+        try:
+            if first_ref:
+                USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(first_ref).hexdigest()
+        except Exception:
+            pass
         return
 
     # Если включён Outfit Mode — считаем текст уточнением стиля
@@ -3669,11 +3697,28 @@ async def on_prompt(m: Message):
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
         return await safe_answer(m, L(m.chat.id)["credits_none"])
 
-    wait = await safe_answer(m, L(m.chat.id)["gen"])
+    # Determine current reference and whether to append to previous prompt
     ref = refs[-1]
+    try:
+        ref_hash = hashlib.md5(ref).hexdigest()
+    except Exception:
+        ref_hash = None
+    # Support additive prompt: if last gen used the same ref, append new text to previous prompt
+    base_prompt = USER_LAST_PROMPT.get(m.chat.id)
+    last_ref_hash = USER_LAST_REF_HASH.get(m.chat.id)
+    combined_text = text
+    if base_prompt and base_prompt != text and last_ref_hash and ref_hash and (last_ref_hash == ref_hash):
+        combined_text = f"{base_prompt}. {text}".strip()
+        # Re-check safety on the combined prompt
+        if blocked(combined_text):
+            stats_incr("blocked", 1)
+            _uadd(m.chat.id, "blocked", 1)
+            return await safe_answer(m, L(m.chat.id)["blocked"])
+
+    wait = await safe_answer(m, L(m.chat.id)["gen"])
     seed_int = (hash(m.chat.id) % 10_000_000)
     final_bytes = generate_image_from_bytes(
-        ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+        ref, combined_text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
         seed=seed_int, user_id=m.chat.id
     )
     if not final_bytes:
@@ -3686,7 +3731,12 @@ async def on_prompt(m: Message):
         USER_CREDITS[m.chat.id] -= 1
         _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
-    USER_LAST_PROMPT[m.chat.id] = text
+    USER_LAST_PROMPT[m.chat.id] = combined_text
+    try:
+        if ref_hash:
+            USER_LAST_REF_HASH[m.chat.id] = ref_hash
+    except Exception:
+        pass
     LAST_PHOTO[m.chat.id] = final_bytes
     stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
@@ -3744,6 +3794,10 @@ async def cb_more(c: CallbackQuery):
         _credits_save()
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = base_prompt
+    try:
+        USER_LAST_REF_HASH[chat_id] = hashlib.md5(ref).hexdigest()
+    except Exception:
+        pass
     LAST_PHOTO[chat_id] = result
     STATS["gens_ok"] += 1
     _uadd(chat_id, "gens_ok", 1)
