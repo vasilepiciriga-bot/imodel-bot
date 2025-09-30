@@ -3053,6 +3053,7 @@ async def cb_copy_open(c: CallbackQuery):
     if uid in USER_COPY_MODE:
         USER_COPY_MODE.discard(uid)
         USER_COPY_STYLE.pop(uid, None)
+        USER_COPY_PROMPT.pop(uid, None)
         await safe_cb_answer(c)
         await c.message.answer(L(uid)["copy_exit"])
         return
@@ -3477,6 +3478,8 @@ async def on_photo(m: Message):
 
     # If user had Copy Mode ON but provided a caption, prefer standard flow and exit Copy Mode to avoid confusion
     USER_COPY_MODE.discard(m.chat.id)
+    USER_COPY_STYLE.pop(m.chat.id, None)
+    USER_COPY_PROMPT.pop(m.chat.id, None)
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     seed_int = (hash(m.chat.id) % 10_000_000)
