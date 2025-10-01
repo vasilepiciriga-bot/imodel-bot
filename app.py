@@ -1005,7 +1005,8 @@ def L(chat_id: int) -> dict:
 def locale_to_lang(code: Optional[str]) -> str:
     if not code:
         return LANG_DEFAULT
-    code = code.lower()
+    # Normalize: lowercase and unify separators (ru_RU → ru-ru)
+    code = str(code).strip().lower().replace("_", "-")
     base = code.split("-")[0]
     if base in ("ru", "uk", "be"):
         return "ru"
