@@ -2821,6 +2821,7 @@ async def cmd_clear(m: Message):
     USER_REFS.pop(m.chat.id, None)
     USER_LAST_OUTPUT.pop(m.chat.id, None)
     USER_LAST_PROMPT.pop(m.chat.id, None)
+    USER_LAST_REF_HASH.pop(m.chat.id, None)
     USER_HISTORY.pop(m.chat.id, None)
     LAST_REF.pop(m.chat.id, None)
     LAST_PHOTO.pop(m.chat.id, None)
@@ -3937,9 +3938,13 @@ async def telegram_webhook(request: Request):
         user_obj = (t.get("from") or {})
         uid = user_obj.get("id")
         uname = user_obj.get("username")
+        lang_code = user_obj.get("language_code")
         if isinstance(uid, int):
             STATS_USERS.add(uid)
             _touch_user(uid, uname)
+            # Ensure per-user language is set from device/app locale as early as possible
+            if uid not in USER_LANG:
+                USER_LANG[uid] = locale_to_lang(lang_code)
     except Exception:
         pass
     update = Update.model_validate(data)
