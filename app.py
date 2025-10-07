@@ -599,7 +599,7 @@ T = {
         "need_photo": "Сначала пришли фото лица.",
         "photo_ok": "Фото получено ✅ Теперь опишите сцену или используйте /presets.",
         "gen": "Генерирую… ⏳",
-        "fail": "Не удалось сгенерировать. Попробуйте изменить описание или фото.",
+        "fail": "Не удалось сгенерировать. Попробуйте другое фото или стиль. Можно также добавить текст‑описание одним сообщением.",
         "ready": "Готово ✅",
         "credits_none": "Нет кредитов. Используй /buy или /promo. Также можно пригласить друга: /refer",
         "hint_refer_zero": "👥 У вас 0 генераций. Пригласите друга — +{ref_ref} вам и +{ref_new} ему: /refer",
@@ -700,7 +700,7 @@ T = {
         "need_photo": "Please send a face photo first.",
         "photo_ok": "Photo received ✅ Now describe the scene or use /presets.",
         "gen": "Working… ⏳",
-        "fail": "Generation failed. Try adjusting your description or selfie.",
+        "fail": "Generation failed. Try a different photo or style. You can also add a short text prompt in one message.",
         "ready": "Done ✅",
         "credits_none": "No credits. Use /buy or /promo. You can also invite a friend: /refer",
         "hint_refer_zero": "👥 You have 0 credits. Invite a friend — +{ref_ref} you and +{ref_new} them: /refer",
@@ -3512,7 +3512,13 @@ async def on_photo(m: Message):
                     seed=seed_int, user_id=m.chat.id
                 )
                 if not final_bytes:
-                    if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    if wait:
+                        await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    # After a preset auto-run fails, explicitly prompt for a description
+                    try:
+                        await safe_answer(m, L(m.chat.id)["photo_ok"])
+                    except Exception:
+                        pass
                     stats_incr("gens_fail", 1)
                     _uadd(m.chat.id, "gens_fail", 1)
                     return
