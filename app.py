@@ -320,6 +320,9 @@ def _s3_get_text(key: str) -> Optional[str]:
 
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
+# Optional identity-locking model (e.g., InstantID). If set, we will try it first.
+INSTANTID_MODEL  = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
+INSTANTID_FIRST  = os.getenv("INSTANTID_FIRST", "1") == "1"
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
@@ -342,6 +345,9 @@ try:
 except Exception:
     GALLERY_CHANNEL_ID = None
 AUTO_POST = os.getenv("AUTO_POST", "0") == "1"  # if 1: авто-пост в канал «до/после»
+
+# Global tuning toggles
+STRICT_ID_MODE = os.getenv("STRICT_ID_MODE", "0") == "1"  # strengthen identity negatives in normal mode
 
 # Optional group for manual publishing
 PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "")
@@ -2135,13 +2141,76 @@ def generate_image_from_bytes(
             except Exception:
                 print("→ Не удалось подготовить style-ref (S3/data URL)")
 
+    def _compose_negative(is_strict: bool, lock_scene_local: bool) -> str:
+        # Optionally enforce stricter negatives even in non-strict flows
+        _strict = is_strict or STRICT_ID_MODE
+        if _strict and lock_scene_local:
+            return f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
+        if _strict:
+            return f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
+        return NEGATIVE_LOCK
+
+    def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
+        if not REPLICATE_API_TOKEN or not INSTANTID_MODEL:
+            return None
+        neg = _compose_negative(strict, lock_scene)
+        inputs_common = {
+            "prompt": p,
+            "negative_prompt": neg,
+        }
+        if seed_val is not None:
+            inputs_common["seed"] = seed_val
+
+        # If we have a style reference, try style + face combos first
+        if style_url:
+            variants: List[Dict[str, object]] = [
+                {"image": style_url, "face_image": src_url},
+                {"image": style_url, "id_image": src_url},
+                {"style_image": style_url, "face_image": src_url},
+                {"style": style_url, "face_image": src_url},
+            ]
+            cfgs: List[Dict[str, object]] = [
+                {},
+                {"guidance_scale": 7.5},
+                {"num_inference_steps": 28},
+                {"strength": 0.8},
+            ]
+            for v in variants:
+                for c in cfgs:
+                    inp = dict(inputs_common); inp.update(v); inp.update(c)
+                    url = replicate_generate(INSTANTID_MODEL, inp)
+                    if url == "SENSITIVE":
+                        return "SENSITIVE"
+                    if url:
+                        print("InstantID OK (style+face)", v.keys(), c)
+                        return url
+
+        # Selfie only: pass as face reference
+        face_keys = [
+            {"face_image": src_url},
+            {"id_image": src_url},
+            {"identity": src_url},
+            {"person_image": src_url},
+        ]
+        cfgs2: List[Dict[str, object]] = [
+            {},
+            {"guidance_scale": 7.5},
+            {"num_inference_steps": 28},
+            {"strength": 0.8},
+        ]
+        for v in face_keys:
+            for c in cfgs2:
+                inp = dict(inputs_common); inp.update(v); inp.update(c)
+                url = replicate_generate(INSTANTID_MODEL, inp)
+                if url == "SENSITIVE":
+                    return "SENSITIVE"
+                if url:
+                    print("InstantID OK (face only)", v.keys(), c)
+                    return url
+        return None
+
     def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
-        if strict and lock_scene:
-            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
-        elif strict:
-            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
-        else:
-            neg = NEGATIVE_LOCK
+        neg = _compose_negative(strict, lock_scene)
         inputs_common = {
             "prompt": p,
             "negative_prompt": neg,
@@ -2250,15 +2319,28 @@ def generate_image_from_bytes(
 
         return None
 
-    gen_url = try_nano(refined, seed_val=seed)
+    # Try identity-preserving model first (if configured)
+    gen_url: Optional[str] = None
+    if INSTANTID_FIRST and INSTANTID_MODEL:
+        gen_url = try_instantid(refined, seed_val=seed)
+    if not gen_url:
+        gen_url = try_nano(refined, seed_val=seed)
     if gen_url == "SENSITIVE":
         print("→ Sensitive → safer variant")
-        gen_url = try_nano(safer_variant(refined), seed_val=seed)
+        safer = safer_variant(refined)
+        if INSTANTID_FIRST and INSTANTID_MODEL:
+            gen_url = try_instantid(safer, seed_val=seed)
+        if not gen_url:
+            gen_url = try_nano(safer, seed_val=seed)
 
     # Если «уплыло лицо» — усилить замки и повторить 1 раз
     if (not gen_url or not str(gen_url).startswith("http")) and not strict:
-        hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features. {SCENE_LOCK}"
-        gen_url = try_nano(hard_lock, seed_val=seed)
+        hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features."
+        # Do NOT force scene lock unless strict scene copy is requested
+        if INSTANTID_FIRST and INSTANTID_MODEL:
+            gen_url = try_instantid(hard_lock, seed_val=seed)
+        if not gen_url:
+            gen_url = try_nano(hard_lock, seed_val=seed)
 
     if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
         print("→ gen_url пустой/sensitive")
