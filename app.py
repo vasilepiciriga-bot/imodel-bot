@@ -1570,8 +1570,13 @@ IDENTITY_LOCK = (
     "No face reshaping, no beautification filters, no de-aging, no make-up exaggeration."
 )
 
+GENDER_LOCK = (
+    "Keep the SAME gender as in the input selfie. Do not change gender; "
+    "do not feminize a male face and do not masculinize a female face."
+)
+
 NEGATIVE_LOCK = (
-    "different person, identity change, changed ethnicity, de-aged, "
+    "different person, identity change, gender swap, changed gender, changed ethnicity, de-aged, "
     "face morph, face swap artifacts, over-smooth skin, plastic doll, uncanny face, "
     "warped features, duplicate face, extra fingers, extra hands, artifacts, lowres"
 )
@@ -2097,9 +2102,9 @@ def generate_image_from_bytes(
         body_hint = None
     allow_refine = (not strict) or (strict and bool(body_hint))
     refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=allow_refine, body_hint=body_hint)
-    # Always enforce identity preservation explicitly in the text prompt
+    # Always enforce identity + gender preservation explicitly in the text prompt
     try:
-        refined = f"{refined}. {IDENTITY_LOCK}"
+        refined = f"{refined}. {IDENTITY_LOCK}. {GENDER_LOCK}"
     except Exception:
         pass
     if user_id is not None:
