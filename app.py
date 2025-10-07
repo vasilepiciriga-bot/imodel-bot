@@ -2111,14 +2111,24 @@ def generate_image_from_bytes(
 
     src_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
     if not src_url:
-        print("→ Не удалось получить S3 presigned URL")
-        return None
+        try:
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            src_url = f"data:image/jpeg;base64,{b64}"
+            print("→ S3 presign unavailable — using data URL source")
+        except Exception:
+            print("→ Не удалось подготовить источник (S3/data URL)")
+            return None
 
     style_url: Optional[str] = None
     if strict and style_bytes:
         style_url = s3_put_and_presign(style_bytes, key_prefix="style/")
         if not style_url:
-            print("→ Не удалось получить S3 URL для style-ref (продолжаем без него)")
+            try:
+                b64s = base64.b64encode(style_bytes).decode("utf-8")
+                style_url = f"data:image/jpeg;base64,{b64s}"
+                print("→ Style S3 unavailable — using data URL for style-ref")
+            except Exception:
+                print("→ Не удалось подготовить style-ref (S3/data URL)")
 
     def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
         if strict and lock_scene:
@@ -2558,7 +2568,7 @@ async def cmd_ping(m: Message):
 @dp.message(Command("diag"))
 async def cmd_diag(m: Message):
     try:
-        langs = ",".join(_GROUP_LANGS) if ' _GROUP_LANGS' or _GROUP_LANGS else "-"
+        langs = ",".join(_GROUP_LANGS) if _GROUP_LANGS else "-"
     except Exception:
         langs = "-"
     last = int(time.time() - GROUP_POST_LAST_AT) if GROUP_POST_LAST_AT else None
@@ -3916,9 +3926,16 @@ async def on_startup():
         print("Publish group:", PUBLISH_GROUP_ID)
     print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>")
 
-    me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
-    BOT_USERNAME_GLOBAL = me.username
+    try:
+        if BOT_TOKEN:
+            me = await bot.get_me()
+            BOT_USERNAME_GLOBAL = getattr(me, "username", None)
+        else:
+            BOT_USERNAME_GLOBAL = None
+    except Exception as e:
+        BOT_USERNAME_GLOBAL = None
+        print("get_me error:", str(e)[:160])
 
     if BOT_TOKEN and WEBHOOK_BASE and not DISABLE_WEBHOOK:
         await ensure_webhook()
