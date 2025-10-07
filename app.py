@@ -2097,6 +2097,11 @@ def generate_image_from_bytes(
         body_hint = None
     allow_refine = (not strict) or (strict and bool(body_hint))
     refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=allow_refine, body_hint=body_hint)
+    # Always enforce identity preservation explicitly in the text prompt
+    try:
+        refined = f"{refined}. {IDENTITY_LOCK}"
+    except Exception:
+        pass
     if user_id is not None:
         USER_LAST_REFINED_PROMPT[user_id] = refined
     if strict and lock_scene:
@@ -2171,7 +2176,34 @@ def generate_image_from_bytes(
                 except Exception as e:
                     print("NanoBanana variant exception:", str(e)[:200])
 
-        # 1) image_input (список) — только selfie
+        # 1) identity-aware single-image variants (for models that accept face_image/identity)
+        try:
+            face_keys_variants = [
+                {"image": src_url, "face_image": src_url},
+                {"image": src_url, "person_image": src_url},
+                {"image": src_url, "target_face": src_url},
+                {"image": src_url, "identity": src_url},
+                {"face_image": src_url},
+                {"person_image": src_url},
+                {"target_face": src_url},
+                {"identity": src_url},
+                {"reference": src_url},
+            ]
+            for variant in face_keys_variants:
+                for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+                    inp = dict(inputs_common)
+                    inp.update(cfg_extra)
+                    inp.update(variant)
+                    url = replicate_generate(NANOBANANA_MODEL, inp)
+                    if url == "SENSITIVE":
+                        return "SENSITIVE"
+                    if url:
+                        print("NanoBanana OK (identity keys)", variant.keys(), cfg_extra)
+                        return url
+        except Exception as e:
+            print("NanoBanana identity-keys exception:", str(e)[:200])
+
+        # 2) image_input (список) — только selfie
         try:
             for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
                 inp = dict(inputs_common)
@@ -2186,7 +2218,7 @@ def generate_image_from_bytes(
         except Exception as e:
             print("NanoBanana image_input exception:", str(e)[:200])
 
-        # 2) image (одна) — только selfie
+        # 3) image (одна) — только selfie
         try:
             for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
                 inp = dict(inputs_common)
