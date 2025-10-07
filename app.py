@@ -49,6 +49,8 @@ BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
 WEBHOOK_BASE   = os.getenv("WEBHOOK_BASE", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret123")
 WEBHOOK_URL = f"{WEBHOOK_BASE}/?secret={WEBHOOK_SECRET}"
+# Allow running a secondary instance (e.g., worker) without resetting webhook
+DISABLE_WEBHOOK = os.getenv("DISABLE_WEBHOOK", "0") == "1"
 
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
@@ -504,6 +506,20 @@ REF_MAP: Dict[int, int] = {}
 REF_STATS: Dict[int, Dict[str, int]] = {}
 
 BOT_USERNAME_GLOBAL = None
+
+# ===================== SEED HELPERS ===================
+def stable_seed_from_int(val: int, offset: int = 0) -> int:
+    """Stable, cross-process seed from an integer (e.g., user/chat id).
+    Python's built-in hash() is randomized per-process; avoid it for seeds.
+    """
+    try:
+        base = int(hashlib.md5(str(int(val)).encode("utf-8")).hexdigest()[:8], 16)
+    except Exception:
+        try:
+            base = abs(int(val)) % 10_000_000
+        except Exception:
+            base = random.randint(0, 9_999_999)
+    return (base + int(offset)) % 10_000_000
 
 # ===================== PRESETS =======================
 # 24 styled presets: short labels and hidden prompts
@@ -2975,7 +2991,7 @@ async def cb_preset_pick(c: CallbackQuery):
         return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    seed_int = ((hash(chat_id) % 10_000_000) + idx)
+    seed_int = stable_seed_from_int(chat_id, offset=idx)
     result = generate_image_from_bytes(
         ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
         seed=seed_int, user_id=chat_id
@@ -3443,7 +3459,7 @@ async def on_photo(m: Message):
                 if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
                     return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
-                seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
+                seed_int = stable_seed_from_int(m.chat.id, offset=idx)
                 final_bytes = generate_image_from_bytes(
                     img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                     seed=seed_int, user_id=m.chat.id
@@ -3502,7 +3518,7 @@ async def on_photo(m: Message):
     USER_COPY_PROMPT.pop(m.chat.id, None)
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
-    seed_int = (hash(m.chat.id) % 10_000_000)
+    seed_int = stable_seed_from_int(m.chat.id)
     final_bytes = generate_image_from_bytes(
         img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
         seed=seed_int, user_id=m.chat.id
@@ -3718,7 +3734,7 @@ async def on_prompt(m: Message):
             return await safe_answer(m, L(m.chat.id)["blocked"])
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
-    seed_int = (hash(m.chat.id) % 10_000_000)
+    seed_int = stable_seed_from_int(m.chat.id)
     final_bytes = generate_image_from_bytes(
         ref, combined_text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
         seed=seed_int, user_id=m.chat.id
@@ -3781,7 +3797,7 @@ async def cb_more(c: CallbackQuery):
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
     # тот же промпт, seed + 1 (минимальная вариативность, лицо стабильное)
-    seed_int = ((hash(chat_id) % 10_000_000) + 1)
+    seed_int = stable_seed_from_int(chat_id, offset=1)
     result = generate_image_from_bytes(
         ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
         seed=seed_int
@@ -3872,11 +3888,14 @@ async def on_startup():
     global BOT_USERNAME_GLOBAL
     BOT_USERNAME_GLOBAL = me.username
 
-    if BOT_TOKEN and WEBHOOK_BASE:
+    if BOT_TOKEN and WEBHOOK_BASE and not DISABLE_WEBHOOK:
         await ensure_webhook()
         print(f"✅ Вебхук установлен: {WEBHOOK_URL}")
     else:
-        print("⚠️ Нет BOT_TOKEN или WEBHOOK_BASE")
+        if not BOT_TOKEN or not WEBHOOK_BASE:
+            print("⚠️ Нет BOT_TOKEN или WEBHOOK_BASE")
+        if DISABLE_WEBHOOK:
+            print("ℹ️ DISABLE_WEBHOOK=1 — пропускаю установку вебхука")
 
     await bot.set_my_commands(
         commands=[
@@ -3916,10 +3935,12 @@ async def on_startup():
 async def on_shutdown():
     print("🛑 Shutting down...")
     try:
-        await bot.delete_webhook()
+        if not DISABLE_WEBHOOK:
+            await bot.delete_webhook()
     finally:
         await bot.session.close()
-    print("✅ Webhook removed")
+    if not DISABLE_WEBHOOK:
+        print("✅ Webhook removed")
 
 @app.post("/")
 async def telegram_webhook(request: Request):
