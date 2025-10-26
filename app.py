@@ -3520,7 +3520,7 @@ async def on_photo(m: Message):
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                 seed=seed_int,
                 strict=True,
-                style_bytes=style_bytes,
+                style_bytes=None,  # copy-mode: style only for GPT prompt, not as model input
                 lock_scene=True,
                 user_id=m.chat.id,
             )
@@ -3532,7 +3532,7 @@ async def on_photo(m: Message):
                     lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                     seed=seed_int,
                     strict=True,
-                    style_bytes=style_bytes,
+                    style_bytes=None,  # keep selfie+prompt only
                     lock_scene=True,
                     user_id=m.chat.id,
                 )
