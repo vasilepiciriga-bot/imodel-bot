@@ -321,8 +321,11 @@ def _s3_get_text(key: str) -> Optional[str]:
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 # Optional identity-locking model (e.g., InstantID). If set, we will try it first.
-INSTANTID_MODEL  = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
-INSTANTID_FIRST  = os.getenv("INSTANTID_FIRST", "1") == "1"
+INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
+# Prefer InstantID to improve identity retention (can be disabled via env)
+INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
+# Allow InstantID without a style image (text-only); helps preserve face in standard flow
+INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
@@ -347,7 +350,7 @@ except Exception:
 AUTO_POST = os.getenv("AUTO_POST", "0") == "1"  # if 1: авто-пост в канал «до/после»
 
 # Global tuning toggles
-STRICT_ID_MODE = os.getenv("STRICT_ID_MODE", "0") == "1"  # strengthen identity negatives in normal mode
+STRICT_ID_MODE = os.getenv("STRICT_ID_MODE", "1") == "1"  # strengthen identity negatives in normal mode
 
 # Optional group for manual publishing
 PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "")
@@ -2321,26 +2324,49 @@ def generate_image_from_bytes(
 
     # Try identity-preserving model first (if configured)
     gen_url: Optional[str] = None
-    if INSTANTID_FIRST and INSTANTID_MODEL:
+    can_use_instant = INSTANTID_FIRST and INSTANTID_MODEL and (style_url is not None or INSTANTID_TEXT_OK)
+    if can_use_instant:
         gen_url = try_instantid(refined, seed_val=seed)
     if not gen_url:
         gen_url = try_nano(refined, seed_val=seed)
+    # Fallback: even if InstantID wasn't selected as first, try it once to improve identity retention
+    if not gen_url and INSTANTID_MODEL:
+        try:
+            alt = try_instantid(refined, seed_val=seed)
+            if alt:
+                gen_url = alt
+        except Exception:
+            pass
     if gen_url == "SENSITIVE":
         print("→ Sensitive → safer variant")
         safer = safer_variant(refined)
-        if INSTANTID_FIRST and INSTANTID_MODEL:
+        if can_use_instant:
             gen_url = try_instantid(safer, seed_val=seed)
         if not gen_url:
             gen_url = try_nano(safer, seed_val=seed)
+        if not gen_url and INSTANTID_MODEL:
+            try:
+                alt = try_instantid(safer, seed_val=seed)
+                if alt:
+                    gen_url = alt
+            except Exception:
+                pass
 
     # Если «уплыло лицо» — усилить замки и повторить 1 раз
     if (not gen_url or not str(gen_url).startswith("http")) and not strict:
         hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features."
         # Do NOT force scene lock unless strict scene copy is requested
-        if INSTANTID_FIRST and INSTANTID_MODEL:
+        if can_use_instant:
             gen_url = try_instantid(hard_lock, seed_val=seed)
         if not gen_url:
             gen_url = try_nano(hard_lock, seed_val=seed)
+        if not gen_url and INSTANTID_MODEL:
+            try:
+                alt = try_instantid(hard_lock, seed_val=seed)
+                if alt:
+                    gen_url = alt
+            except Exception:
+                pass
 
     if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
         print("→ gen_url пустой/sensitive")
@@ -3422,15 +3448,15 @@ async def on_photo(m: Message):
             seed_int = int(seed[:8], 16)
 
             # строгий режим: жёсткая сцена + identity lock + negative
-            # 2) Генерим по selfie + текстовому промпту (БЕЗ передачи style-image в модель)
+            # 2) Генерим по selfie + style-рефу и текстовому промпту (передаём style-image в модель)
             final_bytes = generate_image_from_bytes(
                 img_bytes,
                 scene_spec,
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                 seed=seed_int,
                 strict=True,
-                style_bytes=None,
-                lock_scene=False,
+                style_bytes=style_bytes,
+                lock_scene=True,
                 user_id=m.chat.id,
             )
             if not final_bytes:
@@ -3441,8 +3467,8 @@ async def on_photo(m: Message):
                     lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                     seed=seed_int,
                     strict=True,
-                    style_bytes=None,
-                    lock_scene=False,
+                    style_bytes=style_bytes,
+                    lock_scene=True,
                     user_id=m.chat.id,
                 )
                 if not final_bytes:
