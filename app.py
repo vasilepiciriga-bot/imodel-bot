@@ -332,6 +332,7 @@ INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "te
 INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
 # Allow InstantID without a style image (text-only); helps preserve face in standard flow
 INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
+DISABLE_INSTANTID = os.getenv("DISABLE_INSTANTID", "0") == "1"
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
@@ -2212,6 +2213,8 @@ def generate_image_from_bytes(
         return base_neg
 
     def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
+        if DISABLE_INSTANTID:
+            return None
         if not REPLICATE_API_TOKEN or not INSTANTID_MODEL:
             return None
         neg = _compose_negative(strict, lock_scene)
@@ -2398,13 +2401,13 @@ def generate_image_from_bytes(
 
     # Try identity-preserving model first (if configured)
     gen_url: Optional[str] = None
-    can_use_instant = INSTANTID_FIRST and INSTANTID_MODEL and (style_url is not None or INSTANTID_TEXT_OK)
+    can_use_instant = (not DISABLE_INSTANTID) and INSTANTID_FIRST and INSTANTID_MODEL and (style_url is not None or INSTANTID_TEXT_OK)
     if can_use_instant:
         gen_url = try_instantid(refined, seed_val=seed)
     if not gen_url:
         gen_url = try_nano(refined, seed_val=seed)
     # Fallback: even if InstantID wasn't selected as first, try it once to improve identity retention
-    if not gen_url and INSTANTID_MODEL:
+    if not gen_url and (not DISABLE_INSTANTID) and INSTANTID_MODEL:
         try:
             alt = try_instantid(refined, seed_val=seed)
             if alt:
@@ -2418,7 +2421,7 @@ def generate_image_from_bytes(
             gen_url = try_instantid(safer, seed_val=seed)
         if not gen_url:
             gen_url = try_nano(safer, seed_val=seed)
-        if not gen_url and INSTANTID_MODEL:
+        if not gen_url and (not DISABLE_INSTANTID) and INSTANTID_MODEL:
             try:
                 alt = try_instantid(safer, seed_val=seed)
                 if alt:
@@ -2434,7 +2437,7 @@ def generate_image_from_bytes(
             gen_url = try_instantid(hard_lock, seed_val=seed)
         if not gen_url:
             gen_url = try_nano(hard_lock, seed_val=seed)
-        if not gen_url and INSTANTID_MODEL:
+        if not gen_url and (not DISABLE_INSTANTID) and INSTANTID_MODEL:
             try:
                 alt = try_instantid(hard_lock, seed_val=seed)
                 if alt:
