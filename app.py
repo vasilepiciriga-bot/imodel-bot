@@ -19,6 +19,10 @@ from typing import Optional, Dict, List, Set
 import requests
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
+try:
+    import config  # loads .env in local dev via load_dotenv()
+except Exception:
+    pass
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
