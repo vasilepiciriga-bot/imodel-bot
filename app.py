@@ -426,6 +426,9 @@ USER_BODY_ASKED: Set[int] = set()
 # Video Mode
 USER_VIDEO_MODE: Set[int] = set()
 
+# Optional per-user gender preference (helps avoid gender drift)
+USER_GENDER: Dict[int, str] = {}
+
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
 CREDITS_FILE = os.getenv("CREDITS_FILE", os.path.join(DATA_DIR, "credits.json"))
@@ -677,6 +680,9 @@ T = {
         "free_added": "Пользователь {uid} добавлен в whitelist.",
         "gallery_empty": "Галерея пуста.",
         "ref_link_fail": "Не удалось определить username бота.",
+        "gender_usage": "Укажите пол: /gender male или /gender female",
+        "gender_set_m": "Пол сохранён: мужской",
+        "gender_set_f": "Пол сохранён: женский",
         "pricing": "💎 Тарифы iModel\n\n• 10 генераций — 200★  (20★/шт)\n• 30 генераций — 500★  (≈16.7★/шт)\n• 100 генераций — 1200★ (12★/шт)\n\nОплата звёздами Telegram. Чем больше пакет — тем выгоднее.",
         "copy_intro": "📋 Режим «Скопировать фото»\nШаг 1: пришлите фото‑образец (сцена)\nШаг 2: пришлите своё селфи\nРезультат: та же сцена, заменено только лицо.",
         "copy_style_ok": "Образец принят ✅ Теперь пришли своё селфи.",
@@ -780,6 +786,9 @@ T = {
         "free_added": "User {uid} added to whitelist.",
         "gallery_empty": "Gallery is empty.",
         "ref_link_fail": "Can't detect bot username.",
+        "gender_usage": "Set gender: /gender male or /gender female",
+        "gender_set_m": "Gender saved: male",
+        "gender_set_f": "Gender saved: female",
         "pricing": "💎 iModel Pricing\n\n• 10 gens — 200★  (20★/gen)\n• 30 gens — 500★  (≈16.7★/gen)\n• 100 gens — 1200★ (12★/gen)\n\nPay with Telegram Stars. Bigger packs are more cost‑effective.",
         "copy_intro": "📋 Copy Mode\nStep 1: send a style reference (scene)\nStep 2: send your selfie\nResult: same scene, face replaced only.",
         "copy_style_ok": "Style reference received ✅ Now send your selfie.",
@@ -2128,6 +2137,16 @@ def generate_image_from_bytes(
         body_hint = None
     allow_refine = (not strict) or (strict and bool(body_hint))
     refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=allow_refine, body_hint=body_hint)
+    # Optional gender hint (user preference)
+    try:
+        if user_id is not None and USER_GENDER.get(user_id):
+            g = USER_GENDER[user_id]
+            if g == 'male':
+                refined = f"{refined}. adult male"
+            elif g == 'female':
+                refined = f"{refined}. adult female"
+    except Exception:
+        pass
     # Always enforce identity + gender preservation explicitly in the text prompt
     try:
         refined = f"{refined}. {IDENTITY_LOCK}. {GENDER_LOCK}"
@@ -2184,11 +2203,20 @@ def generate_image_from_bytes(
     def _compose_negative(is_strict: bool, lock_scene_local: bool) -> str:
         # Optionally enforce stricter negatives even in non-strict flows
         _strict = is_strict or STRICT_ID_MODE
+        base_neg = NEGATIVE_LOCK
+        # Add gender-specific negatives to reduce drift
+        try:
+            if user_id is not None and USER_GENDER.get(user_id) == 'male':
+                base_neg = base_neg + ", female, woman, feminine"
+            elif user_id is not None and USER_GENDER.get(user_id) == 'female':
+                base_neg = base_neg + ", male, man, masculine, beard, mustache"
+        except Exception:
+            pass
         if _strict and lock_scene_local:
-            return f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
+            return f"{base_neg}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
         if _strict:
-            return f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
-        return NEGATIVE_LOCK
+            return f"{base_neg}, {STRICT_NEGATIVE}"
+        return base_neg
 
     def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
         if not REPLICATE_API_TOKEN or not INSTANTID_MODEL:
@@ -2911,6 +2939,26 @@ async def cmd_body(m: Message):
         return await safe_answer(m, L(uid)["body_cleared"])
     USER_BODY_WAIT.add(uid)
     await safe_answer(m, L(uid)["body_intro"])
+
+
+@dp.message(Command("gender"))
+async def cmd_gender(m: Message):
+    uid = m.chat.id
+    parts = (m.text or "").strip().lower().split()
+    if len(parts) < 2:
+        return await safe_answer(m, L(uid).get("gender_usage", "Set gender: /gender male or /gender female"))
+    w = parts[1]
+    val = None
+    if w in ("m", "male", "man", "м", "муж", "мужчина"):
+        val = "male"
+    elif w in ("f", "female", "woman", "ж", "жен", "женщина"):
+        val = "female"
+    if not val:
+        return await safe_answer(m, L(uid).get("gender_usage", "Set gender: /gender male or /gender female"))
+    USER_GENDER[uid] = val
+    if val == 'male':
+        return await safe_answer(m, L(uid).get("gender_set_m", "Gender saved: male"))
+    return await safe_answer(m, L(uid).get("gender_set_f", "Gender saved: female"))
 
 
 @dp.message(Command("start"))
