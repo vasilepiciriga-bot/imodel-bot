@@ -2277,8 +2277,21 @@ def generate_image_from_bytes(
                     {"identity": ssrc},
                     {"reference": ssrc},
                 ]
+                identity_cfgs = [
+                    {},
+                    {"guidance_scale": 7.5},
+                    {"num_inference_steps": 28},
+                    {"strength": 0.8},
+                    {"prompt_strength": 0.85},
+                    {"image_strength": 0.65},
+                    {"identity_strength": 0.9},
+                    {"identity_weight": 0.9},
+                    {"face_weight": 0.9},
+                    {"preserve_identity": True},
+                    {"keep_identity": True},
+                ]
                 for variant in face_keys_variants:
-                    for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+                    for cfg_extra in identity_cfgs:
                         inp = dict(inputs_common)
                         inp.update(cfg_extra)
                         inp.update(variant)
