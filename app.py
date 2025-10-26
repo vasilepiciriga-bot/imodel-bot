@@ -13,6 +13,7 @@ import base64
 import random
 import hashlib
 import asyncio
+from io import BytesIO
 from typing import Optional, Dict, List, Set
 
 import requests
@@ -30,6 +31,7 @@ from aiogram.types import (
     BotCommand, BotCommandScopeDefault,
     InputMediaPhoto,
 )
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 
 import replicate
@@ -49,6 +51,8 @@ BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
 WEBHOOK_BASE   = os.getenv("WEBHOOK_BASE", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret123")
 WEBHOOK_URL = f"{WEBHOOK_BASE}/?secret={WEBHOOK_SECRET}"
+# Allow running a secondary instance (e.g., worker) without resetting webhook
+DISABLE_WEBHOOK = os.getenv("DISABLE_WEBHOOK", "0") == "1"
 
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
@@ -57,6 +61,25 @@ os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
+
+# Auto posts to group (educational, witty)
+GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "0") == "1"
+GROUP_POST_MIN_HOURS  = float(os.getenv("GROUP_POST_MIN_HOURS", "2"))
+GROUP_POST_MAX_HOURS  = float(os.getenv("GROUP_POST_MAX_HOURS", "3"))
+# Either a single lang like "ru" or a comma-list like "ru,ro" to rotate
+GROUP_POST_LANGS_RAW  = os.getenv("GROUP_POST_LANGS", os.getenv("GROUP_POST_LANG", "ru,ro"))
+_GROUP_LANGS          = [x.strip().lower() for x in GROUP_POST_LANGS_RAW.replace(";",",").split(",") if x.strip()]
+if not _GROUP_LANGS:
+    _GROUP_LANGS = ["ru"]
+_GROUP_LANG_IDX = 0
+# Quiet hours: do NOT post between END..START (e.g., 22..8)
+GROUP_POST_START_HOUR = int(os.getenv("GROUP_POST_START_HOUR", "8"))
+GROUP_POST_END_HOUR   = int(os.getenv("GROUP_POST_END_HOUR", "22"))
+# Debug: force fixed interval in minutes and ignore quiet hours if >0
+GROUP_POST_EVERY_MINUTES = int(os.getenv("GROUP_POST_EVERY_MINUTES", "0"))
+GROUP_POST_TEXT_ONLY = os.getenv("GROUP_POST_TEXT_ONLY", "0") == "1"
+GROUP_POST_LOOP_RUNNING = False
+GROUP_POST_LAST_AT: float = 0.0
 
 # Filter toggles
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
@@ -299,12 +322,25 @@ def _s3_get_text(key: str) -> Optional[str]:
 
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
+# Optional identity-locking model (e.g., InstantID). If set, we will try it first.
+INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
+# Prefer InstantID to improve identity retention (can be disabled via env)
+INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
+# Allow InstantID without a style image (text-only); helps preserve face in standard flow
+INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
+
+# Video (image → short clip)
+VIDEO_MODEL      = os.getenv("VIDEO_MODEL", "stability-ai/stable-video-diffusion")
+VIDEO_COST       = int(os.getenv("VIDEO_COST", "2"))
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
 FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "3"))
+# Batch settings
+BATCH_MAX    = int(os.getenv("BATCH_MAX", "5"))
+BATCH_MIN    = int(os.getenv("BATCH_MIN", "2"))
 
 # Channel & autopost
 GALLERY_CHANNEL_ID = os.getenv("GALLERY_CHANNEL_ID", "")
@@ -315,11 +351,13 @@ except Exception:
     GALLERY_CHANNEL_ID = None
 AUTO_POST = os.getenv("AUTO_POST", "0") == "1"  # if 1: авто-пост в канал «до/после»
 
+# Global tuning toggles
+STRICT_ID_MODE = os.getenv("STRICT_ID_MODE", "1") == "1"  # strengthen identity negatives in normal mode
+
 # Optional group for manual publishing
 PUBLISH_GROUP_ID = os.getenv("PUBLISH_GROUP_ID", "")
 try:
-    if PUBLISH_GROUP_ID:
-        PUBLISH_GROUP_ID = int(PUBLISH_GROUP_ID)
+    PUBLISH_GROUP_ID = int(PUBLISH_GROUP_ID) if PUBLISH_GROUP_ID else None
 except Exception:
     PUBLISH_GROUP_ID = None
 
@@ -365,11 +403,20 @@ api = app  # alias
 
 USER_REFS: Dict[int, List[bytes]]  = {}   # 1–4 селфи (последние)
 USER_LAST_OUTPUT: Dict[int, bytes] = {}   # последний результат
-USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt
+USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt (ввод пользователя/сцена)
+USER_LAST_REFINED_PROMPT: Dict[int, str] = {}  # фактический GPT-уточнённый промпт
 USER_LANG: Dict[int, str]          = {}   # язык
 USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
 USER_ONBOARDED: Set[int]           = set()
+
+# Optional user body profile (height/weight)
+USER_BODY: Dict[int, Dict[str, object]] = {}
+USER_BODY_WAIT: Set[int] = set()
+USER_BODY_ASKED: Set[int] = set()
+
+# Video Mode
+USER_VIDEO_MODE: Set[int] = set()
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -420,6 +467,15 @@ _credits_load()
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
 LAST_PHOTO: Dict[int, bytes] = {}
+# Track which reference photo the last prompt belonged to (md5)
+USER_LAST_REF_HASH: Dict[int, str] = {}
+# Deduplication of published albums (md5 keys with TTL)
+RECENT_PUB: Dict[str, float] = {}
+RECENT_PUB_TTL = 600.0  # 10 minutes
+
+# Style share tokens (deep-links)
+STYLE_SHARES: Dict[str, Dict[str, object]] = {}
+# prompt-share removed
 
 # Copy Mode
 USER_COPY_MODE: Set[int]         = set()
@@ -428,6 +484,18 @@ USER_COPY_PROMPT: Dict[int, str] = {}
 
 # Retouch Mode
  
+
+# Batch Mode
+USER_BATCH_MODE: Set[int] = set()
+USER_BATCH_PHOTOS: Dict[int, List[bytes]] = {}
+
+# Outfit Try-On (via clothing photo)
+USER_OUTFIT_CLOTHES: Dict[int, bytes] = {}
+
+# Outfit Try-On Mode
+USER_OUTFIT_MODE: Set[int] = set()
+USER_OUTFIT_STYLE: Dict[int, str] = {}
+USER_OUTFIT_TEXT: Dict[int, str] = {}
 
 # Whitelist
 FREE_USERS: set[int] = set()
@@ -449,6 +517,20 @@ REF_MAP: Dict[int, int] = {}
 REF_STATS: Dict[int, Dict[str, int]] = {}
 
 BOT_USERNAME_GLOBAL = None
+
+# ===================== SEED HELPERS ===================
+def stable_seed_from_int(val: int, offset: int = 0) -> int:
+    """Stable, cross-process seed from an integer (e.g., user/chat id).
+    Python's built-in hash() is randomized per-process; avoid it for seeds.
+    """
+    try:
+        base = int(hashlib.md5(str(int(val)).encode("utf-8")).hexdigest()[:8], 16)
+    except Exception:
+        try:
+            base = abs(int(val)) % 10_000_000
+        except Exception:
+            base = random.randint(0, 9_999_999)
+    return (base + int(offset)) % 10_000_000
 
 # ===================== PRESETS =======================
 # 24 styled presets: short labels and hidden prompts
@@ -523,12 +605,12 @@ T = {
         "menu_lang": "🌐 Язык",
         "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
         "onboard_btn": "🚀 Старт",
-        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1–4 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n🎁 Бесплатные генерации — пригласите друзей: /refer\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
-        "help": "🆘 Помощь\n\nКак получить лучший результат:\n• Пришлите 1–4 селфи при ровном свете, без сильных фильтров\n• В описании укажите место, свет, стиль, кадрирование, настроение\n• Быстрый старт: откройте Пресеты и выберите стиль\n• Скопировать сцену: режим ‘Скопировать’ — сначала образец, затем селфи\n\nОплата и баланс:\n• Покупка — раздел ‘Купить’ (Telegram Stars)\n• Списание — только при успешной генерации (кроме whitelist/админ)\n• Промокоды — команда /promo КОД\n\nРеферальная программа:\n• Пригласи друга — ты +{ref_ref}, новый пользователь +{ref_new}\n• Твоя ссылка: /refer\n\nПравила и приватность:\n• Запрещены NSFW/селебы\n• Фото хранятся временно; /clear — очистка, /forget — полное удаление\n\nНужна помощь? Напишите @piciriga — ответим быстро.",
+        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n🎁 Бесплатные генерации — пригласите друзей: /refer\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
+        "help": "🆘 Помощь\n\nКак получить лучший результат:\n• Пришлите 1 селфи при ровном свете, без сильных фильтров\n• В описании укажите место, свет, стиль, кадрирование, настроение\n• Быстрый старт: откройте Пресеты и выберите стиль\n• Скопировать сцену: режим ‘Скопировать’ — сначала образец, затем селфи\n\nОплата и баланс:\n• Покупка — раздел ‘Купить’ (Telegram Stars)\n• Списание — только при успешной генерации (кроме whitelist/админ)\n• Промокоды — команда /promo КОД\n\nРеферальная программа:\n• Пригласи друга — ты +{ref_ref}, новый пользователь +{ref_new}\n• Твоя ссылка: /refer\n\nПравила и приватность:\n• Запрещены NSFW/селебы\n• Фото хранятся временно; /clear — очистка, /forget — полное удаление\n\nНужна помощь? Напишите @piciriga — ответим быстро.",
         "need_photo": "Сначала пришли фото лица.",
         "photo_ok": "Фото получено ✅ Теперь опишите сцену или используйте /presets.",
         "gen": "Генерирую… ⏳",
-        "fail": "Не удалось сгенерировать. Попробуйте изменить описание или фото.",
+        "fail": "Не удалось сгенерировать. Попробуйте другое фото или стиль. Можно также добавить текст‑описание одним сообщением.",
         "ready": "Готово ✅",
         "credits_none": "Нет кредитов. Используй /buy или /promo. Также можно пригласить друга: /refer",
         "hint_refer_zero": "👥 У вас 0 генераций. Пригласите друга — +{ref_ref} вам и +{ref_new} ему: /refer",
@@ -545,6 +627,7 @@ T = {
         "btn_more": "Ещё вариант",
         "btn_publish": "Опубликовать",
         "btn_publish_group": "В группу",
+        "published_recent": "Уже опубликовано недавно.",
         "menu_presets": "📸 Пресеты",
         "menu_help": "🆘 Помощь",
         "menu_refer": "🎁 Бесплатные генерации",
@@ -552,8 +635,21 @@ T = {
         "btn_support": "📨 Написать поддержку",
         "btn_back": "⬅️ Назад",
         "btn_refer": "🎁 Бесплатные генерации",
+        "body_ask": "👤 Хотите добавить рост и вес для более точной посадки одежды? Это необязательно.",
+        "btn_body_yes": "📏 Указать рост/вес",
+        "btn_skip": "🙈 Не сейчас",
+        "body_intro": "👤 Профиль тела (необязательно)\nПришлите рост и вес в любом формате (например: 178 см, 72 кг или 5'10 160 lb). Эти данные помогут точнее подбирать пропорции/посадку одежды в промптах. Напишите 'пропустить' чтобы отменить.",
+        "body_saved": "Сохранено: {info}.",
+        "body_cleared": "Профиль тела удалён.",
+        "body_bad": "Не распознал формат. Примеры: 178 см 72 кг или 5'10 160 lb.",
+        "body_skip_ok": "Окей! Можно добавить позже командой /body.",
+        "body_intro": "👤 Профиль тела (необязательно)\nПришлите рост и вес в любом формате (например: 178 см, 72 кг или 5'10 160 lb). Эти данные помогут точнее подбирать пропорции/посадку одежды в промптах. Напишите 'пропустить' чтобы отменить.",
+        "body_saved": "Сохранено: {info}.",
+        "body_cleared": "Профиль тела удалён.",
+        "body_bad": "Не распознал формат. Примеры: 178 см 72 кг или 5'10 160 lb.",
         "hint_refer_pay": "🎁 Бонусы: пригласи друга — +{ref_ref} тебе и +{ref_new} другу",
         "menu_pricing": "💎 Тарифы",
+        "refer_msg": "👥 Пригласи друзей и получай бонусные генерации!\nТвоя ссылка: {link}\n\nПриглашено: {count}\nПолучено бонусов: {earned} генераций",
         "buy_title": "💳 Покупка генераций (Telegram Stars)\nВыберите удобный пакет:",
         "buy_btn_10": "10 генераций — 200★",
         "buy_btn_30": "30 генераций — 500★",
@@ -580,17 +676,42 @@ T = {
         "copy_done": "Готово ✅",
         "copy_exit": "Режим «Скопировать фото» выключен.",
         "menu_copy": "📋 Скопировать",
+        "menu_outfit": "👗 Смена одежды",
+        "outfit_intro": "👗 Примерка одежды\nШаг 1: пришлите фото одежды из интернет‑магазина (товар на ровном фоне).\nШаг 2: пришлите своё селфи.\nОпционально: добавьте описание (цвет/фон/настроение) одним сообщением.",
+        "outfit_clothes_ok": "Фото одежды принято ✅ Теперь пришлите селфи.",
+        "outfit_need_clothes": "Сначала пришлите фото одежды (из магазина).",
+        "outfit_prompt_updated": "Описание учтено. Теперь пришлите селфи.",
+        "style_share_btn": "✨ Сделать в таком стиле",
+        "style_share_intro": "Стиль загружен ✅ Пришлите селфи — сделаю похожий результат.",
+        "err_channel_not_configured": "Канал не настроен.",
+        "err_group_not_configured": "Группа не настроена.",
+        "err_no_result": "Нет результата для публикации.",
+        "published_ok": "Опубликовано",
+        "published_group_ok": "Опубликовано в группе",
+        "before_after": "До / После ✨",
+        "before": "До",
+        "copy_prompt_updated": "Промпт обновлён. Теперь пришлите селфи.",
+        "video_intro": "🎬 Видео‑режим\nПришлите селфи — сделаю короткую SFW‑анимацию (для Reels/TikTok). Подпись к фото можно использовать как идею.",
+        "video_off": "Видео‑режим выключен.",
+        "batch_intro": "📦 Пакетная генерация\nОтправьте 2–5 селфи подряд, затем пришлите описание сцены — сгенерирую результат для каждого фото.",
+        "batch_added": "Фото добавлено ({n}/{limit}). Пришлите ещё или отправьте описание.",
+        "batch_limit": "Достигнут лимит {limit}. Теперь пришлите описание.",
+        "batch_need_photos": "Сначала отправьте 2–5 фото для пакетной обработки.",
+        "batch_processing": "Генерирую пакет… ⏳",
+        "batch_done": "Готово ✅ Отправил {count} результатов.",
+        "batch_insufficient": "Недостаточно кредитов: нужно {need}, доступно {have}.",
+        "batch_exit": "Пакетный режим выключен.",
     },
     "en": {
         "menu_lang": "🌐 Language",
         "onboard_welcome": "Welcome to iModel. Tap Start to begin.",
         "onboard_btn": "🚀 Start",
-        "start": "✨ Welcome to iModel — the AI photo studio.\nYour photos can look like they were taken by a professional photographer.\n\n🔹 Upload 1–4 selfies — good lighting helps.\n🔹 Describe the scene or mood you want.\n🔹 Or use ‘Copy’: upload a photo you like from the internet, add your selfie — and get a stylish result in the same spirit.\n\n📌 Menu:\n⭐ Buy — top up balance and unlock more.\n💰 Balance — always know how many generations you have.\n📸 Presets — ready-made shoot styles.\n📋 Copy — recreate a style with your photo.\n🆘 Help — answers to questions.\n🌐 Language — switch interface.\n\n🎁 Free credits — invite friends: /refer\n\n📷 Your photos — your story. We’ll make it impeccable.",
-        "help": "🆘 Help\n\nBest results:\n• Send 1–4 selfies in even lighting, minimal filters\n• In your prompt describe location, light, style, framing, mood\n• Quick start: open Presets and pick a style\n• Copy a scene: use ‘Copy’ — first the reference, then your selfie\n\nPayments & balance:\n• Buy in ‘Buy’ (Telegram Stars)\n• Credits are deducted only on successful generation (except whitelist/admin)\n• Promo codes — /promo CODE\n\nReferral program:\n• Invite a friend — you +{ref_ref}, they +{ref_new}\n• Your link: /refer\n\nRules & privacy:\n• NSFW/celebrities are forbidden\n• Photos are stored temporarily; /clear to purge temp, /forget for full delete\n\nNeed help? Message @piciriga — we’ll reply quickly.",
+        "start": "✨ Welcome to iModel — the AI photo studio.\nYour photos can look like they were taken by a professional photographer.\n\n🔹 Upload 1 selfie — good lighting helps.\n🔹 Describe the scene or mood you want.\n🔹 Or use ‘Copy’: upload a photo you like from the internet, add your selfie — and get a stylish result in the same spirit.\n\n📌 Menu:\n⭐ Buy — top up balance and unlock more.\n💰 Balance — always know how many generations you have.\n📸 Presets — ready-made shoot styles.\n📋 Copy — recreate a style with your photo.\n🆘 Help — answers to questions.\n🌐 Language — switch interface.\n\n🎁 Free credits — invite friends: /refer\n\n📷 Your photos — your story. We’ll make it impeccable.",
+        "help": "🆘 Help\n\nBest results:\n• Send 1 selfie in even lighting, minimal filters\n• In your prompt describe location, light, style, framing, mood\n• Quick start: open Presets and pick a style\n• Copy a scene: use ‘Copy’ — first the reference, then your selfie\n\nPayments & balance:\n• Buy in ‘Buy’ (Telegram Stars)\n• Credits are deducted only on successful generation (except whitelist/admin)\n• Promo codes — /promo CODE\n\nReferral program:\n• Invite a friend — you +{ref_ref}, they +{ref_new}\n• Your link: /refer\n\nRules & privacy:\n• NSFW/celebrities are forbidden\n• Photos are stored temporarily; /clear to purge temp, /forget for full delete\n\nNeed help? Message @piciriga — we’ll reply quickly.",
         "need_photo": "Please send a face photo first.",
         "photo_ok": "Photo received ✅ Now describe the scene or use /presets.",
         "gen": "Working… ⏳",
-        "fail": "Generation failed. Try adjusting your description or selfie.",
+        "fail": "Generation failed. Try a different photo or style. You can also add a short text prompt in one message.",
         "ready": "Done ✅",
         "credits_none": "No credits. Use /buy or /promo. You can also invite a friend: /refer",
         "hint_refer_zero": "👥 You have 0 credits. Invite a friend — +{ref_ref} you and +{ref_new} them: /refer",
@@ -607,6 +728,7 @@ T = {
         "btn_more": "More",
         "btn_publish": "Publish",
         "btn_publish_group": "To group",
+        "published_recent": "Already published recently.",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Help",
         "menu_refer": "🎁 Free credits",
@@ -614,8 +736,23 @@ T = {
         "btn_support": "📨 Contact support",
         "btn_back": "⬅️ Back",
         "btn_refer": "🎁 Free credits",
+        "body_ask": "👤 Do you want to add height & weight for better garment fit? Optional.",
+        "btn_body_yes": "📏 Add height/weight",
+        "btn_skip": "🙈 Not now",
+        "body_intro": "👤 Body profile (optional)\nSend height and weight in any format (e.g., 178 cm, 72 kg or 5'10 160 lb). I will use it to infer proportions/fit in prompts. Type 'skip' to cancel.",
+        "body_saved": "Saved: {info}.",
+        "body_cleared": "Body profile cleared.",
+        "body_bad": "Could not parse. Examples: 178 cm 72 kg or 5'10 160 lb.",
+        "body_skip_ok": "Got it! You can add later with /body.",
+        "body_intro": "👤 Body profile (optional)\nSend height and weight in any format (e.g., 178 cm, 72 kg or 5'10 160 lb). I will use it to infer proportions/fit in prompts. Type 'skip' to cancel.",
+        "body_saved": "Saved: {info}.",
+        "body_cleared": "Body profile cleared.",
+        "body_bad": "Could not parse. Examples: 178 cm 72 kg or 5'10 160 lb.",
         "hint_refer_pay": "🎁 Tip: invite a friend — +{ref_ref} you · +{ref_new} them",
         "menu_pricing": "💎 Pricing",
+        "refer_msg": "👥 Invite friends and earn bonus generations!\nYour link: {link}\n\nInvited: {count}\nBonuses earned: {earned} gens",
+        "style_share_btn": "✨ Make in this style",
+        "style_share_intro": "Style loaded ✅ Send a selfie — I'll create a similar result.",
         "buy_title": "💳 Buy generations (Telegram Stars)\nChoose a value pack:",
         "buy_btn_10": "10 gens — 200★",
         "buy_btn_30": "30 gens — 500★",
@@ -642,13 +779,36 @@ T = {
         "copy_done": "Done ✅",
         "copy_exit": "Copy Mode OFF.",
         "menu_copy": "📋 Copy",
+        "menu_outfit": "👗 Outfit",
+        "outfit_intro": "👗 Try‑On\nStep 1: send a clothing photo from an online store (product on clean background).\nStep 2: send your selfie.\nOptional: add description (color/background/mood) as one text message.",
+        "outfit_clothes_ok": "Clothing received ✅ Now send your selfie.",
+        "outfit_need_clothes": "Please send a clothing photo first.",
+        "outfit_prompt_updated": "Description saved. Now send a selfie.",
+        "err_channel_not_configured": "Channel is not configured.",
+        "err_group_not_configured": "Group is not configured.",
+        "err_no_result": "No result to publish.",
+        "published_ok": "Published",
+        "published_group_ok": "Published to group",
+        "before_after": "Before / After ✨",
+        "before": "Before",
+        "copy_prompt_updated": "Prompt updated. Now send a selfie.",
+        "video_intro": "🎬 Video Mode\nSend a selfie — I’ll make a short SFW animation (great for Reels/TikTok). You can use the photo caption as an idea.",
+        "video_off": "Video Mode OFF.",
+        "batch_intro": "📦 Batch mode\nSend 2–5 selfies, then send a description — I will generate results for each photo.",
+        "batch_added": "Photo added ({n}/{limit}). Send more or send your description.",
+        "batch_limit": "Limit {limit} reached. Now send your description.",
+        "batch_need_photos": "Please send 2–5 photos first for batch processing.",
+        "batch_processing": "Processing batch… ⏳",
+        "batch_done": "Done ✅ Sent {count} results.",
+        "batch_insufficient": "Not enough credits: need {need}, have {have}.",
+        "batch_exit": "Batch mode OFF.",
     },
     "ro": {
         "menu_lang": "🌐 Limba",
         "onboard_welcome": "Bine ai venit la iModel. Apasă Start pentru a începe.",
         "onboard_btn": "🚀 Start",
-        "start": "✨ Bine ai venit la iModel — studio foto AI.\nFotografiile tale pot arăta ca făcute de un fotograf profesionist.\n\n🔹 Încarcă 1–4 selfie‑uri — lumina bună ajută.\n🔹 Descrie scena sau atmosfera dorită.\n🔹 Sau folosește ‘Copiază’: încarcă o poză preferată de pe internet, adaugă selfie‑ul tău — și primești un rezultat stilat în același spirit.\n\n📌 Meniu:\n⭐ Cumpără — alimentează soldul și deblochează mai mult.\n💰 Sold — vezi câte generări ai.\n📸 Preseturi — stiluri gata făcute.\n📋 Copiază — recreează un stil cu poza ta.\n🆘 Ajutor — răspunsuri la întrebări.\n🌐 Limbă — schimbă interfața.\n\n🎁 Generații gratuite — invită prieteni: /refer\n\n📷 Pozele tale — povestea ta. Noi o facem impecabilă.",
-        "help": "🆘 Ajutor\n\nRezultate mai bune:\n• Trimite 1–4 selfie‑uri cu lumină uniformă, fără filtre puternice\n• În descriere: locație, lumină, stil, încadrare, mood\n• Start rapid: deschide Preseturi și alege un stil\n• Copiere scenă: ‘Copiază’ — mai întâi referința, apoi selfie‑ul\n\nPlăți & sold:\n• Cumpără în ‘Cumpără’ (Stele Telegram)\n• Creditul se scade doar la generare reușită (exceptând whitelist/admin)\n• Cod promo — /promo COD\n\nProgram de recomandări:\n• Invită un prieten — tu +{ref_ref}, el/ea +{ref_new}\n• Linkul tău: /refer\n\nReguli & confidențialitate:\n• NSFW/celebr. interzise\n• Pozele se păstrează temporar; /clear curăță, /forget ștergere totală\n\nAi nevoie de ajutor? Scrie la @piciriga — răspundem rapid.",
+        "start": "✨ Bine ai venit la iModel — studio foto AI.\nFotografiile tale pot arăta ca făcute de un fotograf profesionist.\n\n🔹 Încarcă 1 selfie — lumina bună ajută.\n🔹 Descrie scena sau atmosfera dorită.\n🔹 Sau folosește ‘Copiază’: încarcă o poză preferată de pe internet, adaugă selfie‑ul tău — și primești un rezultat stilat în același spirit.\n\n📌 Meniu:\n⭐ Cumpără — alimentează soldul și deblochează mai mult.\n💰 Sold — vezi câte generări ai.\n📸 Preseturi — stiluri gata făcute.\n📋 Copiază — recreează un stil cu poza ta.\n🆘 Ajutor — răspunsuri la întrebări.\n🌐 Limbă — schimbă interfața.\n\n🎁 Generații gratuite — invită prieteni: /refer\n\n📷 Pozele tale — povestea ta. Noi o facem impecabilă.",
+        "help": "🆘 Ajutor\n\nRezultate mai bune:\n• Trimite 1 selfie cu lumină uniformă, fără filtre puternice\n• În descriere: locație, lumină, stil, încadrare, mood\n• Start rapid: deschide Preseturi și alege un stil\n• Copiere scenă: ‘Copiază’ — mai întâi referința, apoi selfie‑ul\n\nPlăți & sold:\n• Cumpără în ‘Cumpără’ (Stele Telegram)\n• Creditul se scade doar la generare reușită (exceptând whitelist/admin)\n• Cod promo — /promo COD\n\nProgram de recomandări:\n• Invită un prieten — tu +{ref_ref}, el/ea +{ref_new}\n• Linkul tău: /refer\n\nReguli & confidențialitate:\n• NSFW/celebr. interzise\n• Pozele se păstrează temporar; /clear curăță, /forget ștergere totală\n\nAi nevoie de ajutor? Scrie la @piciriga — răspundem rapid.",
         "need_photo": "Trimite o poză cu fața mai întâi.",
         "photo_ok": "Poză primită ✅ Acum descrie scena sau folosește /presets.",
         "gen": "Generez… ⏳",
@@ -669,6 +829,7 @@ T = {
         "btn_more": "Încă una",
         "btn_publish": "Publică",
         "btn_publish_group": "În grup",
+        "published_recent": "Deja publicat recent.",
         "menu_presets": "🎛 Preseturi",
         "menu_help": "🆘 Ajutor",
         "menu_refer": "🎁 Generații gratuite",
@@ -676,8 +837,21 @@ T = {
         "btn_support": "📨 Contact suport",
         "btn_back": "⬅️ Înapoi",
         "btn_refer": "🎁 Generații gratuite",
+        "body_ask": "👤 Vrei să adaugi înălțime și greutate pentru o potrivire mai exactă? Opțional.",
+        "btn_body_yes": "📏 Adaugă înălțime/greutate",
+        "btn_skip": "🙈 Nu acum",
+        "body_intro": "👤 Profil corp (opțional)\nTrimite înălțime și greutate în orice format (ex.: 178 cm, 72 kg sau 5'10 160 lb). Le folosesc pentru proporții/fit în prompturi. Scrie 'skip' pentru anulare.",
+        "body_saved": "Salvat: {info}.",
+        "body_cleared": "Profil corp șters.",
+        "body_bad": "Nu am putut interpreta. Exemple: 178 cm 72 kg sau 5'10 160 lb.",
+        "body_skip_ok": "Am înțeles! Poți adăuga mai târziu cu /body.",
+        "body_intro": "👤 Profil corp (opțional)\nTrimite înălțime și greutate în orice format (ex.: 178 cm, 72 kg sau 5'10 160 lb). Le folosesc pentru proporții/fit în prompturi. Scrie 'skip' pentru anulare.",
+        "body_saved": "Salvat: {info}.",
+        "body_cleared": "Profil corp șters.",
+        "body_bad": "Nu am putut interpreta. Exemple: 178 cm 72 kg sau 5'10 160 lb.",
         "hint_refer_pay": "🎁 Bonus: invită un prieten — +{ref_ref} ție · +{ref_new} lui/ei",
         "menu_pricing": "💎 Prețuri",
+        "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
         "buy_title": "💳 Cumpără generații (Stele Telegram)\nAlege pachetul avantajos:",
         "buy_btn_10": "10 gen — 200★",
         "buy_btn_30": "30 gen — 500★",
@@ -704,14 +878,40 @@ T = {
         "copy_done": "Gata ✅",
         "copy_exit": "Modul „Copiază” oprit.",
         "menu_copy": "📋 Copiază",
+        "menu_outfit": "👗 Ținute",
+        "outfit_intro": "👗 Probă de ținute\nPasul 1: trimite o poză a hainelor dintr‑un magazin online (produs pe fundal curat).\nPasul 2: trimite selfie‑ul tău.\nOpțional: adaugă descriere (culoare/fundal/stare) într‑un mesaj.",
+        "outfit_clothes_ok": "Îmbrăcăminte primită ✅ Trimite selfie‑ul.",
+        "outfit_need_clothes": "Trimite mai întâi poza cu îmbrăcămintea.",
+        "outfit_prompt_updated": "Descriere salvată. Trimite un selfie.",
+        "err_channel_not_configured": "Canalul nu este configurat.",
+        "err_group_not_configured": "Grupul nu este configurat.",
+        "err_no_result": "Nu există rezultat pentru publicare.",
+        "published_ok": "Publicat",
+        "published_group_ok": "Publicat în grup",
+        "before_after": "Înainte / După ✨",
+        "before": "Înainte",
+        "copy_prompt_updated": "Prompt actualizat. Trimite selfie-ul.",
+        "video_intro": "🎬 Mod Video\nTrimite un selfie — creez o animație SFW scurtă (pentru Reels/TikTok). Poți pune ideea în descriere.",
+        "video_off": "Modul Video oprit.",
+        "batch_intro": "📦 Pachet de generare\nTrimite 2–5 selfie-uri, apoi descrierea — generez pentru fiecare poză.",
+        "batch_added": "Poză adăugată ({n}/{limit}). Mai trimite sau trimite descrierea.",
+        "batch_limit": "S-a atins limita {limit}. Acum trimite descrierea.",
+        "batch_need_photos": "Trimite mai întâi 2–5 poze pentru procesare în pachet.",
+        "batch_processing": "Procesez pachetul… ⏳",
+        "batch_done": "Gata ✅ Am trimis {count} rezultate.",
+        "batch_insufficient": "Credite insuficiente: necesare {need}, ai {have}.",
+        "batch_exit": "Modul pachet oprit.",
+        "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
+        "style_share_btn": "✨ În acest stil",
+        "style_share_intro": "Stil încărcat ✅ Trimite un selfie — generez un rezultat similar.",
     }
     ,
     "de": {
         "menu_lang": "🌐 Sprache",
         "onboard_welcome": "Willkommen bei iModel. Tippe auf Start, um zu beginnen.",
         "onboard_btn": "🚀 Start",
-        "start": "✨ Willkommen bei iModel — dem KI‑Fotostudio.\nDeine Fotos können aussehen, als wären sie vom Profi gemacht.\n\n🔹 Lade 1–4 Selfies hoch — gutes Licht hilft.\n🔹 Beschreibe die gewünschte Szene oder Stimmung.\n🔹 Oder nutze ‘Kopieren’: lade ein Lieblingsfoto aus dem Internet hoch, füge dein Selfie hinzu — und erhalte ein stilvolles Ergebnis im selben Geist.\n\n📌 Menü:\n⭐ Kaufen — Guthaben aufladen und mehr freischalten.\n💰 Guthaben — sieh, wie viele Generierungen du hast.\n📸 Presets — fertige Shooting‑Stile.\n📋 Kopieren — Stil mit deinem Foto nachbilden.\n🆘 Hilfe — Antworten auf Fragen.\n🌐 Sprache — Oberfläche umstellen.\n\n🎁 Kostenlose Credits — lade Freunde ein: /refer\n\n📷 Deine Fotos — deine Geschichte. Wir machen sie makellos.",
-        "help": "🆘 Hilfe\n\nBeste Ergebnisse:\n• 1–4 Selfies bei gleichmäßiger Beleuchtung, ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt, Stimmung\n• Schnellstart: Presets öffnen und Stil wählen\n• Szene kopieren: ‘Kopieren’ — zuerst Referenz, dann Selfie\n\nZahlung & Guthaben:\n• Kaufen in ‘Kaufen’ (Telegram Stars)\n• Abzug nur bei erfolgreicher Generierung (außer Whitelist/Admin)\n• Promo‑Code — /promo CODE\n\nEmpfehlungsprogramm:\n• Freund einladen — du +{ref_ref}, er/sie +{ref_new}\n• Dein Link: /refer\n\nRegeln & Datenschutz:\n• NSFW/Promis verboten\n• Fotos werden temporär gespeichert; /clear löscht temporär, /forget vollständig\n\nBrauchen Sie Hilfe? Schreiben Sie @piciriga — wir antworten schnell.",
+        "start": "✨ Willkommen bei iModel — dem KI‑Fotostudio.\nDeine Fotos können aussehen, als wären sie vom Profi gemacht.\n\n🔹 Lade 1 Selfie hoch — gutes Licht hilft.\n🔹 Beschreibe die gewünschte Szene oder Stimmung.\n🔹 Oder nutze ‘Kopieren’: lade ein Lieblingsfoto aus dem Internet hoch, füge dein Selfie hinzu — und erhalte ein stilvolles Ergebnis im selben Geist.\n\n📌 Menü:\n⭐ Kaufen — Guthaben aufladen und mehr freischalten.\n💰 Guthaben — sieh, wie viele Generierungen du hast.\n📸 Presets — fertige Shooting‑Stile.\n📋 Kopieren — Stil mit deinem Foto nachbilden.\n🆘 Hilfe — Antworten auf Fragen.\n🌐 Sprache — Oberfläche umstellen.\n\n🎁 Kostenlose Credits — lade Freunde ein: /refer\n\n📷 Deine Fotos — deine Geschichte. Wir machen sie makellos.",
+        "help": "🆘 Hilfe\n\nBeste Ergebnisse:\n• 1 Selfie bei gleichmäßiger Beleuchtung, ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt, Stimmung\n• Schnellstart: Presets öffnen und Stil wählen\n• Szene kopieren: ‘Kopieren’ — zuerst Referenz, dann Selfie\n\nZahlung & Guthaben:\n• Kaufen in ‘Kaufen’ (Telegram Stars)\n• Abzug nur bei erfolgreicher Generierung (außer Whitelist/Admin)\n• Promo‑Code — /promo CODE\n\nEmpfehlungsprogramm:\n• Freund einladen — du +{ref_ref}, er/sie +{ref_new}\n• Dein Link: /refer\n\nRegeln & Datenschutz:\n• NSFW/Promis verboten\n• Fotos werden temporär gespeichert; /clear löscht temporär, /forget vollständig\n\nBrauchen Sie Hilfe? Schreiben Sie @piciriga — wir antworten schnell.",
         "need_photo": "Bitte zuerst ein Gesichts‑Foto senden.",
         "photo_ok": "Foto empfangen ✅ Beschreibe jetzt die Szene oder nutze /presets.",
         "gen": "Erzeuge… ⏳",
@@ -732,6 +932,7 @@ T = {
         "btn_more": "Mehr",
         "btn_publish": "Veröffentlichen",
         "btn_publish_group": "In Gruppe",
+        "published_recent": "Kürzlich bereits veröffentlicht.",
         "menu_presets": "🎛 Presets",
         "menu_help": "🆘 Hilfe",
         "menu_refer": "🎁 Kostenlose Credits",
@@ -739,8 +940,21 @@ T = {
         "btn_support": "📨 Support kontaktieren",
         "btn_back": "⬅️ Zurück",
         "btn_refer": "🎁 Kostenlose Credits",
+        "body_ask": "👤 Größe und Gewicht für bessere Passform hinzufügen? Optional.",
+        "btn_body_yes": "📏 Größe/Gewicht angeben",
+        "btn_skip": "🙈 Nicht jetzt",
+        "body_intro": "👤 Körperprofil (optional)\nSende Größe und Gewicht (z.B. 178 cm, 72 kg oder 5'10 160 lb). Wird genutzt für realistische Proportionen/Fit. Schreibe 'skip' zum Abbrechen.",
+        "body_saved": "Gespeichert: {info}.",
+        "body_cleared": "Körperprofil gelöscht.",
+        "body_bad": "Konnte nicht erkennen. Beispiele: 178 cm 72 kg oder 5'10 160 lb.",
+        "body_skip_ok": "Alles klar! Du kannst später per /body ergänzen.",
+        "body_intro": "👤 Körperprofil (optional)\nSende Größe und Gewicht (z.B. 178 cm, 72 kg oder 5'10 160 lb). Wird genutzt für realistische Proportionen/Fit. Schreibe 'skip' zum Abbrechen.",
+        "body_saved": "Gespeichert: {info}.",
+        "body_cleared": "Körperprofil gelöscht.",
+        "body_bad": "Konnte nicht erkennen. Beispiele: 178 cm 72 kg oder 5'10 160 lb.",
         "hint_refer_pay": "🎁 Tipp: Freund einladen — +{ref_ref} dir · +{ref_new} ihm/ihr",
         "menu_pricing": "💎 Preise",
+        "refer_msg": "👥 Lade Freunde ein und erhalte Bonus‑Generierungen!\nDein Link: {link}\n\nEingeladen: {count}\nErhaltene Boni: {earned}",
         "buy_title": "💳 Käufe (Telegram Stars)\nWähle ein passendes Paket:",
         "buy_btn_10": "10 Gen — 200★",
         "buy_btn_30": "30 Gen — 500★",
@@ -767,16 +981,59 @@ T = {
         "copy_done": "Fertig ✅",
         "copy_exit": "Kopier‑Modus AUS.",
         "menu_copy": "📋 Kopieren",
+        "menu_outfit": "👗 Outfit",
+        "outfit_intro": "👗 Outfit‑Anprobe\nSchritt 1: Foto der Kleidung aus einem Onlineshop senden (Produkt auf neutralem Hintergrund).\nSchritt 2: Dein Selfie senden.\nOptional: kurze Beschreibung (Farbe/Hintergrund/Stimmung) als Text.",
+        "outfit_clothes_ok": "Kleidung empfangen ✅ Jetzt ein Selfie senden.",
+        "outfit_need_clothes": "Bitte zuerst ein Foto der Kleidung senden.",
+        "outfit_prompt_updated": "Beschreibung gespeichert. Jetzt ein Selfie senden.",
+        "style_share_btn": "✨ In diesem Stil",
+        "style_share_intro": "Stil geladen ✅ Sende ein Selfie — ich erstelle ein ähnliches Ergebnis.",
+        "err_channel_not_configured": "Kanal ist nicht konfiguriert.",
+        "err_group_not_configured": "Gruppe ist nicht konfiguriert.",
+        "err_no_result": "Kein Ergebnis zum Veröffentlichen.",
+        "published_ok": "Veröffentlicht",
+        "published_group_ok": "In Gruppe veröffentlicht",
+        "before_after": "Vorher / Nachher ✨",
+        "before": "Vorher",
+        "copy_prompt_updated": "Prompt aktualisiert. Bitte sende ein Selfie.",
+        "video_intro": "🎬 Video‑Modus\nSende ein Selfie — ich erstelle eine kurze SFW‑Animation (für Reels/TikTok). Bildunterschrift kann als Idee dienen.",
+        "video_off": "Video‑Modus AUS.",
+        "batch_intro": "📦 Stapel‑Modus\nSende 2–5 Selfies, dann eine Beschreibung — ich generiere für jedes Foto.",
+        "batch_added": "Foto hinzugefügt ({n}/{limit}). Sende mehr oder deine Beschreibung.",
+        "batch_limit": "Limit {limit} erreicht. Jetzt Beschreibung senden.",
+        "batch_need_photos": "Bitte zuerst 2–5 Fotos für die Stapelverarbeitung senden.",
+        "batch_processing": "Stapel wird verarbeitet… ⏳",
+        "batch_done": "Fertig ✅ {count} Ergebnisse gesendet.",
+        "batch_insufficient": "Nicht genug Guthaben: benötigt {need}, vorhanden {have}.",
+        "batch_exit": "Stapel‑Modus AUS.",
     }
 }
 
 def L(chat_id: int) -> dict:
-    return T.get(USER_LANG.get(chat_id, LANG_DEFAULT), T[LANG_DEFAULT])
+    """Return language dict with safe fallback to default for missing keys.
+    Access via d["key"] won't KeyError — falls back to default lang or the key itself.
+    """
+    base = T.get(LANG_DEFAULT, {})
+    current = T.get(USER_LANG.get(chat_id, LANG_DEFAULT), base)
+
+    class _Lang(dict):
+        def __getitem__(self, k):  # type: ignore[override]
+            if dict.__contains__(self, k):
+                return dict.__getitem__(self, k)
+            return base.get(k, k)
+
+        def get(self, k, default=None):  # type: ignore[override]
+            if dict.__contains__(self, k):
+                return dict.__getitem__(self, k)
+            return base.get(k, default)
+
+    return _Lang(current)
 
 def locale_to_lang(code: Optional[str]) -> str:
     if not code:
         return LANG_DEFAULT
-    code = code.lower()
+    # Normalize: lowercase and unify separators (ru_RU → ru-ru)
+    code = str(code).strip().lower().replace("_", "-")
     base = code.split("-")[0]
     if base in ("ru", "uk", "be"):
         return "ru"
@@ -838,7 +1095,23 @@ async def safe_answer_photo(m: Message, photo: BufferedInputFile, **kwargs):
     except (TelegramForbiddenError, TelegramNotFound):
         print(f"[safe_answer_photo] blocked/not found: chat_id={m.chat.id}")
     except TelegramBadRequest as e:
-        print(f"[safe_answer_photo] bad request: {e}")
+        msg = str(e)
+        print(f"[safe_answer_photo] bad request: {msg}")
+        # Fallback: if photo too large for Telegram, send as document instead
+        if "too big for a photo" in msg or "file of size" in msg:
+            try:
+                return await m.answer_document(document=photo, **kwargs)
+            except TelegramBadRequest as e2:
+                print(f"[safe_answer_photo->document] bad request: {e2}")
+    return None
+
+async def safe_answer_video(m: Message, video: BufferedInputFile, **kwargs):
+    try:
+        return await m.answer_video(video=video, **kwargs)
+    except (TelegramForbiddenError, TelegramNotFound):
+        print(f"[safe_answer_video] blocked/not found: chat_id={m.chat.id}")
+    except TelegramBadRequest as e:
+        print(f"[safe_answer_video] bad request: {e}")
     return None
 
 async def safe_edit_text(msg: Message, text: str):
@@ -1020,6 +1293,282 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
         time.sleep(base_sleep * (i + 1))
     return None
 
+# ===================== VIDEO GEN =====================
+def generate_video_from_bytes(img_bytes: bytes, prompt: Optional[str] = None) -> Optional[bytes]:
+    if not REPLICATE_API_TOKEN or not VIDEO_MODEL:
+        print("video: missing replicate token or model")
+        return None
+    # Prepare sources: S3 URL if configured, and data URL fallback
+    s3_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    data_url = f"data:image/jpeg;base64,{b64}"
+    safe_prompt = enforce_safe_prompt(prompt or "") if prompt else None
+    seed = int(hashlib.md5(img_bytes).hexdigest()[:8], 16)
+
+    models = [VIDEO_MODEL, "stability-ai/stable-video-diffusion-img2vid", "stability-ai/stable-video-diffusion"]
+    # common parameter variants used across SVD forks on Replicate
+    image_keys = ["image", "input_image"]
+    cfg_variants = [
+        {},
+        {"frames": 14},
+        {"fps": 8},
+        {"motion_bucket_id": 32},
+        {"cond_aug": 0.15},
+        {"seed": seed},
+    ]
+
+    for model in models:
+        for src in (s3_url, data_url):
+            if not src:
+                continue
+            for ikey in image_keys:
+                base_inp = {ikey: src}
+                if safe_prompt:
+                    base_inp["prompt"] = safe_prompt
+                for extra in cfg_variants:
+                    inp = dict(base_inp); inp.update(extra)
+                    try:
+                        vurl = replicate_generate(model, inp)
+                        if vurl and str(vurl).startswith("http"):
+                            vb = _download_with_retries(vurl)
+                            if vb:
+                                print("video ok via", model, ikey, extra)
+                                return vb
+                    except Exception as e:
+                        print("video gen error:", str(e)[:160])
+                        continue
+    print("video: no url from replicate; last error:", REPLICATE_LAST_ERROR[:160])
+    return None
+
+# ===================== GROUP POSTS =====================
+PROMO_TOPICS_RU = [
+    "instagram aesthetic lifestyle portrait, candid smile, soft natural window light, airy pastel palette",
+    "street style portrait, soft overcast light, shallow depth, subtle film grain, tasteful colors",
+    "clean studio look, softbox glow, pastel backdrop, minimalist composition, editorial yet casual",
+    "golden hour portrait, warm rim light, gentle haze, teal‑orange touch, modern influencer vibe",
+    "coffee shop lifestyle portrait, warm tungsten, cozy mood, creamy bokeh, natural skin tones",
+]
+
+PROMO_TOPICS_RO = [
+    "instagram aesthetic lifestyle portrait, candid laugh, soft daylight, airy pastels, minimal retouch",
+    "urban portrait, overcast soft light, creamy bokeh, subtle grain, fashionable yet natural",
+    "studio portrait, soft beauty light, clean pastel background, minimalist composition",
+    "sunset golden hour, warm backlight, dreamy haze, modern influencer color grade",
+    "cafe lifestyle portrait, warm lights, cozy atmosphere, shallow depth of field",
+]
+
+# Educational tip buckets per language
+TIPS_RU = {
+    "light_morning": "Лайфхак света: утром ставьте камеру так, чтобы солнечный блик шёл вдоль стены — мягкий объём без пересветов.",
+    "light_sunset": "Золотой час спасает даже простую комнату — тёплая боковая подсветка даёт глубину и уют.",
+    "light_lamps": "Лампы тёплого спектра + выключенный верхний свет = меньше плоских теней и больше атмосферы.",
+    "framing_wide": "Ширик — это аккуратность: выравнивайте вертикали и следите, чтобы углы мебели не ‘уезжали’.",
+    "framing_height": "Высота камеры ~90–110 см: линии столов и кроватей становятся ровнее, кадр — спокойнее.",
+    "color_wb": "Баланс белого держите нейтральным: смешение ламп и дневного света лечится точкой серого.",
+    "micro_contrast": "Немного микроконтраста подчёркивает текстуры дерева и ткани — не переборщите.",
+    "donts": "Не перегружайте кадр: уберите лишние предметы со столешниц и пола — воздух дороже.",
+}
+
+TIPS_RO = {
+    "light_morning": "Lumina de dimineață pe perete dă volum blând fără supraexpuneri.",
+    "light_sunset": "Ora de aur încălzește orice cameră — lumină laterală = profunzime & cozy.",
+    "light_lamps": "Becuri calde + fără lumină de tavan = umbre mai plăcute și atmosferă.",
+    "framing_wide": "Cu wide‑angle fii atent la verticale — colțurile mobilei să nu ‘alunece’.",
+    "framing_height": "Înălțimea camerei ~90–110 cm: linii mai drepte, cadru mai calm.",
+    "color_wb": "Ține WB neutru: mixul dintre lumină de zi și lămpi se corectează cu un punct de gri.",
+    "micro_contrast": "Puțin micro‑contrast scoate textura lemnului și a textilelor — cu măsură.",
+    "donts": "Nu încărca cadrul: eliberează blaturile și podeaua — aerul valorează mult.",
+}
+
+def _pick_tip(lang: str) -> str:
+    tips = TIPS_RU if lang.startswith("ru") else TIPS_RO if lang.startswith("ro") else None
+    if not tips:
+        return "Keep verticals straight and light soft — simple and classy."
+    key = random.choice(list(tips.keys()))
+    return tips[key]
+
+def craft_group_post_text(lang: str, bot_username: Optional[str]) -> str:
+    name = ("@" + bot_username) if bot_username else "the bot"
+
+    # Instagram‑style witty quotes per language (short, charismatic, playful)
+    QUOTES_RU = [
+        "Красота — это когда лишнего нет, а ты есть.",
+        "Харизма — это фильтр, который всегда ‘вкл’.",
+        "Жизнь как лента — главное, что в кадре ты.",
+        "Юмор — мой софтбокс. Подсвечивает даже понедельник.",
+        "Идеального света не бывает. Бывает твоё настроение в кадре.",
+        "Главный секрет стиля? Делать вид, что это не секрет.",
+    ]
+    QUOTES_RO = [
+        "Frumusețea începe când dispare ‘prea mult’. Tu rămâi.",
+        "Carisma e filtrul meu preferat — mereu ON.",
+        "Viața e un feed — important e că ești în cadru.",
+        "Umorul e softbox‑ul meu. Pune lumină pe orice zi.",
+        "Lumina perfectă? Starea ta în cadru.",
+    ]
+    QUOTES_DE = [
+        "Stil ist, wenn nichts zu viel ist — und du bleibst.",
+        "Charisma ist mein Lieblingsfilter — immer an.",
+        "Das Leben ist ein Feed. Hauptsache: du bist im Bild.",
+        "Humor ist mein Softbox — beleuchtet jeden Montag.",
+        "Perfektes Licht? Deine Stimmung im Bild.",
+    ]
+    QUOTES_EN = [
+        "Style is when nothing’s extra — and you still shine.",
+        "Charisma is my favorite filter — always on.",
+        "Life is a feed. The point is: you’re in frame.",
+        "Humor is my softbox — lights up any Monday.",
+        "Perfect light? Your mood in the shot.",
+    ]
+
+    def pick_quote() -> str:
+        if lang.startswith("ru"):
+            return random.choice(QUOTES_RU)
+        if lang.startswith("ro"):
+            return random.choice(QUOTES_RO)
+        if lang.startswith("de"):
+            return random.choice(QUOTES_DE)
+        return random.choice(QUOTES_EN)
+
+    quote = pick_quote()
+
+    # Try LLM if available — but ask for IG‑style quote
+    try:
+        if OPENAI_API_KEY and OpenAI is not None:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            sys = (
+                "You craft short Instagram‑style quotes: witty, charismatic, playful. "
+                "Return 1–2 sentences only. No hashtags, no emojis overload. "
+                "Close with a soft CTA mentioning the bot handle."
+            )
+            user = f"Language: {lang}. Bot handle: {name}. Example tone: '{quote}'."
+            r = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role":"system","content":sys},{"role":"user","content":user}],
+                temperature=0.9,
+                max_tokens=80,
+            )
+            out = (r.choices[0].message.content or "").strip()
+            if out:
+                return out
+    except Exception as e:
+        print("craft_group_post_text error:", str(e)[:160])
+
+    # Fallback: static quote + CTA
+    if lang.startswith("ru"):
+        return f"{quote}\nПопробуй {name} — чуть юмора, много стиля."
+    if lang.startswith("ro"):
+        return f"{quote}\nÎncearcă {name} — un strop de umor, mult stil."
+    if lang.startswith("de"):
+        return f"{quote}\nTeste {name} — leicht, stilvoll, sympathisch."
+    return f"{quote}\nTry {name} — tasteful, playful, you."
+
+def craft_group_post_image_prompt(lang: str) -> str:
+    topics = PROMO_TOPICS_RU if lang.startswith("ru") else PROMO_TOPICS_RO if lang.startswith("ro") else PROMO_TOPICS_RU
+    theme = random.choice(topics)
+    base = (
+        "instagram aesthetic lifestyle portrait, 4:5 vertical, candid, tasteful and modern, "
+        "soft natural light, airy pastel palette, subtle film grain, shallow depth of field, "
+        "clean composition, natural skin tones, SFW, no brands, no text"
+    )
+    return f"{theme}. {base}"
+
+def generate_group_post_image(lang: str) -> Optional[bytes]:
+    if GROUP_POST_TEXT_ONLY:
+        return None
+    if not REPLICATE_API_TOKEN or not NANOBANANA_MODEL:
+        return None
+    prompt = craft_group_post_image_prompt(lang)
+    try:
+        url = replicate_generate(NANOBANANA_MODEL, {"prompt": prompt})
+        if url and url.startswith("http"):
+            img = _download_with_retries(url)
+            if img:
+                # Optional upscale
+                try:
+                    up = replicate_generate(ESRGAN_MODEL, {"image": url, "scale": 2, "face_enhance": False, "model":"RealESRGAN_x4plus"})
+                    if up and up.startswith("http"):
+                        upb = _download_with_retries(up)
+                        if upb:
+                            return upb
+                except Exception as e:
+                    print("group ESRGAN error:", str(e)[:160])
+                return img
+    except Exception as e:
+        print("group image generate error:", str(e)[:160])
+    return None
+
+def _next_group_lang() -> str:
+    global _GROUP_LANG_IDX
+    if not _GROUP_LANGS:
+        return "ru"
+    lang = _GROUP_LANGS[_GROUP_LANG_IDX % len(_GROUP_LANGS)]
+    _GROUP_LANG_IDX = (_GROUP_LANG_IDX + 1) % max(1, len(_GROUP_LANGS))
+    return lang
+
+async def group_posts_loop():
+    # Post to group every 2-3 hours with light randomness
+    await asyncio.sleep(5)
+    while True:
+        try:
+            if not PUBLISH_GROUP_ID or not GROUP_POSTS_ENABLED:
+                await asyncio.sleep(60)
+                continue
+            # Rotate langs if list provided
+            lang = _next_group_lang()
+            # If debug interval set, ignore quiet hours
+            if GROUP_POST_EVERY_MINUTES <= 0:
+                # Respect quiet hours (22:00..08:00) in the language's timezone
+                try:
+                    from zoneinfo import ZoneInfo
+                    import datetime as _dt
+                    tzname = _lang_to_tz(lang)
+                    now_loc = _dt.datetime.now(ZoneInfo(tzname))
+                    hour = now_loc.hour
+                    start_h = min(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
+                    end_h = max(GROUP_POST_START_HOUR, GROUP_POST_END_HOUR)
+                    if not (start_h <= hour < end_h):
+                        # sleep until next window start
+                        next_start = now_loc.replace(hour=start_h, minute=0, second=0, microsecond=0)
+                        if hour >= end_h:
+                            next_start = next_start + _dt.timedelta(days=1)
+                        wait_sec = max(60, int((next_start - now_loc).total_seconds()))
+                        await asyncio.sleep(wait_sec)
+                        continue
+                except Exception:
+                    pass
+            # Compose text
+            txt = craft_group_post_text(lang, BOT_USERNAME_GLOBAL)
+            img = generate_group_post_image(lang)
+            if img:
+                try:
+                    await bot.send_photo(
+                        chat_id=PUBLISH_GROUP_ID,
+                        photo=BufferedInputFile(img, filename="promo.jpg"),
+                        caption=txt
+                    )
+                    STATS["published_group"] = int(STATS.get("published_group", 0)) + 1
+                    global GROUP_POST_LAST_AT
+                    GROUP_POST_LAST_AT = time.time()
+                except Exception as e:
+                    print("group promo send error:", str(e)[:160])
+            else:
+                try:
+                    await bot.send_message(chat_id=PUBLISH_GROUP_ID, text=txt)
+                    STATS["published_group"] = int(STATS.get("published_group", 0)) + 1
+                    GROUP_POST_LAST_AT = time.time()
+                except Exception as e:
+                    print("group promo text error:", str(e)[:160])
+            # Sleep
+            if GROUP_POST_EVERY_MINUTES > 0:
+                await asyncio.sleep(max(60, GROUP_POST_EVERY_MINUTES * 60))
+            else:
+                wait_h = random.uniform(GROUP_POST_MIN_HOURS, GROUP_POST_MAX_HOURS)
+                await asyncio.sleep(max(300, int(wait_h * 3600)))
+        except Exception as e:
+            print("group_posts_loop error:", str(e)[:160])
+            await asyncio.sleep(60)
+
 # ===================== PROMPTS ========================
 def _safe_suffix() -> str:
     parts = []
@@ -1039,8 +1588,13 @@ IDENTITY_LOCK = (
     "No face reshaping, no beautification filters, no de-aging, no make-up exaggeration."
 )
 
+GENDER_LOCK = (
+    "Keep the SAME gender as in the input selfie. Do not change gender; "
+    "do not feminize a male face and do not masculinize a female face."
+)
+
 NEGATIVE_LOCK = (
-    "different person, identity change, changed ethnicity, de-aged, "
+    "different person, identity change, gender swap, changed gender, changed ethnicity, de-aged, "
     "face morph, face swap artifacts, over-smooth skin, plastic doll, uncanny face, "
     "warped features, duplicate face, extra fingers, extra hands, artifacts, lowres"
 )
@@ -1076,7 +1630,149 @@ def safer_variant(prompt: str) -> str:
     extra = " | conservative clothing, neutral pose, documentary portrait, editorial style"
     return f"{base}{extra}"
 
-def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = True) -> str:
+# ===== Outfit prompts =====
+OUTFIT_PROMPTS: Dict[str, str] = {
+    "evening": (
+        "studio fashion portrait, neutral seamless backdrop (gray/black), waist-up or full-body, "
+        "elegant evening dress, fitted waist, flowing skirt, clean silhouette, satin/silk or matte crepe, "
+        "minimal jewelry, tasteful styling, editorial look, soft beauty light, 85mm look, fully clothed"
+    ),
+    "suit": (
+        "corporate headshot / fashion portrait, neutral gray backdrop, tailored business suit (single-breasted blazer and trousers), "
+        "crisp white shirt, tie optional, structured shoulders, clean lines, subtle pocket square, "
+        "professional lighting (key+fill), 85mm look, fully clothed"
+    ),
+    "casual": (
+        "casual lifestyle portrait, neutral studio or minimal interior, cotton t-shirt or knit sweater, denim jacket or relaxed blazer, "
+        "jeans, clean sneakers, simple accessories, soft natural-looking light, 50–85mm look, fully clothed"
+    ),
+}
+
+def build_outfit_prompt(style_key: str, extra: str | None = None) -> str:
+    base = OUTFIT_PROMPTS.get(style_key, OUTFIT_PROMPTS["casual"])  # default safe
+    extra_clean = (extra or "").strip().strip("., ")
+    text = f"{base}, {extra_clean}" if extra_clean else base
+    # Allow brand marks/lettering if present; still enforce SFW
+    text = f"{text}, respectful"
+    return enforce_safe_prompt(text)
+
+# ===== Body parsing/helpers =====
+_RE_NUM = re.compile(r"(?:(\d+(?:[\.,]\d+)?)\s*(cm|мм|mm|m|метр|метров|см)\b|(?:(\d+))\s*(ft|feet|')\s*(\d+)?\s*(in|inch|inches|\")?|(?:(\d+(?:[\.,]\d+)?))\s*(kg|кг|килограмм|lb|lbs|pound|pounds|фунт[а-я]*)\b|\b(\d{2,3})\b)", re.I)
+
+def _parse_body(text: str) -> Dict[str, object]:
+    t = (text or "").lower().strip()
+    height_cm: float | None = None
+    weight_kg: float | None = None
+
+    # simple heuristics for formats: "180 cm", "1.78 m", "5'10", "5 ft 10 in"
+    # and weights: "72 kg", "160 lb"
+    # fallbacks: bare numbers with ranges
+
+    # feet/inches
+    m = re.search(r"(\d+)\s*(?:ft|feet|')\s*(\d+)?\s*(?:in|inch|inches|\")?", t)
+    if m:
+        ft = int(m.group(1))
+        inc = int(m.group(2) or 0)
+        height_cm = ft * 30.48 + inc * 2.54
+    # meters
+    m = re.search(r"(\d+[\.,]\d+)\s*m\b", t)
+    if (not height_cm) and m:
+        height_cm = float(m.group(1).replace(',', '.')) * 100.0
+    # centimeters
+    m = re.search(r"(\d{2,3})\s*(?:cm|см|мм|mm)\b", t)
+    if (not height_cm) and m:
+        val = int(m.group(1))
+        height_cm = float(val if 'cm' in m.group(0) or 'см' in m.group(0) else val / 10.0)
+    # bare height candidate 140..220
+    if not height_cm:
+        m = re.search(r"\b(1\d{2}|2[0-2]\d)\b", t)
+        if m:
+            height_cm = float(m.group(1))
+
+    # weight kg
+    m = re.search(r"(\d+[\.,]?\d*)\s*(?:kg|кг|килограм)", t)
+    if m:
+        weight_kg = float(m.group(1).replace(',', '.'))
+    # weight lb
+    m = re.search(r"(\d+[\.,]?\d*)\s*(?:lb|lbs|pound)", t)
+    if (not weight_kg) and m:
+        weight_kg = float(m.group(1).replace(',', '.')) * 0.45359237
+    # bare weight candidate 40..200 (assume kg)
+    if not weight_kg:
+        m = re.search(r"\b([4-9]\d|1\d{2}|200)\b", t)
+        if m:
+            weight_kg = float(m.group(1))
+
+    out: Dict[str, object] = {}
+    if height_cm and 120.0 <= height_cm <= 230.0:
+        out['height_cm'] = round(height_cm, 1)
+    if weight_kg and 35.0 <= weight_kg <= 250.0:
+        out['weight_kg'] = round(weight_kg, 1)
+    if out:
+        out['raw'] = text.strip()
+    return out
+
+def _body_to_userline(d: Dict[str, object]) -> str:
+    h = d.get('height_cm')
+    w = d.get('weight_kg')
+    parts = []
+    if isinstance(h, (int, float)):
+        parts.append(f"рост ~ {h:.0f} см")
+    if isinstance(w, (int, float)):
+        parts.append(f"вес ~ {w:.0f} кг")
+    return ", ".join(parts)
+
+def _body_to_gpt_hint(d: Dict[str, object]) -> str:
+    h = d.get('height_cm')
+    w = d.get('weight_kg')
+    segs = []
+    if isinstance(h, (int, float)):
+        segs.append(f"height ~{h:.0f} cm")
+    if isinstance(w, (int, float)):
+        segs.append(f"weight ~{w:.0f} kg")
+    return "; ".join(segs)
+
+def craft_outfit_prompt_from_image(clothes_bytes: bytes, extra: Optional[str] = None) -> Optional[str]:
+    if not OPENAI_API_KEY or OpenAI is None:
+        return None
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        b64 = base64.b64encode(clothes_bytes).decode("utf-8")
+        sys = (
+            "You are a fashion stylist + VTO prompt engineer. Given ONE clothing/product photo, output ONE LONG LINE in English, "
+            "comma-separated, describing EXACT garments to WEAR on a person: garment category and components (top/bottom/one-piece/outerwear), layering, "
+            "silhouette and proportions (oversized/relaxed/slim/tailored), fit and size impression, pattern/print (including brand lettering/logos if visible and any text content with placement), "
+            "materials/fabrics (cotton, wool, denim, leather, satin, knit, etc), weave/weight/drape, texture (ribbed, cable-knit, brushed, matte/glossy), "
+            "color palette (primary/accent/trim), construction details (collar/lapel/cuffs/hem/pleats/darts/panels/seams), closures/hardware (buttons, zipper, snaps, laces, drawstrings, buckles), "
+            "pockets and trims, accessories pairing (belt/jewelry/hat/scarf/bag), shoes if implied, overall styling note. "
+            "Write it as a WEAR specification for the subject. Do NOT mention 'reference', 'swap', or 'face'. Keep SFW (fully clothed)."
+        )
+        utext = ""
+        if extra and extra.strip():
+            utext = f"Add user preferences: {extra.strip()}"
+        msg = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": [
+                {"type": "text", "text": ("Return the one long line. " + utext).strip()},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]},
+        ]
+        r = client.chat.completions.create(
+            model=OPENAI_MODEL_VISION,
+            messages=msg,
+            temperature=0.2,
+            max_tokens=380,
+        )
+        line = (r.choices[0].message.content or "").strip()
+        if not line:
+            return None
+        # Add identity preservation and safety suffix downstream via enforce
+        return enforce_safe_prompt(line)
+    except Exception as e:
+        print("Outfit Vision prompt error:", str(e)[:200])
+        return None
+
+def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = True, body_hint: Optional[str] = None) -> str:
     safe_raw = enforce_safe_prompt(raw_prompt)
     if not allow_refine or os.getenv("DISABLE_GPT_REFINE") == "1" or not OPENAI_API_KEY or OpenAI is None:
         base = safe_raw
@@ -1085,9 +1781,13 @@ def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = Tru
             client = OpenAI(api_key=OPENAI_API_KEY)
             sys = ("You are a prompt writer for a face-preserving image generation pipeline. "
                    "Rewrite the user's brief into a concise, vivid, SFW English prompt that "
-                   "keeps the same person and the same intent. Ensure: fully clothed, SFW.")
-            user = (f"User prompt: {raw_prompt}\n\n"
-                    "Rewrite to one line. Add environment, mood, lighting, camera. Keep it respectful and SFW.")
+                   "keeps the same person and the same intent. Ensure: fully clothed, SFW. "
+                   "If body information is provided, infer realistic body proportions and garment fit from it, "
+                   "but do NOT mention any numeric measurements explicitly.")
+            body_line = (f"User body: {body_hint}.\n" if body_hint else "")
+            user = (f"{body_line}User prompt: {raw_prompt}\n\n"
+                    "Rewrite to one line. Add environment, mood, lighting, camera. Keep it respectful and SFW. "
+                    "Use the body info implicitly (fit, proportions), without quoting numbers.")
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[{"role": "system", "content": sys},
@@ -1111,19 +1811,27 @@ def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
         client = OpenAI(api_key=OPENAI_API_KEY)
         b64 = base64.b64encode(style_bytes).decode("utf-8")
         sys = (
-            "You are a senior photographer. Extract a ONE-LINE SCENE SPEC for exact recreation with a different face. "
-            "Be concrete and visual, avoid prose. Include in order: environment/location; composition & framing (closeup/half-body/etc); "
-            "camera angle and focal length feel; pose & head orientation; time of day; lighting direction/quality; color palette/color grading; "
-            "style adjectives; any distinctive background cues. Keep subject generic (person). SFW only."
+            "You are a senior photographer and lighting designer. Extract ONE LONG LINE (comma‑separated) SCENE SPEC for exact recreation "
+            "with a different face. Be concrete and visual, no filler prose. Include in order: environment/location with key background cues "
+            "(materials, furniture, depth, distance), composition & framing (portrait 4:5, close‑up/half‑body/full, headroom, negative space), "
+            "camera angle (eye‑level/low/high) and lens/focal length feel (e.g., 85mm), exposure metadata (aperture, shutter, ISO), pose & head orientation, "
+            "time of day, lighting design (key/fill/rim/back, source type like window/softbox/neon, direction/height/size/softness, Kelvin temperature), "
+            "color palette and grading (film‑like, teal‑orange, pastel, muted, high contrast), mood, and style adjectives. Keep subject generic (adult person). "
+            "Strictly SFW (fully clothed). No brands, no logos, no text, no celebrity. Keep it ONE line, information‑dense."
         )
         msg = [
             {"role": "system", "content": sys},
             {"role": "user", "content": [
-                {"type": "text", "text": "Describe the scene for 1:1 copy."},
+                {"type": "text", "text": "Produce one detailed line for 1:1 scene copy (no face/identity notes)."},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
             ]}
         ]
-        r = client.chat.completions.create(model=OPENAI_MODEL_VISION, messages=msg, temperature=0.2, max_tokens=180)
+        r = client.chat.completions.create(
+            model=OPENAI_MODEL_VISION,
+            messages=msg,
+            temperature=0.2,
+            max_tokens=260,
+        )
         line = (r.choices[0].message.content or "").strip()
         if not line:
             return None
@@ -1134,21 +1842,24 @@ def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
         return None
 
 def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
-    """Produce a detailed Midjourney-style prompt describing the style image (SFW)."""
+    """Produce an extra‑detailed, longer one‑line prompt for Copy Mode with very strong clothing and scene detail (SFW)."""
     if not OPENAI_API_KEY or OpenAI is None:
         return None
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         b64 = base64.b64encode(style_bytes).decode("utf-8")
         sys = (
-            "You are an expert Midjourney prompt engineer. Given a single reference photo, "
-            "write ONE LINE Midjourney-style prompt (concise but very detailed). "
-            "Focus on: subject description (generic, no names), environment, composition/framing, camera angle, lens/focal feel, "
-            "lighting direction/quality, color palette/color grading, mood, style/adjectives, textures, time of day. "
-            "Keep SFW (fully clothed), avoid any brand/celebrity names, keep it respectful. Do not mention 'reference' or 'face swap'."
+            "You are an expert fashion + photography prompt engineer. Given ONE reference photo, return ONE LONG LINE in English, "
+            "comma‑separated attributes, extremely detailed and information‑dense. Start with CLOTHING (garment category, layering, silhouette and fit, "
+            "drape, materials/fabrics and weave, texture, pattern/print, construction details like collar/lapel/cuffs/hem/seams/pleats/darts, closures and hardware, "
+            "accessories (belt, jewelry, earrings, necklace, watch, glasses, hat, scarf, bag), footwear, and a concise clothing color palette). Then cover: subject (generic 'adult person'), "
+            "environment/location with distinctive background cues (materials, furniture, signage/bokeh shapes, depth, distance), composition/framing (portrait 4:5, close‑up/half‑body/full, headroom, negative space, rule of thirds), "
+            "camera angle and lens/focal length feel (e.g., 85mm), exposure metadata (aperture f/.., shutter 1/..s, ISO ..), pose and head orientation, time of day, "
+            "lighting design (key/fill/rim/back, source type window/softbox/neon, direction/height/size/softness, Kelvin temperature), color grading/toning (pastel, muted, teal‑orange, filmic), mood, and tiny styling cues. "
+            "Strictly SFW (fully clothed). No brands, no logos, no celebrity, no text. Do not mention 'reference', 'swap', or 'face'. Keep it ONE single line, long but precise."
         )
         user_content = [
-            {"type": "text", "text": "Create a one-line Midjourney prompt capturing this photo's style."},
+            {"type": "text", "text": "Return one long, comma‑separated line: clothing first (very detailed), then environment/composition/camera/exposure/lighting/grading/mood."},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
         ]
         msg = [
@@ -1159,12 +1870,12 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
             model=OPENAI_MODEL_VISION,
             messages=msg,
             temperature=0.2,
-            max_tokens=200,
+            max_tokens=380,
         )
         line = (r.choices[0].message.content or "").strip()
         if not line:
             return None
-        # Ensure SFW suffix but do not force age
+        # Ensure SFW suffix but do not force age or break structure
         try:
             line2 = enforce_safe_prompt(line)
             if line2:
@@ -1217,6 +1928,49 @@ def _nudge_pick_offer(uid: int) -> Dict[str, object]:
     if paid:
         return {"kind": "PROMO3"}
     return {"kind": "FREE1"}
+
+# ===================== ADMIN NOTIFY ==================
+async def notify_admins_payment(
+    user_id: int,
+    username: Optional[str],
+    name: Optional[str],
+    pack: str,
+    gens: int,
+    balance: int,
+    stars: Optional[int] = None,
+):
+    try:
+        # Collect recipients: explicit ADMIN_IDS + known chat ids by admin usernames
+        recips: Set[int] = set(ADMIN_IDS)
+        try:
+            for uid, info in STATS_USERS_INFO.items():
+                u = (info.get("username") or "").strip().lstrip("@").lower()
+                if u and u in ADMIN_USERNAMES:
+                    recips.add(int(uid))
+        except Exception:
+            pass
+        if not recips:
+            return
+        who = username or (name or "user")
+        stars_note = f", {stars}★" if stars else ""
+        text = (
+            f"💳 Покупка: +{gens} ген ({pack}{stars_note})\n"
+            f"Пользователь: {who} (id {user_id})\n"
+            f"Баланс после: {balance}"
+        )
+        for rid in recips:
+            try:
+                await bot.send_message(chat_id=rid, text=text)
+            except TelegramForbiddenError:
+                continue
+            except TelegramNotFound:
+                continue
+            except TelegramBadRequest as e:
+                print("notify_admins_payment bad request:", str(e)[:160])
+            except Exception as e:
+                print("notify_admins_payment error:", str(e)[:160])
+    except Exception as e:
+        print("notify_admins_payment outer error:", str(e)[:160])
 
 def _lang_to_tz(lang: str) -> str:
     base = (lang or "").lower()
@@ -1350,36 +2104,88 @@ def generate_image_from_bytes(
     strict: bool = False,
     style_bytes: Optional[bytes] = None,
     lock_scene: bool = True,
+    user_id: Optional[int] = None,
 ) -> Optional[bytes]:
     if blocked(user_prompt):
         print("⛔ Заблокировано фильтром")
         return None
 
     # In strict (Copy Mode), avoid GPT rephrasing to keep scene constraints intact
-    refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=not strict)
+    # Optional user body profile
+    body_hint = None
+    try:
+        if user_id is not None and USER_BODY.get(user_id):
+            body_hint = _body_to_gpt_hint(USER_BODY[user_id])
+    except Exception:
+        body_hint = None
+    allow_refine = (not strict) or (strict and bool(body_hint))
+    refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=allow_refine, body_hint=body_hint)
+    # Always enforce identity + gender preservation explicitly in the text prompt
+    try:
+        refined = f"{refined}. {IDENTITY_LOCK}. {GENDER_LOCK}"
+    except Exception:
+        pass
+    if user_id is not None:
+        USER_LAST_REFINED_PROMPT[user_id] = refined
     if strict and lock_scene:
         refined = f"{refined}. {SCENE_LOCK}. Exact same background, composition, lighting, color grading; only replace the face."
 
     print(f"→ Генерация: {refined[:180]}...")
 
     src_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
+    src_file = None
     if not src_url:
-        print("→ Не удалось получить S3 presigned URL")
-        return None
+        # Fallback: data URL
+        try:
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            src_url = f"data:image/jpeg;base64,{b64}"
+            print("→ S3 presign unavailable — using data URL source")
+        except Exception:
+            src_url = None
+            print("→ Не удалось подготовить источник (S3/data URL)")
+        # And file-like for Replicate SDK (it will upload)
+        try:
+            bf = BytesIO(img_bytes)
+            bf.name = "selfie.jpg"
+            src_file = bf
+            print("→ Using file-like upload for Replicate")
+        except Exception:
+            src_file = None
+        if not src_url and not src_file:
+            return None
 
     style_url: Optional[str] = None
+    style_file = None
     if strict and style_bytes:
         style_url = s3_put_and_presign(style_bytes, key_prefix="style/")
         if not style_url:
-            print("→ Не удалось получить S3 URL для style-ref (продолжаем без него)")
+            try:
+                b64s = base64.b64encode(style_bytes).decode("utf-8")
+                style_url = f"data:image/jpeg;base64,{b64s}"
+                print("→ Style S3 unavailable — using data URL for style-ref")
+            except Exception:
+                style_url = None
+                print("→ Не удалось подготовить style-ref (S3/data URL)")
+        try:
+            sf = BytesIO(style_bytes)
+            sf.name = "style.jpg"
+            style_file = sf
+        except Exception:
+            style_file = None
 
-    def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
-        if strict and lock_scene:
-            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
-        elif strict:
-            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
-        else:
-            neg = NEGATIVE_LOCK
+    def _compose_negative(is_strict: bool, lock_scene_local: bool) -> str:
+        # Optionally enforce stricter negatives even in non-strict flows
+        _strict = is_strict or STRICT_ID_MODE
+        if _strict and lock_scene_local:
+            return f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
+        if _strict:
+            return f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
+        return NEGATIVE_LOCK
+
+    def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
+        if not REPLICATE_API_TOKEN or not INSTANTID_MODEL:
+            return None
+        neg = _compose_negative(strict, lock_scene)
         inputs_common = {
             "prompt": p,
             "negative_prompt": neg,
@@ -1387,22 +2193,77 @@ def generate_image_from_bytes(
         if seed_val is not None:
             inputs_common["seed"] = seed_val
 
-        # If we have a style reference, try two-image conditions first
-        if style_url:
-            candidates: List[Dict[str, object]] = []
-            # Common combos across popular face-replace/copy-scene models
-            candidates.append({"image_input": [style_url, src_url]})
-            candidates.append({"image_input": [src_url, style_url]})
-            candidates.append({"image": style_url, "face_image": src_url})
-            candidates.append({"image": style_url, "person_image": src_url})
-            candidates.append({"image": style_url, "target_face": src_url})
-            candidates.append({"image": src_url, "style_image": style_url})
-            candidates.append({"source_image": style_url, "image": src_url})
-            candidates.append({"background": style_url, "image": src_url})
-            candidates.append({"reference": style_url, "image": src_url})
-            candidates.append({"content_image": style_url, "face_image": src_url})
+        # If we have a style reference, try style + face combos first
+        if style_url or style_file:
+            style_sources = [x for x in (style_url, style_file) if x]
+            src_sources = [x for x in (src_url, src_file) if x]
+            cfgs: List[Dict[str, object]] = [
+                {},
+                {"guidance_scale": 7.5},
+                {"num_inference_steps": 28},
+                {"strength": 0.8},
+            ]
+            for sref in style_sources:
+                for ssrc in src_sources:
+                    variants: List[Dict[str, object]] = [
+                        {"image": sref, "face_image": ssrc},
+                        {"image": sref, "id_image": ssrc},
+                        {"style_image": sref, "face_image": ssrc},
+                        {"style": sref, "face_image": ssrc},
+                        {"image_input": [sref, ssrc]},
+                        {"image_input": [ssrc, sref]},
+                    ]
+                    for v in variants:
+                        for c in cfgs:
+                            inp = dict(inputs_common); inp.update(v); inp.update(c)
+                            url = replicate_generate(INSTANTID_MODEL, inp)
+                            if url == "SENSITIVE":
+                                return "SENSITIVE"
+                            if url:
+                                print("InstantID OK (style+face)", v.keys(), c)
+                                return url
 
-            # Common guidance/cfg knobs across models
+        # Selfie only: pass as face reference
+        face_sources = [x for x in (src_url, src_file) if x]
+        face_keys_tpl = (
+            ("face_image",),
+            ("id_image",),
+            ("identity",),
+            ("person_image",),
+            ("reference",),
+        )
+        cfgs2: List[Dict[str, object]] = [
+            {},
+            {"guidance_scale": 7.5},
+            {"num_inference_steps": 28},
+            {"strength": 0.8},
+        ]
+        for srcv in face_sources:
+            for keys in face_keys_tpl:
+                v = {keys[0]: srcv}
+                for c in cfgs2:
+                    inp = dict(inputs_common); inp.update(v); inp.update(c)
+                    url = replicate_generate(INSTANTID_MODEL, inp)
+                    if url == "SENSITIVE":
+                        return "SENSITIVE"
+                    if url:
+                        print("InstantID OK (face only)", v.keys(), c)
+                        return url
+        return None
+
+    def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
+        neg = _compose_negative(strict, lock_scene)
+        inputs_common = {
+            "prompt": p,
+            "negative_prompt": neg,
+        }
+        if seed_val is not None:
+            inputs_common["seed"] = seed_val
+
+        # If we have a style reference, try two-image conditions first (support URL or file-like)
+        if style_url or style_file:
+            style_sources = [x for x in (style_url, style_file) if x]
+            src_sources = [x for x in (src_url, src_file) if x]
             cfg_variants: List[Dict[str, object]] = [
                 {},
                 {"guidance_scale": 7.5},
@@ -1413,71 +2274,160 @@ def generate_image_from_bytes(
                 {"prompt_strength": 0.85},
                 {"num_inference_steps": 28},
             ]
+            for sref in style_sources:
+                for ssrc in src_sources:
+                    candidates: List[Dict[str, object]] = [
+                        {"image_input": [sref, ssrc]},
+                        {"image_input": [ssrc, sref]},
+                        {"image": sref, "face_image": ssrc},
+                        {"image": sref, "person_image": ssrc},
+                        {"image": sref, "target_face": ssrc},
+                        {"image": ssrc, "style_image": sref},
+                        {"source_image": sref, "image": ssrc},
+                        {"background": sref, "image": ssrc},
+                        {"reference": sref, "image": ssrc},
+                        {"content_image": sref, "face_image": ssrc},
+                    ]
+                    for variant in candidates:
+                        try:
+                            for cfg_extra in cfg_variants:
+                                inp = dict(inputs_common)
+                                inp.update(variant)
+                                inp.update(cfg_extra)
+                                url = replicate_generate(NANOBANANA_MODEL, inp)
+                                if url == "SENSITIVE":
+                                    return "SENSITIVE"
+                                if url:
+                                    print("NanoBanana OK (style+selfie variant)", variant.keys(), cfg_extra)
+                                    return url
+                        except Exception as e:
+                            print("NanoBanana variant exception:", str(e)[:200])
 
-            for variant in candidates:
-                try:
-                    for cfg_extra in cfg_variants:
+        # 1) identity-aware single-image variants (for models that accept face_image/identity)
+        try:
+            for ssrc in [x for x in (src_url, src_file) if x]:
+                face_keys_variants = [
+                    {"image": ssrc, "face_image": ssrc},
+                    {"image": ssrc, "person_image": ssrc},
+                    {"image": ssrc, "target_face": ssrc},
+                    {"image": ssrc, "identity": ssrc},
+                    {"face_image": ssrc},
+                    {"person_image": ssrc},
+                    {"target_face": ssrc},
+                    {"identity": ssrc},
+                    {"reference": ssrc},
+                ]
+                for variant in face_keys_variants:
+                    for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
                         inp = dict(inputs_common)
-                        inp.update(variant)
                         inp.update(cfg_extra)
+                        inp.update(variant)
                         url = replicate_generate(NANOBANANA_MODEL, inp)
                         if url == "SENSITIVE":
                             return "SENSITIVE"
                         if url:
-                            print("NanoBanana OK (style+selfie variant)", variant.keys(), cfg_extra)
+                            print("NanoBanana OK (identity keys)", variant.keys(), cfg_extra)
                             return url
-                except Exception as e:
-                    print("NanoBanana variant exception:", str(e)[:200])
+        except Exception as e:
+            print("NanoBanana identity-keys exception:", str(e)[:200])
 
-        # 1) image_input (список) — только selfie
+        # 2) image_input (список) — только selfie
         try:
-            for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
-                inp = dict(inputs_common)
-                inp.update(cfg_extra)
-                inp["image_input"] = [src_url]
-                url = replicate_generate(NANOBANANA_MODEL, inp)
-                if url == "SENSITIVE":
-                    return "SENSITIVE"
-                if url:
-                    print("NanoBanana OK (image_input)", cfg_extra)
-                    return url
+            for ssrc in [x for x in (src_url, src_file) if x]:
+                for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+                    inp = dict(inputs_common)
+                    inp.update(cfg_extra)
+                    inp["image_input"] = [ssrc]
+                    url = replicate_generate(NANOBANANA_MODEL, inp)
+                    if url == "SENSITIVE":
+                        return "SENSITIVE"
+                    if url:
+                        print("NanoBanana OK (image_input)", cfg_extra)
+                        return url
         except Exception as e:
             print("NanoBanana image_input exception:", str(e)[:200])
 
-        # 2) image (одна) — только selfie
+        # 3) image (одна) — только selfie
         try:
-            for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
-                inp = dict(inputs_common)
-                inp.update(cfg_extra)
-                inp["image"] = src_url
-                url = replicate_generate(NANOBANANA_MODEL, inp)
-                if url == "SENSITIVE":
-                    return "SENSITIVE"
-                if url:
-                    print("NanoBanana OK (image)", cfg_extra)
-                    return url
+            for ssrc in [x for x in (src_url, src_file) if x]:
+                for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+                    inp = dict(inputs_common)
+                    inp.update(cfg_extra)
+                    inp["image"] = ssrc
+                    url = replicate_generate(NANOBANANA_MODEL, inp)
+                    if url == "SENSITIVE":
+                        return "SENSITIVE"
+                    if url:
+                        print("NanoBanana OK (image)", cfg_extra)
+                        return url
         except Exception as e2:
             print("NanoBanana image exception:", str(e2)[:200])
 
         return None
 
-    gen_url = try_nano(refined, seed_val=seed)
+    # Try identity-preserving model first (if configured)
+    gen_url: Optional[str] = None
+    can_use_instant = INSTANTID_FIRST and INSTANTID_MODEL and (style_url is not None or INSTANTID_TEXT_OK)
+    if can_use_instant:
+        gen_url = try_instantid(refined, seed_val=seed)
+    if not gen_url:
+        gen_url = try_nano(refined, seed_val=seed)
+    # Fallback: even if InstantID wasn't selected as first, try it once to improve identity retention
+    if not gen_url and INSTANTID_MODEL:
+        try:
+            alt = try_instantid(refined, seed_val=seed)
+            if alt:
+                gen_url = alt
+        except Exception:
+            pass
     if gen_url == "SENSITIVE":
         print("→ Sensitive → safer variant")
-        gen_url = try_nano(safer_variant(refined), seed_val=seed)
+        safer = safer_variant(refined)
+        if can_use_instant:
+            gen_url = try_instantid(safer, seed_val=seed)
+        if not gen_url:
+            gen_url = try_nano(safer, seed_val=seed)
+        if not gen_url and INSTANTID_MODEL:
+            try:
+                alt = try_instantid(safer, seed_val=seed)
+                if alt:
+                    gen_url = alt
+            except Exception:
+                pass
 
     # Если «уплыло лицо» — усилить замки и повторить 1 раз
     if (not gen_url or not str(gen_url).startswith("http")) and not strict:
-        hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features. {SCENE_LOCK}"
-        gen_url = try_nano(hard_lock, seed_val=seed)
+        hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features."
+        # Do NOT force scene lock unless strict scene copy is requested
+        if can_use_instant:
+            gen_url = try_instantid(hard_lock, seed_val=seed)
+        if not gen_url:
+            gen_url = try_nano(hard_lock, seed_val=seed)
+        if not gen_url and INSTANTID_MODEL:
+            try:
+                alt = try_instantid(hard_lock, seed_val=seed)
+                if alt:
+                    gen_url = alt
+            except Exception:
+                pass
 
     if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
         print("→ gen_url пустой/sensitive")
+        try:
+            if REPLICATE_LAST_ERROR:
+                print("replicate last error:", REPLICATE_LAST_ERROR[:200])
+        except Exception:
+            pass
         return None
 
     nano_bytes = _download_with_retries(gen_url)
     if not nano_bytes:
         print("→ не скачали NanoBanana")
+        try:
+            if REPLICATE_LAST_ERROR:
+                print("replicate last error:", REPLICATE_LAST_ERROR[:200])
+        except Exception:
+            pass
         return None
 
     # If model just echoed the same selfie (no change), treat as failure
@@ -1502,6 +2452,9 @@ def generate_image_from_bytes(
         if up_url and up_url.startswith("http"):
             up_bytes = _download_with_retries(up_url)
             if up_bytes:
+                if len(up_bytes) > 10 * 1024 * 1024:
+                    print("→ ESRGAN x4plus OK, but >10MB → fallback to non-upscaled")
+                    return nano_bytes
                 print("→ ESRGAN x4plus OK")
                 return up_bytes
         return nano_bytes
@@ -1524,6 +2477,21 @@ async def post_before_after_to_channel(user_id: int):
     lang = USER_LANG.get(user_id, LANG_DEFAULT)
     cap  = generate_instacaption(USER_LAST_PROMPT.get(user_id, ""), lang)
 
+    # Dedup key
+    try:
+        key_src = (before or b"") + (after or b"")
+        sig = "ch:" + hashlib.md5(key_src).hexdigest()
+        now = time.time()
+        # prune
+        for k,v in list(RECENT_PUB.items()):
+            if now - v > RECENT_PUB_TTL:
+                RECENT_PUB.pop(k, None)
+        if RECENT_PUB.get(sig) and now - RECENT_PUB[sig] < RECENT_PUB_TTL:
+            return
+        RECENT_PUB[sig] = now
+    except Exception:
+        pass
+
     if before:
         media = [
             InputMediaPhoto(type="photo", media=BufferedInputFile(before, filename="before.jpg"), caption="До"),
@@ -1533,6 +2501,7 @@ async def post_before_after_to_channel(user_id: int):
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("auto-post (album) error:", str(e)[:160])
+        # prompt-share removed
     else:
         try:
             await bot.send_photo(
@@ -1542,21 +2511,34 @@ async def post_before_after_to_channel(user_id: int):
             )
         except Exception as e:
             print("auto-post (single) error:", str(e)[:160])
+        # prompt-share removed
     stats_incr("auto_post", 1)
 
 # ===================== UI ============================
 def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 " + lang.get("btn_more", "More"),   callback_data="more"),
-        InlineKeyboardButton(text="💰 " + lang["btn_balance"], callback_data="balance"),
-        InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
-    ],
-    [
-        InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
-        InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
-        InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
-    ]])
+    rows = [
+        [
+            InlineKeyboardButton(text="🔄 " + lang.get("btn_more", "More"),   callback_data="more"),
+            InlineKeyboardButton(text="💰 " + lang["btn_balance"], callback_data="balance"),
+            InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
+        ],
+        [
+            InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
+            InlineKeyboardButton(text=lang.get("menu_outfit", "👗 Outfit"), callback_data="outfit_open"),
+            InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
+            InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
+        ],
+    ]
+    # Optional: publish to group button if configured
+    try:
+        if PUBLISH_GROUP_ID:
+            rows.append([
+                InlineKeyboardButton(text=lang.get("btn_publish_group", "To group"), callback_data="pub_group"),
+            ])
+    except Exception:
+        pass
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
@@ -1568,6 +2550,7 @@ def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
             InlineKeyboardButton(text="📋 " + lang["menu_copy"],   callback_data="copy_open"),
+            InlineKeyboardButton(text=lang.get("menu_outfit", "👗 Outfit"),   callback_data="outfit_open"),
             InlineKeyboardButton(text=lang.get("menu_help", "🆘 /help"),    callback_data="help_open"),
         ],
         [
@@ -1588,6 +2571,46 @@ def kb_help(chat_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=support_txt, url="https://t.me/piciriga")],
         [InlineKeyboardButton(text=back_txt, callback_data="back_main")],
     ])
+
+def kb_body_ask(chat_id: int) -> InlineKeyboardMarkup:
+    lang = L(chat_id)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lang.get("btn_body_yes", "📏 Add height/weight"), callback_data="body_open")],
+        [InlineKeyboardButton(text=lang.get("btn_skip", "🙈 Not now"), callback_data="body_skip")],
+    ])
+
+def create_style_share(style_bytes: bytes) -> Optional[str]:
+    try:
+        token = hashlib.md5(style_bytes + os.urandom(4)).hexdigest()[:12]
+        entry: Dict[str, object] = {"bytes": style_bytes}
+        # Try S3 upload for resilience
+        try:
+            key = f"shares/{int(time.time())}_{token}.jpg"
+            _s3.put_object(Bucket=S3_BUCKET, Key=key, Body=style_bytes, ContentType="image/jpeg")
+            entry["s3key"] = key
+        except Exception as e:
+            print("style share s3 error:", str(e)[:120])
+        STYLE_SHARES[token] = entry
+        return token
+    except Exception as e:
+        print("create_style_share error:", str(e)[:120])
+    return None
+
+def resolve_style_share(token: str) -> Optional[bytes]:
+    entry = STYLE_SHARES.get(token)
+    if entry and isinstance(entry.get("bytes"), (bytes, bytearray)):
+        return bytes(entry["bytes"])  # type: ignore[index]
+    # Try S3 if key present
+    try:
+        key = entry.get("s3key") if entry else None  # type: ignore[assignment]
+        if key and S3_BUCKET:
+            obj = _s3.get_object(Bucket=S3_BUCKET, Key=key)
+            return obj["Body"].read()
+    except Exception as e:
+        print("resolve share s3 error:", str(e)[:120])
+    return None
+
+# prompt-share removed
 
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
@@ -1678,11 +2701,103 @@ async def got_payment(m: Message):
     await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
     stats_incr("payments", 1)
     _uadd(m.chat.id, "payments", 1)
+    # Notify admins about the purchase
+    try:
+        uname = getattr(m.from_user, "username", None)
+        name = getattr(m.from_user, "full_name", None) or getattr(m.from_user, "first_name", "")
+        xtr = None
+        try:
+            xtr = int(getattr(m.successful_payment, "total_amount", 0))
+        except Exception:
+            xtr = None
+        await notify_admins_payment(
+            user_id=m.chat.id,
+            username=("@" + uname) if uname else None,
+            name=name,
+            pack=payload,
+            gens=add,
+            balance=USER_CREDITS.get(m.chat.id, 0),
+            stars=xtr,
+        )
+    except Exception as e:
+        print("notify admins (payment) error:", str(e)[:160])
 
 # ===================== COMMANDS =======================
 @dp.message(Command("version"))
 async def cmd_version(m: Message):
     await safe_answer(m, f"{L(m.chat.id)['version'].format(ver=APP_VERSION)}")
+
+@dp.message(Command("ping"))
+async def cmd_ping(m: Message):
+    try:
+        await safe_answer(m, "pong")
+    except Exception:
+        pass
+
+@dp.message(Command("diag"))
+async def cmd_diag(m: Message):
+    try:
+        langs = ",".join(_GROUP_LANGS) if _GROUP_LANGS else "-"
+    except Exception:
+        langs = "-"
+    last = int(time.time() - GROUP_POST_LAST_AT) if GROUP_POST_LAST_AT else None
+    lines = [
+        f"App: {APP_VERSION}",
+        f"Lang: {USER_LANG.get(m.chat.id, LANG_DEFAULT)}",
+        f"Webhook: {WEBHOOK_URL}",
+        f"Group posts: enabled={GROUP_POSTS_ENABLED} running={GROUP_POST_LOOP_RUNNING}",
+        f"Group id: {PUBLISH_GROUP_ID}",
+        f"Langs rotation: {langs}",
+        f"Every minutes: {GROUP_POST_EVERY_MINUTES}",
+        f"Window: {GROUP_POST_START_HOUR}-{GROUP_POST_END_HOUR}",
+        f"Last post: {last if last is not None else 'never'}s ago",
+    ]
+    await safe_answer(m, "\n".join(lines))
+
+@dp.message(Command("post_now"))
+async def cmd_post_now(m: Message):
+    # Allow fallback to current chat if it's a group/supergroup
+    target_id = PUBLISH_GROUP_ID or (m.chat.id if str(m.chat.id).startswith("-") else None)
+    if not target_id:
+        return await safe_answer(m, "Group not configured. Use /set_group_here in a group or /set_group <id>.")
+    lang = _next_group_lang()
+    txt = craft_group_post_text(lang, BOT_USERNAME_GLOBAL)
+    img = generate_group_post_image(lang)
+    try:
+        if img:
+            await bot.send_photo(chat_id=target_id, photo=BufferedInputFile(img, filename="promo.jpg"), caption=txt)
+        else:
+            await bot.send_message(chat_id=target_id, text=txt)
+        global GROUP_POST_LAST_AT
+        GROUP_POST_LAST_AT = time.time()
+        await safe_answer(m, f"Posted ({lang})")
+    except Exception as e:
+        await safe_answer(m, f"Post error: {str(e)[:160]}")
+
+@dp.message(Command("set_group_here"))
+async def cmd_set_group_here(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    if not str(m.chat.id).startswith("-"):
+        return await safe_answer(m, "Run this command inside a group/supergroup.")
+    global PUBLISH_GROUP_ID
+    PUBLISH_GROUP_ID = m.chat.id
+    await safe_answer(m, f"Group set to {PUBLISH_GROUP_ID}")
+
+@dp.message(Command("set_group"))
+async def cmd_set_group(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) < 2:
+        return await safe_answer(m, "Usage: /set_group -1001234567890")
+    try:
+        gid = int(parts[1])
+    except Exception:
+        return await safe_answer(m, "Invalid group id")
+    global PUBLISH_GROUP_ID
+    PUBLISH_GROUP_ID = gid
+    await safe_answer(m, f"Group set to {PUBLISH_GROUP_ID}")
 
 @dp.message(Command("pricing"))
 async def cmd_pricing(m: Message):
@@ -1716,10 +2831,78 @@ async def cmd_stats(m: Message):
 
 @dp.message(Command("copy"))
 async def cmd_copy(m: Message):
-    USER_COPY_MODE.add(m.chat.id)
-    USER_COPY_STYLE.pop(m.chat.id, None)
-    USER_COPY_PROMPT.pop(m.chat.id, None)
-    await safe_answer(m, L(m.chat.id)["copy_intro"])
+    # Toggle Copy Mode for convenience
+    uid = m.chat.id
+    if uid in USER_COPY_MODE:
+        USER_COPY_MODE.discard(uid)
+        USER_COPY_STYLE.pop(uid, None)
+        USER_COPY_PROMPT.pop(uid, None)
+        return await safe_answer(m, L(uid)["copy_exit"])
+    USER_COPY_MODE.add(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_COPY_PROMPT.pop(uid, None)
+    await safe_answer(m, L(uid)["copy_intro"])
+
+@dp.message(Command("batch"))
+async def cmd_batch(m: Message):
+    # Toggle Batch Mode
+    uid = m.chat.id
+    if uid in USER_BATCH_MODE:
+        USER_BATCH_MODE.discard(uid)
+        USER_BATCH_PHOTOS.pop(uid, None)
+        await safe_answer(m, L(uid)["batch_exit"])
+        return
+    # Disable Copy Mode to avoid conflicts
+    USER_COPY_MODE.discard(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_BATCH_MODE.add(uid)
+    USER_BATCH_PHOTOS[uid] = []
+    await safe_answer(m, L(uid)["batch_intro"])
+
+@dp.message(Command("video"))
+async def cmd_video(m: Message):
+    uid = m.chat.id
+    # Toggle Video Mode; disable conflicting modes
+    if uid in USER_VIDEO_MODE:
+        USER_VIDEO_MODE.discard(uid)
+        await safe_answer(m, L(uid)["video_off"])
+        return
+    USER_BATCH_MODE.discard(uid)
+    USER_BATCH_PHOTOS.pop(uid, None)
+    USER_COPY_MODE.discard(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_VIDEO_MODE.add(uid)
+    await safe_answer(m, L(uid)["video_intro"])
+
+@dp.message(Command("outfit"))
+async def cmd_outfit(m: Message):
+    uid = m.chat.id
+    # Toggle Outfit Mode; disable conflicting modes
+    if uid in USER_OUTFIT_MODE:
+        USER_OUTFIT_MODE.discard(uid)
+        USER_OUTFIT_STYLE.pop(uid, None)
+        USER_OUTFIT_TEXT.pop(uid, None)
+        await safe_answer(m, L(uid)["batch_exit"])  # reuse Off text
+        return
+    USER_BATCH_MODE.discard(uid)
+    USER_BATCH_PHOTOS.pop(uid, None)
+    USER_COPY_MODE.discard(uid)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_VIDEO_MODE.discard(uid)
+    USER_OUTFIT_MODE.add(uid)
+    await safe_answer(m, L(uid)["outfit_intro"])  # photo-first flow
+
+@dp.message(Command("body"))
+async def cmd_body(m: Message):
+    uid = m.chat.id
+    txt = (m.text or "").strip().lower()
+    # Quick clear: /body clear
+    if txt.split()[-1:] == ["clear"]:
+        USER_BODY.pop(uid, None)
+        USER_BODY_WAIT.discard(uid)
+        return await safe_answer(m, L(uid)["body_cleared"])
+    USER_BODY_WAIT.add(uid)
+    await safe_answer(m, L(uid)["body_intro"])
 
 
 @dp.message(Command("start"))
@@ -1747,6 +2930,20 @@ async def cmd_start(m: Message):
                 stats_incr("ref_bonus_invited", REF_BONUS_NEW)
         except Exception:
             pass
+
+    # Deep-link: start=style_<token> → preload Copy Mode with style
+    if len(parts) > 1 and parts[1].startswith("style_"):
+        token = parts[1][6:]
+        sty = resolve_style_share(token)
+        if sty:
+            USER_COPY_MODE.add(m.chat.id)
+            USER_COPY_STYLE[m.chat.id] = sty
+            USER_COPY_PROMPT.pop(m.chat.id, None)
+            await safe_answer(m, L(m.chat.id)["style_share_intro"])
+            USER_ONBOARDED.add(m.chat.id)
+            return
+
+    # prompt-share deep-link removed
 
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
@@ -1852,11 +3049,19 @@ async def cmd_clear(m: Message):
     USER_REFS.pop(m.chat.id, None)
     USER_LAST_OUTPUT.pop(m.chat.id, None)
     USER_LAST_PROMPT.pop(m.chat.id, None)
+    USER_LAST_REF_HASH.pop(m.chat.id, None)
     USER_HISTORY.pop(m.chat.id, None)
     LAST_REF.pop(m.chat.id, None)
     LAST_PHOTO.pop(m.chat.id, None)
     USER_COPY_STYLE.pop(m.chat.id, None)
     USER_COPY_MODE.discard(m.chat.id)
+    USER_BATCH_PHOTOS.pop(m.chat.id, None)
+    USER_BATCH_MODE.discard(m.chat.id)
+    USER_OUTFIT_CLOTHES.pop(m.chat.id, None)
+    USER_OUTFIT_MODE.discard(m.chat.id)
+    USER_OUTFIT_TEXT.pop(m.chat.id, None)
+    USER_BODY_WAIT.discard(m.chat.id)
+    USER_BODY.pop(m.chat.id, None)
     await safe_answer(m, L(m.chat.id)["cleared"])
 
 @dp.message(Command("tos"))
@@ -1896,13 +3101,8 @@ async def cmd_refer(m: Message):
     my_id = m.chat.id
     link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{my_id}"
     st = REF_STATS.get(my_id, {"count": 0, "earned": 0})
-    await safe_answer(
-        m,
-        "👥 Пригласи друзей и получай бонусные генерации!\n"
-        f"Твоя ссылка: {link}\n\n"
-        f"Приглашено: {st['count']}\n"
-        f"Получено бонусов: {st['earned']} генераций"
-    )
+    msg = L(m.chat.id)["refer_msg"].format(link=link, count=st["count"], earned=st["earned"])
+    await safe_answer(m, msg)
 
 # ======= INLINE callbacks =======
 @dp.callback_query(F.data == "help_open")
@@ -1924,6 +3124,15 @@ async def cb_presets(c: CallbackQuery):
     }.get(lang, "🎛 Presets — choose a style")
     await c.message.answer(txt, reply_markup=kb_presets_grid(chat_id))
 
+def kb_outfit_styles(chat_id: int) -> InlineKeyboardMarkup:
+    lang = L(chat_id)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lang.get("outfit_style_evening", "Evening dress"), callback_data="outfit_pick_evening")],
+        [InlineKeyboardButton(text=lang.get("outfit_style_suit", "Business suit"), callback_data="outfit_pick_suit")],
+        [InlineKeyboardButton(text=lang.get("outfit_style_casual", "Casual"), callback_data="outfit_pick_casual")],
+        [InlineKeyboardButton(text=lang.get("btn_back", "⬅️ Back"), callback_data="back_main")],
+    ])
+
 @dp.callback_query(F.data == "back_main")
 async def cb_back_main(c: CallbackQuery):
     await safe_cb_answer(c)
@@ -1934,6 +3143,35 @@ async def cb_back_main(c: CallbackQuery):
 async def cb_refer_open(c: CallbackQuery):
     await safe_cb_answer(c)
     await cmd_refer(c.message)
+
+@dp.callback_query(F.data == "body_open")
+async def cb_body_open(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_BODY_WAIT.add(chat_id)
+    await c.message.answer(L(chat_id)["body_intro"])
+
+@dp.callback_query(F.data == "body_skip")
+async def cb_body_skip(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_BODY_ASKED.add(chat_id)
+    await c.message.answer(L(chat_id)["body_skip_ok"])
+
+@dp.callback_query(F.data == "outfit_open")
+async def cb_outfit_open(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_OUTFIT_MODE.add(chat_id)
+    await c.message.answer(L(chat_id)["outfit_intro"])  # photo-first flow, no catalog
+
+# Deprecated: style catalog callbacks are kept for compatibility but redirect to intro
+@dp.callback_query(F.data.startswith("outfit_pick_"))
+async def cb_outfit_pick(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    USER_OUTFIT_MODE.add(chat_id)
+    await c.message.answer(L(chat_id)["outfit_intro"])  # instruct to send clothing photo
 
 @dp.callback_query(F.data.startswith("preset_"))
 async def cb_preset_pick(c: CallbackQuery):
@@ -1964,10 +3202,10 @@ async def cb_preset_pick(c: CallbackQuery):
         return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    seed_int = ((hash(chat_id) % 10_000_000) + idx)
+    seed_int = stable_seed_from_int(chat_id, offset=idx)
     result = generate_image_from_bytes(
         ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int
+        seed=seed_int, user_id=chat_id
     )
     if not result:
         stats_incr("gens_fail", 1)
@@ -1978,6 +3216,10 @@ async def cb_preset_pick(c: CallbackQuery):
         _credits_save()
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = preset.prompt
+    try:
+        USER_LAST_REF_HASH[chat_id] = hashlib.md5(ref).hexdigest()
+    except Exception:
+        pass
     LAST_PHOTO[chat_id] = result
     stats_incr("gens_ok", 1)
     _uadd(chat_id, "gens_ok", 1)
@@ -1992,8 +3234,9 @@ async def cb_preset_pick(c: CallbackQuery):
         "ro": "✅ Preset",
         "de": "✅ Preset",
     }.get(USER_LANG.get(chat_id, LANG_DEFAULT), "✅ Preset")
-    await c.message.answer_photo(
-        photo=BufferedInputFile(result, filename="imodel_result.jpg"),
+    await safe_answer_photo(
+        c.message,
+        BufferedInputFile(result, filename="imodel_result.jpg"),
         caption=cap,
         reply_markup=kb_actions(chat_id),
     )
@@ -2042,21 +3285,43 @@ async def cb_buy_open(c: CallbackQuery):
 
 @dp.callback_query(F.data == "copy_open")
 async def cb_copy_open(c: CallbackQuery):
-    USER_COPY_MODE.add(c.message.chat.id)
-    USER_COPY_STYLE.pop(c.message.chat.id, None)
+    uid = c.message.chat.id
+    if uid in USER_COPY_MODE:
+        USER_COPY_MODE.discard(uid)
+        USER_COPY_STYLE.pop(uid, None)
+        USER_COPY_PROMPT.pop(uid, None)
+        await safe_cb_answer(c)
+        await c.message.answer(L(uid)["copy_exit"])
+        return
+    USER_COPY_MODE.add(uid)
+    USER_COPY_STYLE.pop(uid, None)
     await safe_cb_answer(c)
-    await c.message.answer(L(c.message.chat.id)["copy_intro"])
+    await c.message.answer(L(uid)["copy_intro"])
 
 @dp.callback_query(F.data == "pub_yes")
 async def cb_pub_yes(c: CallbackQuery):
     if not GALLERY_CHANNEL_ID:
         await safe_cb_answer(c)
-        return await c.message.answer("Канал не настроен.")
+        return await c.message.answer(L(c.message.chat.id)["err_channel_not_configured"])
     before = LAST_REF.get(c.message.chat.id)
     after  = LAST_PHOTO.get(c.message.chat.id)
     if not after:
         await safe_cb_answer(c)
-        return await c.message.answer("Нет результата для публикации.")
+        return await c.message.answer(L(c.message.chat.id)["err_no_result"])
+    # Deduplicate recent publishes (same before/after) to avoid repeats
+    try:
+        key_src = (before or b"") + (after or b"")
+        sig = "ch:" + hashlib.md5(key_src).hexdigest()
+        now = time.time()
+        for k, v in list(RECENT_PUB.items()):
+            if now - v > RECENT_PUB_TTL:
+                RECENT_PUB.pop(k, None)
+        if RECENT_PUB.get(sig) and now - RECENT_PUB[sig] < RECENT_PUB_TTL:
+            await safe_cb_answer(c, L(c.message.chat.id)["published_recent"])
+            return
+        RECENT_PUB[sig] = now
+    except Exception:
+        pass
     imgs = []
     if before:
         imgs.append(before)
@@ -2073,29 +3338,44 @@ async def cb_pub_yes(c: CallbackQuery):
     else:
         media = []
         for i, b in enumerate(imgs):
-            cap = "До / После ✨" if i == 1 else None
+            cap = L(c.message.chat.id)["before_after"] if i == 1 else None
             if i == 0:
-                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption="До"))
+                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption=L(c.message.chat.id)["before"]))
             else:
                 media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="after.jpg"), caption=cap))
         try:
             await bot.send_media_group(chat_id=GALLERY_CHANNEL_ID, media=media)
         except Exception as e:
             print("channel media group error:", str(e)[:160])
+    # prompt-share removed
     stats_incr("published_channel", 1)
     _uadd(c.message.chat.id, "published", 1)
-    await safe_cb_answer(c, "Опубликовано")
+    await safe_cb_answer(c, L(c.message.chat.id)["published_ok"])
 
 @dp.callback_query(F.data == "pub_group")
 async def cb_pub_group(c: CallbackQuery):
     if not PUBLISH_GROUP_ID:
         await safe_cb_answer(c)
-        return await c.message.answer("Группа не настроена.")
+        return await c.message.answer(L(c.message.chat.id)["err_group_not_configured"])
     before = LAST_REF.get(c.message.chat.id)
     after  = LAST_PHOTO.get(c.message.chat.id)
     if not after:
         await safe_cb_answer(c)
-        return await c.message.answer("Нет результата для публикации.")
+        return await c.message.answer(L(c.message.chat.id)["err_no_result"])
+    # Deduplicate recent publishes (same before/after)
+    try:
+        key_src = (before or b"") + (after or b"")
+        sig = "gr:" + hashlib.md5(key_src).hexdigest()
+        now = time.time()
+        for k, v in list(RECENT_PUB.items()):
+            if now - v > RECENT_PUB_TTL:
+                RECENT_PUB.pop(k, None)
+        if RECENT_PUB.get(sig) and now - RECENT_PUB[sig] < RECENT_PUB_TTL:
+            await safe_cb_answer(c, L(c.message.chat.id)["published_recent"])
+            return
+        RECENT_PUB[sig] = now
+    except Exception:
+        pass
     imgs = []
     if before:
         imgs.append(before)
@@ -2112,24 +3392,33 @@ async def cb_pub_group(c: CallbackQuery):
     else:
         media = []
         for i, b in enumerate(imgs):
-            cap = "До / После ✨" if i == 1 else None
+            cap = L(c.message.chat.id)["before_after"] if i == 1 else None
             if i == 0:
-                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption="До"))
+                media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="before.jpg"), caption=L(c.message.chat.id)["before"]))
             else:
                 media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(b, filename="after.jpg"), caption=cap))
         try:
             await bot.send_media_group(chat_id=PUBLISH_GROUP_ID, media=media)
         except Exception as e:
             print("group media group error:", str(e)[:160])
+    # prompt-share removed
     stats_incr("published_group", 1)
     _uadd(c.message.chat.id, "published", 1)
-    await safe_cb_answer(c, "Опубликовано в группе")
+    await safe_cb_answer(c, L(c.message.chat.id)["published_group_ok"])
 
 # ===================== FLOW: PHOTO ====================
 @dp.message(F.photo)
 async def on_photo(m: Message):
     if m.chat.id not in USER_LANG:
         USER_LANG[m.chat.id] = locale_to_lang(getattr(m.from_user, "language_code", None))
+
+    # Optionally nudge for body profile once
+    try:
+        if (m.chat.id not in USER_BODY) and (m.chat.id not in USER_BODY_ASKED):
+            USER_BODY_ASKED.add(m.chat.id)
+            await safe_answer(m, L(m.chat.id)["body_ask"], reply_markup=kb_body_ask(m.chat.id))
+    except Exception:
+        pass
 
     f = await bot.get_file(m.photo[-1].file_id)
     b = await bot.download_file(f.file_path)
@@ -2139,8 +3428,52 @@ async def on_photo(m: Message):
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     _uadd(m.chat.id, "photos", 1)
 
-    # ----- Copy Mode -----
-    if m.chat.id in USER_COPY_MODE:
+    # ----- Video Mode: one photo → short animation -----
+    if m.chat.id in USER_VIDEO_MODE:
+        ensure_user_credit(m.chat.id)
+        is_free = is_free_user(m.chat.id, getattr(m.from_user, "username", None))
+        have = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
+        if (not is_free) and have < VIDEO_COST:
+            return await safe_answer(m, L(m.chat.id)["batch_insufficient"].format(need=VIDEO_COST, have=have), reply_markup=kb_invite_buy(m.chat.id))
+        wait = await safe_answer(m, L(m.chat.id)["gen"])
+        caption = (m.caption or "").strip()
+        if blocked(caption):
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["blocked"])
+            return
+        vid_bytes = generate_video_from_bytes(img_bytes, prompt=caption or None)
+        if not vid_bytes:
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["fail"])
+            stats_incr("gens_fail", 1)
+            _uadd(m.chat.id, "gens_fail", 1)
+            return
+        if not is_free:
+            USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, FREE_QUOTA) - VIDEO_COST
+            _credits_save()
+        if wait:
+            await wait.delete()
+        await safe_answer_video(m, BufferedInputFile(vid_bytes, filename="imodel_anim.mp4"), caption="✅", reply_markup=kb_actions(m.chat.id))
+        # save last for optional posting (photo/video mixed not posted)
+        LAST_REF[m.chat.id] = img_bytes
+        STATS["gens_ok"] = int(STATS.get("gens_ok", 0)) + 1
+        _uadd(m.chat.id, "gens_ok", 1)
+        await maybe_send_referral_hint(m.chat.id)
+        return
+
+    # ----- Batch Mode: collect selfies, generate later on text -----
+    if m.chat.id in USER_BATCH_MODE:
+        arr = USER_BATCH_PHOTOS.setdefault(m.chat.id, [])
+        if len(arr) >= BATCH_MAX:
+            return await safe_answer(m, L(m.chat.id)["batch_limit"].format(limit=BATCH_MAX))
+        arr.append(img_bytes)
+        n = len(arr)
+        if n >= BATCH_MAX:
+            return await safe_answer(m, L(m.chat.id)["batch_limit"].format(limit=BATCH_MAX))
+        return await safe_answer(m, L(m.chat.id)["batch_added"].format(n=n, limit=BATCH_MAX))
+
+    # ----- Copy Mode (only when no caption provided) -----
+    if (m.chat.id in USER_COPY_MODE) and not ((m.caption or "").strip()):
         if m.chat.id not in USER_COPY_STYLE:
             # это style-reference
             USER_COPY_STYLE[m.chat.id] = img_bytes
@@ -2172,15 +3505,16 @@ async def on_photo(m: Message):
             seed_int = int(seed[:8], 16)
 
             # строгий режим: жёсткая сцена + identity lock + negative
-            # 2) Генерим по selfie + текстовому промпту (БЕЗ передачи style-image в модель)
+            # 2) Генерим по selfie + style-рефу и текстовому промпту (передаём style-image в модель)
             final_bytes = generate_image_from_bytes(
                 img_bytes,
                 scene_spec,
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                 seed=seed_int,
                 strict=True,
-                style_bytes=None,
-                lock_scene=False,
+                style_bytes=style_bytes,
+                lock_scene=True,
+                user_id=m.chat.id,
             )
             if not final_bytes:
                 # вторая попытка: ещё жёстче
@@ -2190,8 +3524,9 @@ async def on_photo(m: Message):
                     lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                     seed=seed_int,
                     strict=True,
-                    style_bytes=None,
-                    lock_scene=False,
+                    style_bytes=style_bytes,
+                    lock_scene=True,
+                    user_id=m.chat.id,
                 )
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2204,6 +3539,10 @@ async def on_photo(m: Message):
                 _credits_save()
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
+            try:
+                USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+            except Exception:
+                pass
             LAST_PHOTO[m.chat.id] = final_bytes
             stats_incr("gens_copy_ok", 1)
             _uadd(m.chat.id, "gens_copy_ok", 1)
@@ -2235,6 +3574,88 @@ async def on_photo(m: Message):
                     print("AUTO_POST error:", str(e)[:160])
             return
 
+    # ----- Outfit Try-On (photo-first) -----
+    if m.chat.id in USER_OUTFIT_MODE:
+        # If no clothing reference yet — treat this photo as clothing
+        if m.chat.id not in USER_OUTFIT_CLOTHES:
+            USER_OUTFIT_CLOTHES[m.chat.id] = img_bytes
+            return await safe_answer(m, L(m.chat.id)["outfit_clothes_ok"])
+
+        # Have clothing → this is the selfie
+        clothes = USER_OUTFIT_CLOTHES.get(m.chat.id)
+        if not clothes:
+            return await safe_answer(m, L(m.chat.id)["outfit_need_clothes"])
+
+        ensure_user_credit(m.chat.id)
+        if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+            return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+
+        USER_REFS.setdefault(m.chat.id, [])
+        USER_REFS[m.chat.id] = (USER_REFS[m.chat.id] + [img_bytes])[-4:]
+        LAST_REF[m.chat.id] = img_bytes
+
+        wait = await safe_answer(m, L(m.chat.id)["gen"])
+        extra = USER_OUTFIT_TEXT.get(m.chat.id, "").strip()
+        cap = (m.caption or "").strip()
+        if cap and not blocked(cap):
+            extra = (extra + ", " + cap) if extra else cap
+        outfit_prompt = craft_outfit_prompt_from_image(clothes, extra)
+        if not outfit_prompt:
+            # fallback to simple build if vision unavailable
+            outfit_prompt = build_outfit_prompt("casual", extra)
+        seed_int = int(hashlib.md5(clothes).hexdigest()[:8], 16)
+        final_bytes = generate_image_from_bytes(
+            img_bytes,
+            outfit_prompt,
+            lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+            seed=seed_int,
+            strict=True,
+            style_bytes=None,
+            lock_scene=False,
+            user_id=m.chat.id,
+        )
+        if not final_bytes:
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["fail"])
+            stats_incr("gens_fail", 1)
+            _uadd(m.chat.id, "gens_fail", 1)
+            return
+        if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+            USER_CREDITS[m.chat.id] -= 1
+            _credits_save()
+        USER_OUTFIT_CLOTHES.pop(m.chat.id, None)
+        USER_LAST_OUTPUT[m.chat.id] = final_bytes
+        USER_LAST_PROMPT[m.chat.id] = outfit_prompt
+        try:
+            USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+        except Exception:
+            pass
+        LAST_PHOTO[m.chat.id] = final_bytes
+        stats_incr("gens_ok", 1)
+        _uadd(m.chat.id, "gens_ok", 1)
+
+        hist = USER_HISTORY.setdefault(m.chat.id, [])
+        hist.append(final_bytes)
+        if len(hist) > GALLERY_LIMIT:
+            del hist[:-GALLERY_LIMIT]
+
+        if wait:
+            await wait.delete()
+        await safe_answer_photo(
+            m,
+            BufferedInputFile(final_bytes, filename="imodel_outfit.jpg"),
+            caption="✅",
+            reply_markup=kb_actions(m.chat.id),
+        )
+        await maybe_send_referral_hint(m.chat.id)
+
+        if AUTO_POST and GALLERY_CHANNEL_ID:
+            try:
+                await post_before_after_to_channel(m.chat.id)
+            except Exception as e:
+                print("AUTO_POST error:", str(e)[:160])
+        return
+
     # ----- Обычный режим -----
     USER_REFS.setdefault(m.chat.id, [])
     USER_REFS[m.chat.id] = (USER_REFS[m.chat.id] + [img_bytes])[-4:]
@@ -2250,13 +3671,19 @@ async def on_photo(m: Message):
                 if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
                     return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
-                seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
+                seed_int = stable_seed_from_int(m.chat.id, offset=idx)
                 final_bytes = generate_image_from_bytes(
                     img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    seed=seed_int
+                    seed=seed_int, user_id=m.chat.id
                 )
                 if not final_bytes:
-                    if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    if wait:
+                        await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    # After a preset auto-run fails, explicitly prompt for a description
+                    try:
+                        await safe_answer(m, L(m.chat.id)["photo_ok"])
+                    except Exception:
+                        pass
                     stats_incr("gens_fail", 1)
                     _uadd(m.chat.id, "gens_fail", 1)
                     return
@@ -2265,6 +3692,10 @@ async def on_photo(m: Message):
                     _credits_save()
                 USER_LAST_OUTPUT[m.chat.id] = final_bytes
                 USER_LAST_PROMPT[m.chat.id] = preset.prompt
+                try:
+                    USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+                except Exception:
+                    pass
                 LAST_PHOTO[m.chat.id] = final_bytes
                 stats_incr("gens_ok", 1)
                 _uadd(m.chat.id, "gens_ok", 1)
@@ -2299,11 +3730,16 @@ async def on_photo(m: Message):
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
         return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
+    # If user had Copy Mode ON but provided a caption, prefer standard flow and exit Copy Mode to avoid confusion
+    USER_COPY_MODE.discard(m.chat.id)
+    USER_COPY_STYLE.pop(m.chat.id, None)
+    USER_COPY_PROMPT.pop(m.chat.id, None)
+
     wait = await safe_answer(m, L(m.chat.id)["gen"])
-    seed_int = (hash(m.chat.id) % 10_000_000)
+    seed_int = stable_seed_from_int(m.chat.id)
     final_bytes = generate_image_from_bytes(
         img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int
+        seed=seed_int, user_id=m.chat.id
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2316,6 +3752,10 @@ async def on_photo(m: Message):
         _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
+    try:
+        USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(img_bytes).hexdigest()
+    except Exception:
+        pass
     LAST_PHOTO[m.chat.id] = final_bytes
     stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
@@ -2343,10 +3783,131 @@ async def on_photo(m: Message):
 # ===================== FLOW: TEXT =====================
 @dp.message(F.text & ~F.text.startswith("/"))
 async def on_prompt(m: Message):
+    # If waiting for body profile input
+    if m.chat.id in USER_BODY_WAIT:
+        s = (m.text or "").strip()
+        if s.lower() in ("skip", "пропустить", "нет", "no"):
+            USER_BODY_WAIT.discard(m.chat.id)
+            return await safe_answer(m, L(m.chat.id)["body_cleared"])  # cancel
+        if s.lower() in ("clear", "очистить"):
+            USER_BODY.pop(m.chat.id, None)
+            USER_BODY_WAIT.discard(m.chat.id)
+            return await safe_answer(m, L(m.chat.id)["body_cleared"])
+        data = _parse_body(s)
+        if data:
+            USER_BODY[m.chat.id] = data
+            USER_BODY_WAIT.discard(m.chat.id)
+            return await safe_answer(m, L(m.chat.id)["body_saved"].format(info=_body_to_userline(data)))
+        else:
+            return await safe_answer(m, L(m.chat.id)["body_bad"])
+
+    # Если включён Batch Mode — генерим пакет по накопленным фото
+    if m.chat.id in USER_BATCH_MODE:
+        text = m.text.strip()
+        if blocked(text):
+            stats_incr("blocked", 1)
+            _uadd(m.chat.id, "blocked", 1)
+            return await safe_answer(m, L(m.chat.id)["blocked"])
+        photos = USER_BATCH_PHOTOS.get(m.chat.id, [])
+        if not photos or len(photos) < BATCH_MIN:
+            return await safe_answer(m, L(m.chat.id)["batch_need_photos"])
+        ensure_user_credit(m.chat.id)
+        free = is_free_user(m.chat.id, getattr(m.from_user, "username", None))
+        have = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
+        need = len(photos)
+        if not free and have < need:
+            return await safe_answer(m, L(m.chat.id)["batch_insufficient"].format(need=need, have=have), reply_markup=kb_invite_buy(m.chat.id))
+
+        wait = await safe_answer(m, L(m.chat.id)["batch_processing"])
+        results: List[bytes] = []
+        first_ref: Optional[bytes] = None
+        for i, ph in enumerate(photos):
+            if first_ref is None:
+                first_ref = ph
+            seed_int = int(hashlib.md5(ph).hexdigest()[:8], 16)
+            out = generate_image_from_bytes(ph, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT), seed=seed_int, user_id=m.chat.id)
+            if out:
+                results.append(out)
+                if not free:
+                    USER_CREDITS[m.chat.id] -= 1
+                    _credits_save()
+                USER_LAST_OUTPUT[m.chat.id] = out
+                USER_LAST_PROMPT[m.chat.id] = text
+                LAST_PHOTO[m.chat.id] = out
+                stats_incr("gens_ok", 1)
+                _uadd(m.chat.id, "gens_ok", 1)
+                hist = USER_HISTORY.setdefault(m.chat.id, [])
+                hist.append(out)
+                if len(hist) > GALLERY_LIMIT:
+                    del hist[:-GALLERY_LIMIT]
+            else:
+                stats_incr("gens_fail", 1)
+                _uadd(m.chat.id, "gens_fail", 1)
+        # reset photos but keep mode ON for convenience
+        USER_BATCH_PHOTOS[m.chat.id] = []
+
+        if not results:
+            if wait:
+                await safe_edit_text(wait, L(m.chat.id)["fail"])
+            return
+
+        # Send album (or single photo if only one)
+        try:
+            if len(results) == 1:
+                if wait:
+                    await wait.delete()
+                await safe_answer_photo(m, BufferedInputFile(results[0], filename="imodel_result.jpg"), caption="✅")
+            else:
+                media = []
+                for idx, rb in enumerate(results):
+                    cap = "✅" if idx == 0 else None
+                    media.append(InputMediaPhoto(type="photo", media=BufferedInputFile(rb, filename=f"batch_{idx+1}.jpg"), caption=cap))
+                if wait:
+                    await wait.delete()
+                await bot.send_media_group(chat_id=m.chat.id, media=media)
+        except Exception:
+            # Fallback to individual sends
+            if wait:
+                await wait.delete()
+            for idx, rb in enumerate(results):
+                cap = "✅" if idx == 0 else None
+                await safe_answer_photo(m, BufferedInputFile(rb, filename=f"batch_{idx+1}.jpg"), caption=cap)
+
+        await safe_answer(m, L(m.chat.id)["batch_done"].format(count=len(results)), reply_markup=kb_actions(m.chat.id))
+        await maybe_send_referral_hint(m.chat.id)
+        # optional auto-post first pair
+        if AUTO_POST and GALLERY_CHANNEL_ID and first_ref and results:
+            LAST_REF[m.chat.id] = first_ref
+            try:
+                await post_before_after_to_channel(m.chat.id)
+            except Exception as e:
+                print("AUTO_POST error:", str(e)[:160])
+        # Track last ref hash for additive prompt continuity (use first photo of batch)
+        try:
+            if first_ref:
+                USER_LAST_REF_HASH[m.chat.id] = hashlib.md5(first_ref).hexdigest()
+        except Exception:
+            pass
+        return
+
+    # Если включён Outfit Mode — считаем текст уточнением стиля
+    if m.chat.id in USER_OUTFIT_MODE:
+        USER_OUTFIT_TEXT[m.chat.id] = m.text.strip()
+        await safe_answer(m, L(m.chat.id)["outfit_prompt_updated"])
+        return
+
+    # Optional one-time body profile ask if no body stored
+    try:
+        if (m.chat.id not in USER_BODY) and (m.chat.id not in USER_BODY_ASKED):
+            USER_BODY_ASKED.add(m.chat.id)
+            await safe_answer(m, L(m.chat.id)["body_ask"], reply_markup=kb_body_ask(m.chat.id))
+    except Exception:
+        pass
+
     # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
     if m.chat.id in USER_COPY_MODE:
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
-        await safe_answer(m, "Промпт обновлён. Теперь пришлите селфи.")
+        await safe_answer(m, L(m.chat.id)["copy_prompt_updated"])
         return
     stats_incr("messages", 1)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
@@ -2372,12 +3933,29 @@ async def on_prompt(m: Message):
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
         return await safe_answer(m, L(m.chat.id)["credits_none"])
 
-    wait = await safe_answer(m, L(m.chat.id)["gen"])
+    # Determine current reference and whether to append to previous prompt
     ref = refs[-1]
-    seed_int = (hash(m.chat.id) % 10_000_000)
+    try:
+        ref_hash = hashlib.md5(ref).hexdigest()
+    except Exception:
+        ref_hash = None
+    # Support additive prompt: if last gen used the same ref, append new text to previous prompt
+    base_prompt = USER_LAST_PROMPT.get(m.chat.id)
+    last_ref_hash = USER_LAST_REF_HASH.get(m.chat.id)
+    combined_text = text
+    if base_prompt and base_prompt != text and last_ref_hash and ref_hash and (last_ref_hash == ref_hash):
+        combined_text = f"{base_prompt}. {text}".strip()
+        # Re-check safety on the combined prompt
+        if blocked(combined_text):
+            stats_incr("blocked", 1)
+            _uadd(m.chat.id, "blocked", 1)
+            return await safe_answer(m, L(m.chat.id)["blocked"])
+
+    wait = await safe_answer(m, L(m.chat.id)["gen"])
+    seed_int = stable_seed_from_int(m.chat.id)
     final_bytes = generate_image_from_bytes(
-        ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int
+        ref, combined_text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+        seed=seed_int, user_id=m.chat.id
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2389,7 +3967,12 @@ async def on_prompt(m: Message):
         USER_CREDITS[m.chat.id] -= 1
         _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
-    USER_LAST_PROMPT[m.chat.id] = text
+    USER_LAST_PROMPT[m.chat.id] = combined_text
+    try:
+        if ref_hash:
+            USER_LAST_REF_HASH[m.chat.id] = ref_hash
+    except Exception:
+        pass
     LAST_PHOTO[m.chat.id] = final_bytes
     stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
@@ -2432,7 +4015,7 @@ async def cb_more(c: CallbackQuery):
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
     # тот же промпт, seed + 1 (минимальная вариативность, лицо стабильное)
-    seed_int = ((hash(chat_id) % 10_000_000) + 1)
+    seed_int = stable_seed_from_int(chat_id, offset=1)
     result = generate_image_from_bytes(
         ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
         seed=seed_int
@@ -2447,6 +4030,10 @@ async def cb_more(c: CallbackQuery):
         _credits_save()
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = base_prompt
+    try:
+        USER_LAST_REF_HASH[chat_id] = hashlib.md5(ref).hexdigest()
+    except Exception:
+        pass
     LAST_PHOTO[chat_id] = result
     STATS["gens_ok"] += 1
     _uadd(chat_id, "gens_ok", 1)
@@ -2457,8 +4044,9 @@ async def cb_more(c: CallbackQuery):
         del hist[:-GALLERY_LIMIT]
 
     await msg.delete()
-    await c.message.answer_photo(
-        photo=BufferedInputFile(result, filename="imodel_result.jpg"),
+    await safe_answer_photo(
+        c.message,
+        BufferedInputFile(result, filename="imodel_result.jpg"),
         caption="✅",
         reply_markup=kb_actions(chat_id),
     )
@@ -2515,15 +4103,25 @@ async def on_startup():
         print("Publish group:", PUBLISH_GROUP_ID)
     print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>")
 
-    me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
-    BOT_USERNAME_GLOBAL = me.username
+    try:
+        if BOT_TOKEN:
+            me = await bot.get_me()
+            BOT_USERNAME_GLOBAL = getattr(me, "username", None)
+        else:
+            BOT_USERNAME_GLOBAL = None
+    except Exception as e:
+        BOT_USERNAME_GLOBAL = None
+        print("get_me error:", str(e)[:160])
 
-    if BOT_TOKEN and WEBHOOK_BASE:
+    if BOT_TOKEN and WEBHOOK_BASE and not DISABLE_WEBHOOK:
         await ensure_webhook()
         print(f"✅ Вебхук установлен: {WEBHOOK_URL}")
     else:
-        print("⚠️ Нет BOT_TOKEN или WEBHOOK_BASE")
+        if not BOT_TOKEN or not WEBHOOK_BASE:
+            print("⚠️ Нет BOT_TOKEN или WEBHOOK_BASE")
+        if DISABLE_WEBHOOK:
+            print("ℹ️ DISABLE_WEBHOOK=1 — пропускаю установку вебхука")
 
     await bot.set_my_commands(
         commands=[
@@ -2537,6 +4135,10 @@ async def on_startup():
             BotCommand(command="refer",   description="Реферальная ссылка"),
             BotCommand(command="pricing", description="Тарифы"),
             BotCommand(command="copy",    description="Скопировать фото"),
+            BotCommand(command="video",   description="Видео‑анимация"),
+            BotCommand(command="outfit",  description="Смена одежды"),
+            BotCommand(command="batch",   description="Пакетная генерация"),
+            BotCommand(command="body",    description="Рост/вес (по желанию)"),
             BotCommand(command="help",    description="Помощь"),
             BotCommand(command="clear",   description="Очистить память"),
             BotCommand(command="version", description="Версия"),
@@ -2548,16 +4150,23 @@ async def on_startup():
         if NUDGE_ENABLED:
             asyncio.create_task(nudge_loop())
             print("Nudge loop started")
+        if GROUP_POSTS_ENABLED:
+            asyncio.create_task(group_posts_loop())
+            global GROUP_POST_LOOP_RUNNING
+            GROUP_POST_LOOP_RUNNING = True
+            print("Group posts loop started")
     except Exception as e:
         print("Nudge loop error on startup:", str(e)[:160])
 @app.on_event("shutdown")
 async def on_shutdown():
     print("🛑 Shutting down...")
     try:
-        await bot.delete_webhook()
+        if not DISABLE_WEBHOOK:
+            await bot.delete_webhook()
     finally:
         await bot.session.close()
-    print("✅ Webhook removed")
+    if not DISABLE_WEBHOOK:
+        print("✅ Webhook removed")
 
 @app.post("/")
 async def telegram_webhook(request: Request):
@@ -2577,9 +4186,13 @@ async def telegram_webhook(request: Request):
         user_obj = (t.get("from") or {})
         uid = user_obj.get("id")
         uname = user_obj.get("username")
+        lang_code = user_obj.get("language_code")
         if isinstance(uid, int):
             STATS_USERS.add(uid)
             _touch_user(uid, uname)
+            # Ensure per-user language is set from device/app locale as early as possible
+            if uid not in USER_LANG:
+                USER_LANG[uid] = locale_to_lang(lang_code)
     except Exception:
         pass
     update = Update.model_validate(data)
