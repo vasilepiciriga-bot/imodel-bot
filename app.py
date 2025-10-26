@@ -327,9 +327,15 @@ def _s3_get_text(key: str) -> Optional[str]:
 # Replicate models
 # Base image-to-image/identity-capable model on Replicate.
 # IMPORTANT: override via NANOBANANA_MODEL in env to a model you have access to.
-# Default to a widely available identity model to avoid 404 on invalid slug.
 # Keep NanoBanana as default; override via env if needed
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
+# Optional identity-locking model (InstantID/forks). If configured, may run before NanoBanana.
+INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
+INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
+INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
+# Use style image directly in InstantID during Copy Mode (strict + style_bytes present)
+INSTANTID_USE_STYLE_IN_COPY = os.getenv("INSTANTID_USE_STYLE_IN_COPY", "0") == "1"
+DISABLE_INSTANTID = os.getenv("DISABLE_INSTANTID", "0") == "1"
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
@@ -2211,6 +2217,73 @@ def generate_image_from_bytes(
 
     # Identity-only path removed; using primary model exclusively
 
+    INSTANTID_DISABLED_RUNTIME = False
+
+    def _maybe_disable_instant_on_404(msg: str):
+        nonlocal INSTANTID_DISABLED_RUNTIME
+        if '404' in msg or 'not be found' in msg.lower():
+            INSTANTID_DISABLED_RUNTIME = True
+
+    def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
+        if DISABLE_INSTANTID or INSTANTID_DISABLED_RUNTIME or not INSTANTID_MODEL:
+            return None
+        neg = _compose_negative(strict, lock_scene)
+        inputs_common = {"prompt": p, "negative_prompt": neg}
+        if seed_val is not None:
+            inputs_common["seed"] = seed_val
+
+        # Build fresh sources for each attempt
+        src_sources = ([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]
+        style_sources = []
+        if (strict and style_bytes and INSTANTID_USE_STYLE_IN_COPY) or (style_url and INSTANTID_USE_STYLE_IN_COPY):
+            style_sources = ([style_url] if style_url else []) + ([_file_input(style_bytes, "style.jpg")] if style_bytes else [])
+
+        cfgs: List[Dict[str, object]] = [
+            {}, {"guidance_scale": 7.5}, {"num_inference_steps": 28},
+            {"strength": 0.8}, {"prompt_strength": 0.9},
+            {"identity_strength": 0.95}, {"identity_weight": 0.95}, {"face_weight": 0.95},
+            {"keep_identity": True}, {"preserve_identity": True}
+        ]
+
+        # If style is provided and allowed → try style + face combos first
+        if style_sources:
+            for sref in style_sources:
+                for ssrc in src_sources:
+                    variants = [
+                        {"image": sref, "face_image": ssrc},
+                        {"image": sref, "id_image": ssrc},
+                        {"style_image": sref, "face_image": ssrc},
+                        {"image_input": [sref, ssrc]},
+                        {"image_input": [ssrc, sref]},
+                    ]
+                    for v in variants:
+                        for c in cfgs:
+                            try:
+                                inp = dict(inputs_common); inp.update(v); inp.update(c)
+                                url = replicate_generate(INSTANTID_MODEL, inp)
+                                if url and str(url).startswith('http'):
+                                    print("InstantID OK (style+face)", v.keys(), c)
+                                    return url
+                            except Exception as e:
+                                _maybe_disable_instant_on_404(str(e))
+
+        # Text-only identity: selfie only
+        if INSTANTID_TEXT_OK:
+            face_keys = ("face_image", "id_image", "identity", "person_image", "reference")
+            for ssrc in src_sources:
+                for k in face_keys:
+                    v = {k: ssrc}
+                    for c in cfgs:
+                        try:
+                            inp = dict(inputs_common); inp.update(v); inp.update(c)
+                            url = replicate_generate(INSTANTID_MODEL, inp)
+                            if url and str(url).startswith('http'):
+                                print("InstantID OK (face-only)", k, c)
+                                return url
+                        except Exception as e:
+                            _maybe_disable_instant_on_404(str(e))
+        return None
+
     def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
         neg = _compose_negative(strict, lock_scene)
         inputs_common = {
@@ -2370,17 +2443,28 @@ def generate_image_from_bytes(
 
         return None
 
-    # Generate via primary model (NanoBanana)
-    gen_url: Optional[str] = try_nano(refined, seed_val=seed)
+    # Prefer InstantID if enabled
+    gen_url: Optional[str] = None
+    can_use_instant = (not DISABLE_INSTANTID) and (not INSTANTID_DISABLED_RUNTIME) and INSTANTID_MODEL and (style_bytes is not None or INSTANTID_TEXT_OK)
+    if INSTANTID_FIRST and can_use_instant:
+        gen_url = try_instantid(refined, seed_val=seed)
+    if not gen_url:
+        gen_url = try_nano(refined, seed_val=seed)
     if gen_url == "SENSITIVE":
         print("→ Sensitive → safer variant")
         safer = safer_variant(refined)
-        gen_url = try_nano(safer, seed_val=seed)
+        if can_use_instant:
+            gen_url = try_instantid(safer, seed_val=seed)
+        if not gen_url:
+            gen_url = try_nano(safer, seed_val=seed)
 
     # Если «уплыло лицо» — усилить замки и повторить 1 раз
     if (not gen_url or not str(gen_url).startswith("http")) and not strict:
         hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features."
-        gen_url = try_nano(hard_lock, seed_val=seed)
+        if can_use_instant:
+            gen_url = try_instantid(hard_lock, seed_val=seed)
+        if not gen_url:
+            gen_url = try_nano(hard_lock, seed_val=seed)
 
     if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
         print("→ gen_url пустой/sensitive")
