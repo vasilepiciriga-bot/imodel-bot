@@ -2160,7 +2160,6 @@ def generate_image_from_bytes(
     print(f"→ Генерация: {refined[:180]}...")
 
     src_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
-    src_file = None
     if not src_url:
         # Fallback: data URL
         try:
@@ -2170,19 +2169,10 @@ def generate_image_from_bytes(
         except Exception:
             src_url = None
             print("→ Не удалось подготовить источник (S3/data URL)")
-        # And file-like for Replicate SDK (it will upload)
-        try:
-            bf = BytesIO(img_bytes)
-            bf.name = "selfie.jpg"
-            src_file = bf
-            print("→ Using file-like upload for Replicate")
-        except Exception:
-            src_file = None
-        if not src_url and not src_file:
+        if not src_url:
             return None
 
     style_url: Optional[str] = None
-    style_file = None
     if strict and style_bytes:
         style_url = s3_put_and_presign(style_bytes, key_prefix="style/")
         if not style_url:
@@ -2193,12 +2183,15 @@ def generate_image_from_bytes(
             except Exception:
                 style_url = None
                 print("→ Не удалось подготовить style-ref (S3/data URL)")
+
+    def _file_input(data: bytes, name: str) -> BytesIO:
+        f = BytesIO(data)
         try:
-            sf = BytesIO(style_bytes)
-            sf.name = "style.jpg"
-            style_file = sf
+            f.name = name
         except Exception:
-            style_file = None
+            pass
+        f.seek(0)
+        return f
 
     def _compose_negative(is_strict: bool, lock_scene_local: bool) -> str:
         # Optionally enforce stricter negatives even in non-strict flows
@@ -2230,9 +2223,10 @@ def generate_image_from_bytes(
             inputs_common["seed"] = seed_val
 
         # If we have a style reference, try style + face combos first
-        if style_url or style_file:
-            style_sources = [x for x in (style_url, style_file) if x]
-            src_sources = [x for x in (src_url, src_file) if x]
+        if style_bytes or style_url:
+            # Build fresh file-like objects per attempt to avoid exhausted streams
+            style_sources = ([style_url] if style_url else []) + ([_file_input(style_bytes, "style.jpg")] if style_bytes else [])
+            src_sources = ([src_url] if src_url else []) + ([_file_input(img_bytes, "selfie.jpg")])
             cfgs: List[Dict[str, object]] = [
                 {},
                 {"guidance_scale": 7.5},
@@ -2260,7 +2254,6 @@ def generate_image_from_bytes(
                                 return url
 
         # Selfie only: pass as face reference
-        face_sources = [x for x in (src_url, src_file) if x]
         face_keys_tpl = (
             ("face_image",),
             ("id_image",),
@@ -2274,7 +2267,7 @@ def generate_image_from_bytes(
             {"num_inference_steps": 28},
             {"strength": 0.8},
         ]
-        for srcv in face_sources:
+        for srcv in (([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]):
             for keys in face_keys_tpl:
                 v = {keys[0]: srcv}
                 for c in cfgs2:
@@ -2297,9 +2290,9 @@ def generate_image_from_bytes(
             inputs_common["seed"] = seed_val
 
         # If we have a style reference, try two-image conditions first (support URL or file-like)
-        if style_url or style_file:
-            style_sources = [x for x in (style_url, style_file) if x]
-            src_sources = [x for x in (src_url, src_file) if x]
+        if style_bytes or style_url:
+            style_sources = ([style_url] if style_url else []) + ([_file_input(style_bytes, "style.jpg")] if style_bytes else [])
+            src_sources = ([src_url] if src_url else []) + ([_file_input(img_bytes, "selfie.jpg")])
             cfg_variants: List[Dict[str, object]] = [
                 {},
                 {"guidance_scale": 7.5},
@@ -2341,7 +2334,7 @@ def generate_image_from_bytes(
 
         # 1) identity-aware single-image variants (for models that accept face_image/identity)
         try:
-            for ssrc in [x for x in (src_url, src_file) if x]:
+            for ssrc in (([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]):
                 face_keys_variants = [
                     {"image": ssrc, "face_image": ssrc},
                     {"image": ssrc, "person_image": ssrc},
@@ -2369,7 +2362,7 @@ def generate_image_from_bytes(
 
         # 2) image_input (список) — только selfie
         try:
-            for ssrc in [x for x in (src_url, src_file) if x]:
+            for ssrc in (([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]):
                 for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
                     inp = dict(inputs_common)
                     inp.update(cfg_extra)
@@ -2385,17 +2378,19 @@ def generate_image_from_bytes(
 
         # 3) image (одна) — только selfie
         try:
-            for ssrc in [x for x in (src_url, src_file) if x]:
+            # Try multiple common single-image keys used by different models
+            for ssrc in (([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]):
                 for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
-                    inp = dict(inputs_common)
-                    inp.update(cfg_extra)
-                    inp["image"] = ssrc
-                    url = replicate_generate(NANOBANANA_MODEL, inp)
-                    if url == "SENSITIVE":
-                        return "SENSITIVE"
-                    if url:
-                        print("NanoBanana OK (image)", cfg_extra)
-                        return url
+                    for key in ("image", "input_image", "init_image", "source_image"):
+                        inp = dict(inputs_common)
+                        inp.update(cfg_extra)
+                        inp[key] = ssrc
+                        url = replicate_generate(NANOBANANA_MODEL, inp)
+                        if url == "SENSITIVE":
+                            return "SENSITIVE"
+                        if url:
+                            print("NanoBanana OK (", key, ")", cfg_extra)
+                            return url
         except Exception as e2:
             print("NanoBanana image exception:", str(e2)[:200])
 
