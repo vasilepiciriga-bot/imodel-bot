@@ -343,7 +343,7 @@ INSTANTID_MODEL   = os.getenv(
         "zsxkib/instant-id:2e4785a4d80dadf580077b2244c8d7c05d8e3faac04a04c02d8e099dd2876789",
     ),
 )
-INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
+INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "0") == "1"
 INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
 # Use style image directly in InstantID during Copy Mode (strict + style_bytes present)
 INSTANTID_USE_STYLE_IN_COPY = os.getenv("INSTANTID_USE_STYLE_IN_COPY", "0") == "1"
@@ -2566,6 +2566,12 @@ def generate_image_from_bytes(
     # Prefer InstantID if enabled
     gen_url: Optional[str] = None
     can_use_instant = (not DISABLE_INSTANTID) and (not INSTANTID_DISABLED_RUNTIME) and INSTANTID_MODEL and (style_bytes is not None or INSTANTID_TEXT_OK)
+    # Log planned order
+    try:
+        order = "InstantID→Nano" if (INSTANTID_FIRST and can_use_instant) else "Nano→InstantID"
+        print(f"pipeline order: {order}")
+    except Exception:
+        pass
     if INSTANTID_FIRST and can_use_instant:
         gen_url = try_instantid(refined, seed_val=seed)
     if not gen_url:
