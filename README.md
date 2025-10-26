@@ -7,7 +7,7 @@
 2) Ключи:
    - OpenAI → OPENAI_API_KEY (можно отключить GPT переменной GPT_OFF=1)
    - Replicate → REPLICATE_API_TOKEN
-   - Backblaze B2 S3 → S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET (public or private; presigned URLs are used)
+   - Backblaze B2 S3 → S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET (Public bucket)
 3) Залить репозиторий на GitHub.
 4) Railway → New Project → Deploy from GitHub.
 5) Railway → Variables → вставить переменные из .env.example.
@@ -17,14 +17,3 @@
 
 Команды: /start /help /lang /delete (MVP)  
 Поддержка языков: RU / EN / RO.
-
-Дополнительно (сохранение лица):
-- `INSTANTID_MODEL` — модель на Replicate для жёсткой фиксации лица (по умолчанию `tencentarc/instantid`).
-- `INSTANTID_FIRST=1` — (по умолчанию 0) пробовать InstantID первой, затем fallback на основную модель.
-- `INSTANTID_TEXT_OK=1` — разрешить InstantID без style‑рефа (только селфи + текст). По умолчанию 0.
-- `STRICT_ID_MODE=1` — усиливает негатив‑промпт в обычном режиме (меньше «смены человека»).
-
-## Важно: один вебхук на бота
-- У Telegram-бота может быть только один активный webhook на один `BOT_TOKEN`.
-- Если вы запускаете два инстанса с одним `BOT_TOKEN`, последний запущенный перезапишет вебхук у первого.
-- Для второй копии (например, воркер без приёма апдейтов) выставьте `DISABLE_WEBHOOK=1`, чтобы не трогать вебхук основной копии.
