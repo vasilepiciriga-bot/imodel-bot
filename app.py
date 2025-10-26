@@ -32,11 +32,6 @@ from aiogram.types import (
 )
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 
-try:
-    from PIL import Image
-except Exception:
-    Image = None
-
 import replicate
 import boto3
 from botocore.config import Config
@@ -305,6 +300,7 @@ def _s3_get_text(key: str) -> Optional[str]:
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
+DISABLE_ESRGAN   = os.getenv("DISABLE_ESRGAN", "1") == "1"
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
 # Language / quotas
@@ -828,7 +824,6 @@ def detect_lang(sample: str) -> str:
     return "en"
 
 # ===================== Safe Telegram send ============
-TELEGRAM_PHOTO_MAX = 10 * 1024 * 1024
 async def safe_answer(m: Message, text: str, **kwargs):
     try:
         return await m.answer(text, **kwargs)
@@ -839,32 +834,12 @@ async def safe_answer(m: Message, text: str, **kwargs):
     return None
 
 async def safe_answer_photo(m: Message, photo: BufferedInputFile, **kwargs):
-    # Proactive shrink if exceeds Telegram limit
-    try:
-        raw = getattr(photo, "file", None)
-        if isinstance(raw, (bytes, bytearray)) and len(raw) > TELEGRAM_PHOTO_MAX:
-            nb = _shrink_photo_bytes(bytes(raw), max_bytes=TELEGRAM_PHOTO_MAX)
-            if nb and len(nb) <= TELEGRAM_PHOTO_MAX:
-                photo = BufferedInputFile(nb, filename=getattr(photo, "filename", "photo.jpg"))
-    except Exception as e:
-        print(f"[safe_answer_photo] pre-shrink error: {e}")
     try:
         return await m.answer_photo(photo=photo, **kwargs)
     except (TelegramForbiddenError, TelegramNotFound):
         print(f"[safe_answer_photo] blocked/not found: chat_id={m.chat.id}")
     except TelegramBadRequest as e:
-        msg = str(e)
-        print(f"[safe_answer_photo] bad request: {msg}")
-        # Try recompressing if too big, then resend as photo
-        if ("too big for a photo" in msg) or ("file of size" in msg):
-            raw = getattr(photo, "file", None)
-            try:
-                if isinstance(raw, (bytes, bytearray)):
-                    nb = _shrink_photo_bytes(bytes(raw), max_bytes=TELEGRAM_PHOTO_MAX)
-                    if nb and len(nb) < len(raw):
-                        return await m.answer_photo(photo=BufferedInputFile(nb, filename=getattr(photo, "filename", "photo.jpg")), **kwargs)
-            except Exception as e2:
-                print(f"[safe_answer_photo->shrink] error: {e2}")
+        print(f"[safe_answer_photo] bad request: {e}")
     return None
 
 async def safe_edit_text(msg: Message, text: str):
@@ -1046,39 +1021,7 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
         time.sleep(base_sleep * (i + 1))
     return None
 
-def _shrink_photo_bytes(img_bytes: bytes, max_bytes: int = 10 * 1024 * 1024) -> bytes:
-    """Re-encode JPEG under Telegram 10MB limit.
-    Strategy: quality sweep (90→70→60) then downscale longest side (2048→1600) with quality 85.
-    If Pillow not installed or any error → return original.
-    """
-    try:
-        if not Image:
-            return img_bytes
-        from io import BytesIO
-        im = Image.open(BytesIO(img_bytes)).convert("RGB")
-        def enc(quality: int, size: Optional[int] = None) -> bytes:
-            im2 = im
-            if size and max(im.size) > size:
-                im2 = im.copy()
-                im2.thumbnail((size, size))
-            buf = BytesIO()
-            im2.save(buf, format="JPEG", quality=quality, optimize=True)
-            return buf.getvalue()
-        for q in (90, 80, 70, 60):
-            out = enc(q)
-            if len(out) <= max_bytes:
-                return out
-        for sz in (2048, 1600):
-            out = enc(85, size=sz)
-            if len(out) <= max_bytes:
-                return out
-        # Last resort: 70 quality + 1600px
-        out = enc(70, size=1600)
-        if len(out) <= max_bytes:
-            return out
-        return out if len(out) < len(img_bytes) else img_bytes
-    except Exception:
-        return img_bytes
+## size-shrink helper removed per request
 
 # ===================== PROMPTS ========================
 def _safe_suffix() -> str:
@@ -1551,7 +1494,7 @@ def generate_image_from_bytes(
     # Бережный апскейл
     try:
         global ESRGAN_DISABLED
-        if not ESRGAN_MODEL or ESRGAN_DISABLED:
+        if not ESRGAN_MODEL or ESRGAN_DISABLED or DISABLE_ESRGAN:
             return nano_bytes
         up_url = replicate_generate(ESRGAN_MODEL, {
             "image": gen_url,
