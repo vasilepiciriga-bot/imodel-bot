@@ -335,7 +335,8 @@ def _s3_get_text(key: str) -> Optional[str]:
 # Keep NanoBanana as default; override via env if needed
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 # Optional identity-locking model (InstantID/forks). If configured, may run before NanoBanana.
-INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
+# Default to zsxkib/instant-id (community fork). Override via env if needed.
+INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "zsxkib/instant-id"))
 INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
 INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
 # Use style image directly in InstantID during Copy Mode (strict + style_bytes present)
@@ -2324,63 +2325,57 @@ def generate_image_from_bytes(
             INSTANTID_DISABLED_RUNTIME = True
 
     def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
+        """Exact input structure for zsxkib/instant-id.
+        - style + face: {'image': style_ref, 'id_image': selfie, 'prompt': p, 'negative_prompt': neg, 'seed': seed, 'num_inference_steps', 'guidance_scale'}
+        - face only:    {'image': selfie,    'id_image': selfie, 'prompt': p, 'negative_prompt': neg, 'seed': seed, 'num_inference_steps', 'guidance_scale'}
+        """
         if DISABLE_INSTANTID or INSTANTID_DISABLED_RUNTIME or not INSTANTID_MODEL:
             return None
         neg = _compose_negative(strict, lock_scene)
-        inputs_common = {"prompt": p, "negative_prompt": neg}
+        base = {"prompt": p, "negative_prompt": neg}
         if seed_val is not None:
-            inputs_common["seed"] = seed_val
-
-        # Build fresh sources for each attempt
-        src_sources = ([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]
+            base["seed"] = seed_val
+        # Prepare fresh sources
+        selfie_sources = ([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]
         style_sources = []
         if (strict and style_bytes and INSTANTID_USE_STYLE_IN_COPY) or (style_url and INSTANTID_USE_STYLE_IN_COPY):
             style_sources = ([style_url] if style_url else []) + ([_file_input(style_bytes, "style.jpg")] if style_bytes else [])
 
-        cfgs: List[Dict[str, object]] = [
-            {}, {"guidance_scale": 7.5}, {"num_inference_steps": 28},
-            {"strength": 0.8}, {"prompt_strength": 0.9},
-            {"identity_strength": 0.95}, {"identity_weight": 0.95}, {"face_weight": 0.95},
-            {"keep_identity": True}, {"preserve_identity": True}
-        ]
-
-        # If style is provided and allowed → try style + face combos first
+        # Try style + face first
         if style_sources:
-            for sref in style_sources:
-                for ssrc in src_sources:
-                    variants = [
-                        {"image": sref, "face_image": ssrc},
-                        {"image": sref, "id_image": ssrc},
-                        {"style_image": sref, "face_image": ssrc},
-                        {"image_input": [sref, ssrc]},
-                        {"image_input": [ssrc, sref]},
-                    ]
-                    for v in variants:
-                        for c in cfgs:
-                            try:
-                                inp = dict(inputs_common); inp.update(v); inp.update(c)
-                                url = replicate_generate(INSTANTID_MODEL, inp)
-                                if url and str(url).startswith('http'):
-                                    print("InstantID OK (style+face)", v.keys(), c)
-                                    return url
-                            except Exception as e:
-                                _maybe_disable_instant_on_404(str(e))
-
-        # Text-only identity: selfie only
+            for sty in style_sources:
+                for s in selfie_sources:
+                    try:
+                        inp = dict(base)
+                        inp.update({
+                            "image": sty,
+                            "id_image": s,
+                            "num_inference_steps": 28,
+                            "guidance_scale": 7.5,
+                        })
+                        url = replicate_generate(INSTANTID_MODEL, inp)
+                        if url and str(url).startswith('http'):
+                            print("InstantID OK (style+id_image)")
+                            return url
+                    except Exception as e:
+                        _maybe_disable_instant_on_404(str(e))
+        # Face only
         if INSTANTID_TEXT_OK:
-            face_keys = ("face_image", "id_image", "identity", "person_image", "reference")
-            for ssrc in src_sources:
-                for k in face_keys:
-                    v = {k: ssrc}
-                    for c in cfgs:
-                        try:
-                            inp = dict(inputs_common); inp.update(v); inp.update(c)
-                            url = replicate_generate(INSTANTID_MODEL, inp)
-                            if url and str(url).startswith('http'):
-                                print("InstantID OK (face-only)", k, c)
-                                return url
-                        except Exception as e:
-                            _maybe_disable_instant_on_404(str(e))
+            for s in selfie_sources:
+                try:
+                    inp = dict(base)
+                    inp.update({
+                        "image": s,
+                        "id_image": s,
+                        "num_inference_steps": 28,
+                        "guidance_scale": 7.5,
+                    })
+                    url = replicate_generate(INSTANTID_MODEL, inp)
+                    if url and str(url).startswith('http'):
+                        print("InstantID OK (id_image=selfie)")
+                        return url
+                except Exception as e:
+                    _maybe_disable_instant_on_404(str(e))
         return None
 
     def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
