@@ -330,13 +330,6 @@ def _s3_get_text(key: str) -> Optional[str]:
 # Default to a widely available identity model to avoid 404 on invalid slug.
 # Keep NanoBanana as default; override via env if needed
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
-# Optional identity-locking model (e.g., InstantID). If set, we will try it first.
-INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
-# Prefer InstantID to improve identity retention (can be disabled via env)
-INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
-# Allow InstantID without a style image (text-only); helps preserve face in standard flow
-INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
-DISABLE_INSTANTID = os.getenv("DISABLE_INSTANTID", "0") == "1"
 ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
 ESRGAN_DISABLED  = False  # auto-disable on first 404
 
@@ -2216,76 +2209,7 @@ def generate_image_from_bytes(
             return f"{base_neg}, {STRICT_NEGATIVE}"
         return base_neg
 
-    def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
-        if DISABLE_INSTANTID:
-            return None
-        if not REPLICATE_API_TOKEN or not INSTANTID_MODEL:
-            return None
-        neg = _compose_negative(strict, lock_scene)
-        inputs_common = {
-            "prompt": p,
-            "negative_prompt": neg,
-        }
-        if seed_val is not None:
-            inputs_common["seed"] = seed_val
-
-        # If we have a style reference, try style + face combos first
-        if style_bytes or style_url:
-            # Build fresh file-like objects per attempt to avoid exhausted streams
-            style_sources = ([style_url] if style_url else []) + ([_file_input(style_bytes, "style.jpg")] if style_bytes else [])
-            src_sources = ([src_url] if src_url else []) + ([_file_input(img_bytes, "selfie.jpg")])
-            cfgs: List[Dict[str, object]] = [
-                {},
-                {"guidance_scale": 7.5},
-                {"num_inference_steps": 28},
-                {"strength": 0.8},
-            ]
-            for sref in style_sources:
-                for ssrc in src_sources:
-                    variants: List[Dict[str, object]] = [
-                        {"image": sref, "face_image": ssrc},
-                        {"image": sref, "id_image": ssrc},
-                        {"style_image": sref, "face_image": ssrc},
-                        {"style": sref, "face_image": ssrc},
-                        {"image_input": [sref, ssrc]},
-                        {"image_input": [ssrc, sref]},
-                    ]
-                    for v in variants:
-                        for c in cfgs:
-                            inp = dict(inputs_common); inp.update(v); inp.update(c)
-                            url = replicate_generate(INSTANTID_MODEL, inp)
-                            if url == "SENSITIVE":
-                                return "SENSITIVE"
-                            if url:
-                                print("InstantID OK (style+face)", v.keys(), c)
-                                return url
-
-        # Selfie only: pass as face reference
-        face_keys_tpl = (
-            ("face_image",),
-            ("id_image",),
-            ("identity",),
-            ("person_image",),
-            ("reference",),
-        )
-        cfgs2: List[Dict[str, object]] = [
-            {},
-            {"guidance_scale": 7.5},
-            {"num_inference_steps": 28},
-            {"strength": 0.8},
-        ]
-        for srcv in (([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]):
-            for keys in face_keys_tpl:
-                v = {keys[0]: srcv}
-                for c in cfgs2:
-                    inp = dict(inputs_common); inp.update(v); inp.update(c)
-                    url = replicate_generate(INSTANTID_MODEL, inp)
-                    if url == "SENSITIVE":
-                        return "SENSITIVE"
-                    if url:
-                        print("InstantID OK (face only)", v.keys(), c)
-                        return url
-        return None
+    # Identity-only path removed; using primary model exclusively
 
     def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
         neg = _compose_negative(strict, lock_scene)
@@ -2403,51 +2327,17 @@ def generate_image_from_bytes(
 
         return None
 
-    # Try identity-preserving model first (if configured)
-    gen_url: Optional[str] = None
-    can_use_instant = (not DISABLE_INSTANTID) and INSTANTID_FIRST and INSTANTID_MODEL and (style_url is not None or INSTANTID_TEXT_OK)
-    if can_use_instant:
-        gen_url = try_instantid(refined, seed_val=seed)
-    if not gen_url:
-        gen_url = try_nano(refined, seed_val=seed)
-    # Fallback: even if InstantID wasn't selected as first, try it once to improve identity retention
-    if not gen_url and (not DISABLE_INSTANTID) and INSTANTID_MODEL:
-        try:
-            alt = try_instantid(refined, seed_val=seed)
-            if alt:
-                gen_url = alt
-        except Exception:
-            pass
+    # Generate via primary model (NanoBanana)
+    gen_url: Optional[str] = try_nano(refined, seed_val=seed)
     if gen_url == "SENSITIVE":
         print("→ Sensitive → safer variant")
         safer = safer_variant(refined)
-        if can_use_instant:
-            gen_url = try_instantid(safer, seed_val=seed)
-        if not gen_url:
-            gen_url = try_nano(safer, seed_val=seed)
-        if not gen_url and (not DISABLE_INSTANTID) and INSTANTID_MODEL:
-            try:
-                alt = try_instantid(safer, seed_val=seed)
-                if alt:
-                    gen_url = alt
-            except Exception:
-                pass
+        gen_url = try_nano(safer, seed_val=seed)
 
     # Если «уплыло лицо» — усилить замки и повторить 1 раз
     if (not gen_url or not str(gen_url).startswith("http")) and not strict:
         hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features."
-        # Do NOT force scene lock unless strict scene copy is requested
-        if can_use_instant:
-            gen_url = try_instantid(hard_lock, seed_val=seed)
-        if not gen_url:
-            gen_url = try_nano(hard_lock, seed_val=seed)
-        if not gen_url and (not DISABLE_INSTANTID) and INSTANTID_MODEL:
-            try:
-                alt = try_instantid(hard_lock, seed_val=seed)
-                if alt:
-                    gen_url = alt
-            except Exception:
-                pass
+        gen_url = try_nano(hard_lock, seed_val=seed)
 
     if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
         print("→ gen_url пустой/sensitive")

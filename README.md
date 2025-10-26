@@ -4,7 +4,7 @@
 - селфи + текст → GPT‑refine (опционально) → Replicate (NanoBanana) → (опц.) Real‑ESRGAN → ответ пользователю (байты)
 - Copy Mode: стиль‑фото → Vision‑GPT строит детальный промпт → селфи + промпт → Replicate (NanoBanana)
 
-InstantID можно включить/выключить переменными окружения (см. ниже).
+По умолчанию вся генерация идёт через основную модель (NanoBanana).
 
 ## Запуск
 1) Создать бота в @BotFather → получить `BOT_TOKEN`.
@@ -14,7 +14,7 @@ InstantID можно включить/выключить переменными 
    - Модели Replicate: `NANOBANANA_MODEL` (по умолчанию `google/nano-banana`), `ESRGAN_MODEL`
    - OpenAI (опционально): `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_MODEL_VISION`
    - S3 (опционально, для presign): `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`
-   - InstantID (опционально): `INSTANTID_MODEL`, `INSTANTID_FIRST`, `INSTANTID_TEXT_OK`, `DISABLE_INSTANTID`
+   - (Опционально) другие модели Replicate — задавайте slug/версию своей модели
 3) Deploy на Railway/Render/другой хостинг.
 4) Вставить переменные окружения из `.env.example`.
 5) `WEBHOOK_BASE` = публичный HTTPS URL вашего приложения. Вебхук принимает секрет либо как query `/?secret=...`, либо как заголовок `X-Telegram-Bot-Api-Secret-Token`.
@@ -35,4 +35,4 @@ InstantID можно включить/выключить переменными 
 
 ## Советы по идентичности
 - Команда `/gender male|female` фиксирует пол в промпте и негатив‑промпте, уменьшая дрейф пола.
-- При необходимости включите InstantID (`INSTANTID_FIRST=1`, `INSTANTID_TEXT_OK=1`) или отключите (`DISABLE_INSTANTID=1`), если NanoBanana справляется достаточно хорошо.
+ 
