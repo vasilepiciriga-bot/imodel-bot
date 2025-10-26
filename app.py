@@ -2307,7 +2307,15 @@ def generate_image_from_bytes(
         # 2) image_input (список) — только selfie
         try:
             for ssrc in (([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]):
-                for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+                for cfg_extra in [
+                    {},
+                    {"guidance_scale": 7.5},
+                    {"num_inference_steps": 28},
+                    {"strength": 0.8},
+                    {"prompt_strength": 0.85},
+                    {"image_strength": 0.5},
+                    {"image_strength": 0.4},
+                ]:
                     inp = dict(inputs_common)
                     inp.update(cfg_extra)
                     inp["image_input"] = [ssrc]
@@ -2324,7 +2332,15 @@ def generate_image_from_bytes(
         try:
             # Try multiple common single-image keys used by different models
             for ssrc in (([src_url] if src_url else []) + [_file_input(img_bytes, "selfie.jpg")]):
-                for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+                for cfg_extra in [
+                    {},
+                    {"guidance_scale": 7.5},
+                    {"num_inference_steps": 28},
+                    {"strength": 0.8},
+                    {"prompt_strength": 0.85},
+                    {"image_strength": 0.5},
+                    {"image_strength": 0.45},
+                ]:
                     for key in ("image", "input_image", "init_image", "source_image"):
                         inp = dict(inputs_common)
                         inp.update(cfg_extra)
