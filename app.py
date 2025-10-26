@@ -32,6 +32,11 @@ from aiogram.types import (
 )
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
 import replicate
 import boto3
 from botocore.config import Config
@@ -838,7 +843,18 @@ async def safe_answer_photo(m: Message, photo: BufferedInputFile, **kwargs):
     except (TelegramForbiddenError, TelegramNotFound):
         print(f"[safe_answer_photo] blocked/not found: chat_id={m.chat.id}")
     except TelegramBadRequest as e:
-        print(f"[safe_answer_photo] bad request: {e}")
+        msg = str(e)
+        print(f"[safe_answer_photo] bad request: {msg}")
+        # Try recompressing if too big, then resend as photo
+        if ("too big for a photo" in msg) or ("file of size" in msg):
+            raw = getattr(photo, "file", None)
+            try:
+                if isinstance(raw, (bytes, bytearray)):
+                    nb = _shrink_photo_bytes(bytes(raw))
+                    if nb and len(nb) < len(raw):
+                        return await m.answer_photo(photo=BufferedInputFile(nb, filename=getattr(photo, "filename", "photo.jpg")), **kwargs)
+            except Exception as e2:
+                print(f"[safe_answer_photo->shrink] error: {e2}")
     return None
 
 async def safe_edit_text(msg: Message, text: str):
@@ -1019,6 +1035,40 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
             pass
         time.sleep(base_sleep * (i + 1))
     return None
+
+def _shrink_photo_bytes(img_bytes: bytes, max_bytes: int = 10 * 1024 * 1024) -> bytes:
+    """Re-encode JPEG under Telegram 10MB limit.
+    Strategy: quality sweep (90→70→60) then downscale longest side (2048→1600) with quality 85.
+    If Pillow not installed or any error → return original.
+    """
+    try:
+        if not Image:
+            return img_bytes
+        from io import BytesIO
+        im = Image.open(BytesIO(img_bytes)).convert("RGB")
+        def enc(quality: int, size: Optional[int] = None) -> bytes:
+            im2 = im
+            if size and max(im.size) > size:
+                im2 = im.copy()
+                im2.thumbnail((size, size))
+            buf = BytesIO()
+            im2.save(buf, format="JPEG", quality=quality, optimize=True)
+            return buf.getvalue()
+        for q in (90, 80, 70, 60):
+            out = enc(q)
+            if len(out) <= max_bytes:
+                return out
+        for sz in (2048, 1600):
+            out = enc(85, size=sz)
+            if len(out) <= max_bytes:
+                return out
+        # Last resort: 70 quality + 1600px
+        out = enc(70, size=1600)
+        if len(out) <= max_bytes:
+            return out
+        return out if len(out) < len(img_bytes) else img_bytes
+    except Exception:
+        return img_bytes
 
 # ===================== PROMPTS ========================
 def _safe_suffix() -> str:
@@ -1992,8 +2042,9 @@ async def cb_preset_pick(c: CallbackQuery):
         "ro": "✅ Preset",
         "de": "✅ Preset",
     }.get(USER_LANG.get(chat_id, LANG_DEFAULT), "✅ Preset")
-    await c.message.answer_photo(
-        photo=BufferedInputFile(result, filename="imodel_result.jpg"),
+    await safe_answer_photo(
+        c.message,
+        BufferedInputFile(result, filename="imodel_result.jpg"),
         caption=cap,
         reply_markup=kb_actions(chat_id),
     )
@@ -2457,8 +2508,9 @@ async def cb_more(c: CallbackQuery):
         del hist[:-GALLERY_LIMIT]
 
     await msg.delete()
-    await c.message.answer_photo(
-        photo=BufferedInputFile(result, filename="imodel_result.jpg"),
+    await safe_answer_photo(
+        c.message,
+        BufferedInputFile(result, filename="imodel_result.jpg"),
         caption="✅",
         reply_markup=kb_actions(chat_id),
     )
