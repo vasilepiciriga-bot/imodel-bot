@@ -828,6 +828,7 @@ def detect_lang(sample: str) -> str:
     return "en"
 
 # ===================== Safe Telegram send ============
+TELEGRAM_PHOTO_MAX = 10 * 1024 * 1024
 async def safe_answer(m: Message, text: str, **kwargs):
     try:
         return await m.answer(text, **kwargs)
@@ -838,6 +839,15 @@ async def safe_answer(m: Message, text: str, **kwargs):
     return None
 
 async def safe_answer_photo(m: Message, photo: BufferedInputFile, **kwargs):
+    # Proactive shrink if exceeds Telegram limit
+    try:
+        raw = getattr(photo, "file", None)
+        if isinstance(raw, (bytes, bytearray)) and len(raw) > TELEGRAM_PHOTO_MAX:
+            nb = _shrink_photo_bytes(bytes(raw), max_bytes=TELEGRAM_PHOTO_MAX)
+            if nb and len(nb) <= TELEGRAM_PHOTO_MAX:
+                photo = BufferedInputFile(nb, filename=getattr(photo, "filename", "photo.jpg"))
+    except Exception as e:
+        print(f"[safe_answer_photo] pre-shrink error: {e}")
     try:
         return await m.answer_photo(photo=photo, **kwargs)
     except (TelegramForbiddenError, TelegramNotFound):
@@ -850,7 +860,7 @@ async def safe_answer_photo(m: Message, photo: BufferedInputFile, **kwargs):
             raw = getattr(photo, "file", None)
             try:
                 if isinstance(raw, (bytes, bytearray)):
-                    nb = _shrink_photo_bytes(bytes(raw))
+                    nb = _shrink_photo_bytes(bytes(raw), max_bytes=TELEGRAM_PHOTO_MAX)
                     if nb and len(nb) < len(raw):
                         return await m.answer_photo(photo=BufferedInputFile(nb, filename=getattr(photo, "filename", "photo.jpg")), **kwargs)
             except Exception as e2:
