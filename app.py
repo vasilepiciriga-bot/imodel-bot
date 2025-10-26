@@ -4126,6 +4126,7 @@ async def ensure_webhook():
             await bot.set_webhook(
                 url=WEBHOOK_URL,
                 drop_pending_updates=False,
+                secret_token=WEBHOOK_SECRET if WEBHOOK_SECRET else None,
             )
             print("Webhook set OK")
             return
@@ -4224,7 +4225,10 @@ async def on_shutdown():
 
 @app.post("/")
 async def telegram_webhook(request: Request):
-    if request.query_params.get("secret") != WEBHOOK_SECRET:
+    # Accept either query secret or Telegram's Secret-Token header
+    qsec = request.query_params.get("secret")
+    hsec = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if WEBHOOK_SECRET and (qsec != WEBHOOK_SECRET) and (hsec != WEBHOOK_SECRET):
         return JSONResponse({"status": "forbidden"}, status_code=403)
     data = await request.json()
     try:
