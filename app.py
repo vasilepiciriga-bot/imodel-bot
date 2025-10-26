@@ -324,7 +324,8 @@ def _s3_get_text(key: str) -> Optional[str]:
 # Base image-to-image/identity-capable model on Replicate.
 # IMPORTANT: override via NANOBANANA_MODEL in env to a model you have access to.
 # Default to a widely available identity model to avoid 404 on invalid slug.
-NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "tencentarc/instantid")
+# Keep NanoBanana as default; override via env if needed
+NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 # Optional identity-locking model (e.g., InstantID). If set, we will try it first.
 INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
 # Prefer InstantID to improve identity retention (can be disabled via env)
@@ -403,6 +404,10 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI(title="iModel Bot")
 api = app  # alias
+
+# Dedup incoming updates to avoid duplicates when Telegram retries
+RECENT_UPDATES: Dict[int, float] = {}
+RECENT_UPDATES_TTL = 120.0
 
 USER_REFS: Dict[int, List[bytes]]  = {}   # 1–4 селфи (последние)
 USER_LAST_OUTPUT: Dict[int, bytes] = {}   # последний результат
@@ -4198,8 +4203,29 @@ async def telegram_webhook(request: Request):
                 USER_LANG[uid] = locale_to_lang(lang_code)
     except Exception:
         pass
+    # Deduplicate by update_id to mitigate Telegram retries
+    try:
+        uid = int(data.get("update_id")) if isinstance(data.get("update_id"), int) else None
+    except Exception:
+        uid = None
+    now_ts = time.time()
+    if uid is not None:
+        try:
+            # prune old
+            for k, v in list(RECENT_UPDATES.items()):
+                if now_ts - v > RECENT_UPDATES_TTL:
+                    RECENT_UPDATES.pop(k, None)
+            if uid in RECENT_UPDATES:
+                return {"ok": True, "dup": True}
+            RECENT_UPDATES[uid] = now_ts
+        except Exception:
+            pass
+    # Process update asynchronously to return HTTP 200 fast (avoid Telegram retries)
     update = Update.model_validate(data)
-    await dp.feed_update(bot, update)
+    try:
+        asyncio.create_task(dp.feed_update(bot, update))
+    except Exception as e:
+        print("schedule feed_update error:", str(e)[:160])
     return {"ok": True}
 
 @app.get("/")
