@@ -2331,9 +2331,8 @@ def generate_image_from_bytes(
             INSTANTID_DISABLED_RUNTIME = True
 
     def try_instantid(p: str, seed_val: Optional[int] = None) -> Optional[str]:
-        """Exact input structure for zsxkib/instant-id.
-        - style + face: {'image': style_ref, 'id_image': selfie, 'prompt': p, 'negative_prompt': neg, 'seed': seed, 'num_inference_steps', 'guidance_scale'}
-        - face only:    {'image': selfie,    'id_image': selfie, 'prompt': p, 'negative_prompt': neg, 'seed': seed, 'num_inference_steps', 'guidance_scale'}
+        """zsxkib/instant-id with robust param sweep.
+        Tries style+id_image (if allowed) then id_image=selfie with step/gs variants.
         """
         if DISABLE_INSTANTID or INSTANTID_DISABLED_RUNTIME or not INSTANTID_MODEL:
             return None
@@ -2347,41 +2346,48 @@ def generate_image_from_bytes(
         if (strict and style_bytes and INSTANTID_USE_STYLE_IN_COPY) or (style_url and INSTANTID_USE_STYLE_IN_COPY):
             style_sources = ([style_url] if style_url else []) + ([_file_input(style_bytes, "style.jpg")] if style_bytes else [])
 
-        # Try style + face first
+        steps_list = [28, 36, 48]
+        gs_list = [7.5, 8.0, 8.5]
+
+        # Try style + face first (copy mode with style)
         if style_sources:
             for sty in style_sources:
                 for s in selfie_sources:
-                    try:
-                        inp = dict(base)
-                        inp.update({
-                            "image": sty,
-                            "id_image": s,
-                            "num_inference_steps": 28,
-                            "guidance_scale": 7.5,
-                        })
-                        url = replicate_generate(INSTANTID_MODEL, inp)
-                        if url and str(url).startswith('http'):
-                            print("InstantID OK (style+id_image)")
-                            return url
-                    except Exception as e:
-                        _maybe_disable_instant_on_404(str(e))
+                    for st in steps_list:
+                        for gs in gs_list:
+                            try:
+                                inp = dict(base)
+                                inp.update({
+                                    "image": sty,
+                                    "id_image": s,
+                                    "num_inference_steps": st,
+                                    "guidance_scale": gs,
+                                })
+                                url = replicate_generate(INSTANTID_MODEL, inp)
+                                if url and str(url).startswith('http'):
+                                    print("InstantID OK (style+id_image)", {"steps": st, "gs": gs})
+                                    return url
+                            except Exception as e:
+                                _maybe_disable_instant_on_404(str(e))
         # Face only
         if INSTANTID_TEXT_OK:
             for s in selfie_sources:
-                try:
-                    inp = dict(base)
-                    inp.update({
-                        "image": s,
-                        "id_image": s,
-                        "num_inference_steps": 28,
-                        "guidance_scale": 7.5,
-                    })
-                    url = replicate_generate(INSTANTID_MODEL, inp)
-                    if url and str(url).startswith('http'):
-                        print("InstantID OK (id_image=selfie)")
-                        return url
-                except Exception as e:
-                    _maybe_disable_instant_on_404(str(e))
+                for st in steps_list:
+                    for gs in gs_list:
+                        try:
+                            inp = dict(base)
+                            inp.update({
+                                "image": s,
+                                "id_image": s,
+                                "num_inference_steps": st,
+                                "guidance_scale": gs,
+                            })
+                            url = replicate_generate(INSTANTID_MODEL, inp)
+                            if url and str(url).startswith('http'):
+                                print("InstantID OK (id_image=selfie)", {"steps": st, "gs": gs})
+                                return url
+                        except Exception as e:
+                            _maybe_disable_instant_on_404(str(e))
         return None
 
     def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
@@ -2612,6 +2618,7 @@ def generate_image_from_bytes(
         global ESRGAN_DISABLED
         if not ESRGAN_MODEL or ESRGAN_DISABLED:
             return nano_bytes
+        # Try x4 first
         up_url = replicate_generate(ESRGAN_MODEL, {
             "image": gen_url,
             "scale": 4,
@@ -2622,7 +2629,20 @@ def generate_image_from_bytes(
             up_bytes = _download_with_retries(up_url)
             if up_bytes:
                 if len(up_bytes) > 10 * 1024 * 1024:
-                    print("→ ESRGAN x4plus OK, but >10MB → fallback to non-upscaled")
+                    # Try x2 to stay within Telegram photo limit
+                    print("→ ESRGAN x4plus >10MB, trying x2")
+                    up2_url = replicate_generate(ESRGAN_MODEL, {
+                        "image": gen_url,
+                        "scale": 2,
+                        "face_enhance": False,
+                        "model": "RealESRGAN_x4plus"
+                    })
+                    if up2_url and up2_url.startswith("http"):
+                        up2_bytes = _download_with_retries(up2_url)
+                        if up2_bytes and len(up2_bytes) <= 10 * 1024 * 1024:
+                            print("→ ESRGAN x2 OK")
+                            return up2_bytes
+                    print("→ ESRGAN x2 failed or >10MB, return base")
                     return nano_bytes
                 print("→ ESRGAN x4plus OK")
                 return up_bytes
