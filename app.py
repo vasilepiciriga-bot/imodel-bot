@@ -321,7 +321,10 @@ def _s3_get_text(key: str) -> Optional[str]:
         return None
 
 # Replicate models
-NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
+# Base image-to-image/identity-capable model on Replicate.
+# IMPORTANT: override via NANOBANANA_MODEL in env to a model you have access to.
+# Default to a widely available identity model to avoid 404 on invalid slug.
+NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "tencentarc/instantid")
 # Optional identity-locking model (e.g., InstantID). If set, we will try it first.
 INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "tencentarc/instantid"))
 # Prefer InstantID to improve identity retention (can be disabled via env)
@@ -1262,7 +1265,7 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
     except Exception as e:
         em = str(e)
         REPLICATE_LAST_ERROR = em
-        print("replicate.predictions.create error:", em[:200])
+        print(f"replicate.predictions.create error (model={model_name}{(':'+model_version) if model_version else ''}):", em[:200])
         if "sensitive" in em.lower():
             return "SENSITIVE"
 
@@ -1275,7 +1278,7 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
     except Exception as e2:
         em2 = str(e2)
         REPLICATE_LAST_ERROR = em2
-        print("replicate.run error:", em2[:200])
+        print(f"replicate.run error (model={model_name}{(':'+model_version) if model_version else ''}):", em2[:200])
         if "sensitive" in em2.lower():
             return "SENSITIVE"
 
