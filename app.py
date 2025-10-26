@@ -336,7 +336,13 @@ def _s3_get_text(key: str) -> Optional[str]:
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
 # Optional identity-locking model (InstantID/forks). If configured, may run before NanoBanana.
 # Default to zsxkib/instant-id (community fork). Override via env if needed.
-INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL", os.getenv("IDENTITY_MODEL", "zsxkib/instant-id"))
+INSTANTID_MODEL   = os.getenv(
+    "INSTANTID_MODEL",
+    os.getenv(
+        "IDENTITY_MODEL",
+        "zsxkib/instant-id:2e4785a4d80dadf580077b2244c8d7c05d8e3faac04a04c02d8e099dd2876789",
+    ),
+)
 INSTANTID_FIRST   = os.getenv("INSTANTID_FIRST", "1") == "1"
 INSTANTID_TEXT_OK = os.getenv("INSTANTID_TEXT_OK", "1") == "1"
 # Use style image directly in InstantID during Copy Mode (strict + style_bytes present)
