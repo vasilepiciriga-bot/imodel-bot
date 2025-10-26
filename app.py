@@ -2282,13 +2282,21 @@ def generate_image_from_bytes(
                     {"guidance_scale": 7.5},
                     {"num_inference_steps": 28},
                     {"strength": 0.8},
+                    {"prompt_strength": 0.9},
                     {"prompt_strength": 0.85},
+                    {"image_strength": 0.9},
+                    {"image_strength": 0.8},
                     {"image_strength": 0.65},
+                    {"identity_strength": 0.95},
                     {"identity_strength": 0.9},
+                    {"identity_weight": 0.95},
                     {"identity_weight": 0.9},
+                    {"face_weight": 0.95},
                     {"face_weight": 0.9},
                     {"preserve_identity": True},
                     {"keep_identity": True},
+                    {"cfg_scale": 8.0},
+                    {"cfg": 8.0},
                 ]
                 for variant in face_keys_variants:
                     for cfg_extra in identity_cfgs:
@@ -2312,7 +2320,10 @@ def generate_image_from_bytes(
                     {"guidance_scale": 7.5},
                     {"num_inference_steps": 28},
                     {"strength": 0.8},
+                    {"prompt_strength": 0.9},
                     {"prompt_strength": 0.85},
+                    {"image_strength": 0.9},
+                    {"image_strength": 0.8},
                     {"image_strength": 0.5},
                     {"image_strength": 0.4},
                 ]:
@@ -2337,7 +2348,10 @@ def generate_image_from_bytes(
                     {"guidance_scale": 7.5},
                     {"num_inference_steps": 28},
                     {"strength": 0.8},
+                    {"prompt_strength": 0.9},
                     {"prompt_strength": 0.85},
+                    {"image_strength": 0.9},
+                    {"image_strength": 0.8},
                     {"image_strength": 0.5},
                     {"image_strength": 0.45},
                 ]:
