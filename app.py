@@ -66,6 +66,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
 
+# Pipeline mode: "modern" (default) or "compat220" (simplified 2.2.0-style)
+PIPELINE_MODE = os.getenv("PIPELINE_MODE", os.getenv("PIPELINE_COMPAT_MODE", "modern")).strip().lower()
+# In compat220 mode, optionally require S3 URL strictly (old behavior)
+STRICT_S3_ONLY = os.getenv("STRICT_S3_ONLY", "0") == "1"
+
 # Auto posts to group (educational, witty)
 GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "0") == "1"
 GROUP_POST_MIN_HOURS  = float(os.getenv("GROUP_POST_MIN_HOURS", "2"))
@@ -1314,6 +1319,91 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
         time.sleep(base_sleep * (i + 1))
     return None
 
+# ===================== COMPAT 2.2.0 PIPELINE =========
+def generate_image_from_bytes_compat220(
+    img_bytes: bytes,
+    user_prompt: str,
+    lang: str = "en",
+    seed: Optional[int] = None,
+    user_id: Optional[int] = None,
+) -> Optional[bytes]:
+    """Simplified v2.2.0-like flow: selfie + refined prompt → NanoBanana → (optional) ESRGAN.
+    - Minimal locks: keep NEGATIVE_LOCK only.
+    - URL sources preferred (S3 presign; optional data URL if STRICT_S3_ONLY=0).
+    - Limited param variants to avoid long loops.
+    """
+    if blocked(user_prompt):
+        return None
+    # Simple refine
+    try:
+        refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=True, body_hint=None)
+    except Exception:
+        refined = user_prompt
+    print(f"→ [compat220] Генерация: {refined[:180]}...")
+
+    # Source URL
+    src_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
+    if not src_url:
+        if STRICT_S3_ONLY:
+            print("compat220: S3 required, abort")
+            return None
+        try:
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            src_url = f"data:image/jpeg;base64,{b64}"
+            print("compat220: using data URL source")
+        except Exception:
+            print("compat220: failed to prepare source")
+            return None
+
+    inputs_common = {
+        "prompt": refined,
+        "negative_prompt": NEGATIVE_LOCK,
+    }
+    if seed is not None:
+        inputs_common["seed"] = seed
+
+    # Try image_input then image (URL only)
+    try:
+        inp = dict(inputs_common); inp["image_input"] = [src_url]
+        url = replicate_generate(NANOBANANA_MODEL, inp)
+        if url and str(url).startswith("http"):
+            out = _download_with_retries(url)
+            if out:
+                return _compat220_upscale_or_base(url, out)
+    except Exception as e:
+        print("compat220 image_input error:", str(e)[:200])
+    try:
+        inp = dict(inputs_common); inp["image"] = src_url
+        url = replicate_generate(NANOBANANA_MODEL, inp)
+        if url and str(url).startswith("http"):
+            out = _download_with_retries(url)
+            if out:
+                return _compat220_upscale_or_base(url, out)
+    except Exception as e2:
+        print("compat220 image error:", str(e2)[:200])
+    print("compat220: no url from NanoBanana")
+    return None
+
+def _compat220_upscale_or_base(src_url: str, nano_bytes: bytes) -> Optional[bytes]:
+    # Optional upscale; return base if too big
+    try:
+        up_url = replicate_generate(ESRGAN_MODEL, {
+            "image": src_url,
+            "scale": 4,
+            "face_enhance": False,
+            "model": "RealESRGAN_x4plus"
+        })
+        if up_url and up_url.startswith("http"):
+            up_bytes = _download_with_retries(up_url)
+            if up_bytes:
+                if len(up_bytes) > 10 * 1024 * 1024:
+                    print("compat220: upscaled >10MB, return base")
+                    return nano_bytes
+                return up_bytes
+    except Exception as e:
+        print("compat220 ESRGAN error:", str(e)[:160])
+    return nano_bytes
+
 # ===================== VIDEO GEN =====================
 def generate_video_from_bytes(img_bytes: bytes, prompt: Optional[str] = None) -> Optional[bytes]:
     if not REPLICATE_API_TOKEN or not VIDEO_MODEL:
@@ -2127,6 +2217,15 @@ def generate_image_from_bytes(
     lock_scene: bool = True,
     user_id: Optional[int] = None,
 ) -> Optional[bytes]:
+    # Compat 2.2.0 mode — simplified, fast path similar to v2.2.x
+    if PIPELINE_MODE in ("compat220", "legacy220"):
+        return generate_image_from_bytes_compat220(
+            img_bytes=img_bytes,
+            user_prompt=user_prompt,
+            lang=lang,
+            seed=seed,
+            user_id=user_id,
+        )
     if blocked(user_prompt):
         print("⛔ Заблокировано фильтром")
         return None
