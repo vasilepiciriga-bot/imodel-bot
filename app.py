@@ -35,6 +35,10 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, Telegra
 import replicate
 import boto3
 from botocore.config import Config
+try:
+    import stripe
+except Exception:
+    stripe = None
 
 # ---------- OpenAI (GPT + Vision) ----------
 try:
@@ -57,6 +61,26 @@ os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
+
+# Stripe (optional card payments)
+STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRICE_10       = os.getenv("STRIPE_PRICE_10", "")
+STRIPE_PRICE_30       = os.getenv("STRIPE_PRICE_30", "")
+STRIPE_PRICE_100      = os.getenv("STRIPE_PRICE_100", "")
+STRIPE_SUCCESS_URL    = os.getenv("STRIPE_SUCCESS_URL", "") or (WEBHOOK_BASE + "/thanks" if WEBHOOK_BASE else "https://example.com/thanks")
+STRIPE_CANCEL_URL     = os.getenv("STRIPE_CANCEL_URL", "") or (WEBHOOK_BASE + "/cancel" if WEBHOOK_BASE else "https://example.com/cancel")
+STRIPE_ENABLED = bool(STRIPE_SECRET_KEY and (STRIPE_PRICE_10 or STRIPE_PRICE_30 or STRIPE_PRICE_100))
+if STRIPE_ENABLED and stripe is not None:
+    try:
+        stripe.api_key = STRIPE_SECRET_KEY
+        print("Stripe enabled")
+    except Exception as e:
+        print("Stripe init error:", str(e)[:160])
+        STRIPE_ENABLED = False
+else:
+    if STRIPE_SECRET_KEY and stripe is None:
+        print("Stripe SDK not installed; Stripe disabled")
 
 # Filter toggles
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
@@ -354,6 +378,12 @@ def is_admin(uid: int, username: Optional[str] = None) -> bool:
 
 def is_free_user(uid: int, username: Optional[str] = None) -> bool:
     """Whitelist или админ (безлимит)."""
+    # Active time subscription
+    try:
+        if SUBSCR_EXPIRY.get(uid, 0.0) > time.time():
+            return True
+    except Exception:
+        pass
     if uid in FREE_USERS:
         return True
     return is_admin(uid, username)
@@ -375,6 +405,7 @@ USER_ONBOARDED: Set[int]           = set()
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
 CREDITS_FILE = os.getenv("CREDITS_FILE", os.path.join(DATA_DIR, "credits.json"))
+SUBSCR_FILE = os.getenv("SUBSCR_FILE", os.path.join(DATA_DIR, "subscriptions.json"))
 
 def _credits_save():
     try:
@@ -417,6 +448,39 @@ def ensure_user_credit(uid: int):
         _credits_save()
 
 _credits_load()
+# Subscriptions (time-based)
+SUBSCR_EXPIRY: Dict[int, float] = {}
+
+def _subs_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = SUBSCR_FILE + ".tmp"
+        payload = json.dumps({str(k): float(v) for k, v in SUBSCR_EXPIRY.items()}, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, SUBSCR_FILE)
+        _s3_put_text(STATE_PREFIX + "subscriptions.json", payload)
+    except Exception as e:
+        print("[subs] save error:", str(e)[:160])
+
+def _subs_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "subscriptions.json")
+        data = None
+        if txt:
+            data = json.loads(txt)
+        elif os.path.exists(SUBSCR_FILE):
+            with open(SUBSCR_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        for k, v in (data or {}).items():
+            try:
+                SUBSCR_EXPIRY[int(k)] = float(v)
+            except Exception:
+                continue
+    except Exception as e:
+        print("[subs] load error:", str(e)[:160])
+
+_subs_load()
 
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
@@ -532,6 +596,8 @@ T = {
         "fail": "Не удалось сгенерировать. Попробуйте изменить описание или фото.",
         "ready": "Готово ✅",
         "credits_none": "Нет кредитов. Используй /buy или /promo. Также можно пригласить друга: /refer",
+        "limit_80": "Ты уже использовал {pct}% своего лимита.",
+        "unlock": "🔒 Разблокируй безлимит за 2 € / день",
         "hint_refer_zero": "👥 У вас 0 генераций. Пригласите друга — +{ref_ref} вам и +{ref_new} ему: /refer",
         "btn_invite": "👥 Пригласить друга",
         "choose_lang": "🌐 Выберите язык интерфейса:",
@@ -594,6 +660,8 @@ T = {
         "fail": "Generation failed. Try adjusting your description or selfie.",
         "ready": "Done ✅",
         "credits_none": "No credits. Use /buy or /promo. You can also invite a friend: /refer",
+        "limit_80": "You have used {pct}% of your limit.",
+        "unlock": "🔒 Unlock unlimited for €2/day",
         "hint_refer_zero": "👥 You have 0 credits. Invite a friend — +{ref_ref} you and +{ref_new} them: /refer",
         "btn_invite": "👥 Invite a friend",
         "choose_lang": "🌐 Choose your interface language:",
@@ -656,6 +724,8 @@ T = {
         "fail": "Nu am reușit. Încearcă altă descriere sau alt selfie.",
         "ready": "Gata ✅",
         "credits_none": "Nu mai ai credite. /buy sau /promo. Poți invita un prieten: /refer",
+        "limit_80": "Ai folosit {pct}% din limită.",
+        "unlock": "🔒 Deblochează nelimitat cu 2 €/zi",
         "hint_refer_zero": "👥 Ai 0 credite. Invită un prieten — +{ref_ref} ție și +{ref_new} lui/ei: /refer",
         "btn_invite": "👥 Invită un prieten",
         "choose_lang": "🌐 Alege limba interfeței:",
@@ -719,6 +789,8 @@ T = {
         "fail": "Erzeugung fehlgeschlagen. Bitte Beschreibung oder Selfie anpassen.",
         "ready": "Fertig ✅",
         "credits_none": "Keine Credits. Nutze /buy oder /promo. Du kannst auch einen Freund einladen: /refer",
+        "limit_80": "Du hast {pct}% deines Limits verbraucht.",
+        "unlock": "🔒 Unbegrenzt freischalten für 2 €/Tag",
         "hint_refer_zero": "👥 Du hast 0 Credits. Lade einen Freund ein — +{ref_ref} dir und +{ref_new} ihm/ihr: /refer",
         "btn_invite": "👥 Freund einladen",
         "choose_lang": "🌐 Sprache für die Oberfläche wählen:",
@@ -1394,6 +1466,34 @@ async def nudge_loop():
     while True:
         try:
             if NUDGE_ENABLED and STATS_USERS_INFO:
+                # Pass 1: 12h inactivity nudges (one per inactivity episode)
+                try:
+                    now_ts = time.time()
+                    uids = list(STATS_USERS_INFO.keys())
+                    random.shuffle(uids)
+                    sent_total = 0
+                    for uid in uids:
+                        if sent_total >= NUDGE_BATCH_LIMIT:
+                            break
+                        ui = STATS_USERS_INFO.get(uid) or {}
+                        last_seen = float(ui.get("last_seen", 0.0))
+                        last_sent = float(ui.get("inactive12_sent_at", 0.0))
+                        if last_seen <= 0:
+                            continue
+                        # Send once after 12h since last activity, and only once per inactivity episode
+                        if (now_ts - last_seen) >= 12 * 3600 and (last_sent < last_seen):
+                            lang = USER_LANG.get(uid, LANG_DEFAULT)
+                            if not _nudge_allowed_now(lang):
+                                continue
+                            if await safe_send_text(uid, _msg_inactive12(lang)):
+                                ui["inactive12_sent_at"] = now_ts
+                                users_save()
+                                stats_incr("nudges_sent", 1)
+                                sent_total += 1
+                except Exception as e:
+                    print("inactive12 nudge error:", str(e)[:200])
+
+                # Pass 2: generic offer nudges per existing logic
                 eligible = [uid for uid in list(STATS_USERS_INFO.keys()) if _nudge_eligible(uid)]
                 random.shuffle(eligible)
                 for uid in eligible[:NUDGE_BATCH_LIMIT]:
@@ -1655,7 +1755,18 @@ def kb_help(chat_id: int) -> InlineKeyboardMarkup:
 
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
+    # Add direct subscription CTA row
+    lng = USER_LANG.get(chat_id, LANG_DEFAULT)
+    if lng.startswith("ru"):
+        sub_txt = "🔒 Безлимит — от 2 € / день"
+    elif lng.startswith("ro"):
+        sub_txt = "🔒 Nelimitat — de la 2 €/zi"
+    elif lng.startswith("de"):
+        sub_txt = "🔒 Unbegrenzt — ab 2 €/Tag"
+    else:
+        sub_txt = "🔒 Unlimited — from €2/day"
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=sub_txt, callback_data="buy_sub_week")],
         [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
         [InlineKeyboardButton(text="⭐ " + lang.get("btn_buy", "Buy"), callback_data="buy_open")],
     ])
@@ -1688,6 +1799,71 @@ def has_credit(chat_id: int, username: Optional[str] = None) -> bool:
         return True
     return USER_CREDITS.get(chat_id, FREE_QUOTA) > 0
 
+def maybe_send_limit_progress(uid: int):
+    try:
+        # Only for non-subscribed/non-admin users
+        if is_free_user(uid, None):
+            return
+        total = max(1, int(FREE_QUOTA))
+        rem = int(USER_CREDITS.get(uid, FREE_QUOTA))
+        used = max(0, total - rem)
+        pct = int(used * 100 / total)
+        info = STATS_USERS_INFO.setdefault(uid, {})
+        if 80 <= pct < 100 and info.get("limit_warn_pct") != 80:
+            info["limit_warn_pct"] = 80
+            users_save()
+            msg = {
+                "ru": L(uid)["limit_80"].format(pct=pct) + "\n" + L(uid)["unlock"],
+                "en": L(uid)["limit_80"].format(pct=pct) + "\n" + L(uid)["unlock"],
+                "ro": L(uid)["limit_80"].format(pct=pct) + "\n" + L(uid)["unlock"],
+                "de": L(uid)["limit_80"].format(pct=pct) + "\n" + L(uid)["unlock"],
+            }.get(USER_LANG.get(uid, LANG_DEFAULT), L(uid)["limit_80"].format(pct=pct))
+            asyncio.create_task(safe_send_text(uid, msg))
+    except Exception:
+        pass
+
+# ===================== AUTO-MESSAGES ==================
+def _msg_after3(lang: str) -> str:
+    if lang.startswith("ru"):
+        return "Как тебе результат? 🌟 Разблокируй HD-режим!"
+    if lang.startswith("ro"):
+        return "Îți place rezultatul? 🌟 Deblochează modul HD!"
+    if lang.startswith("de"):
+        return "Wie gefällt dir das Ergebnis? 🌟 Schalte den HD‑Modus frei!"
+    return "How do you like the results? 🌟 Unlock HD mode!"
+
+def _msg_inactive12(lang: str) -> str:
+    if lang.startswith("ru"):
+        return "Твои фото ждут апгрейда!"
+    if lang.startswith("ro"):
+        return "Fotografiile tale așteaptă un upgrade!"
+    if lang.startswith("de"):
+        return "Deine Fotos warten auf ein Upgrade!"
+    return "Your photos are waiting for an upgrade!"
+
+def _msg_first_purchase(lang: str) -> str:
+    if lang.startswith("ru"):
+        return "🔥 Теперь ты в топ-100 моделей iModel!"
+    if lang.startswith("ro"):
+        return "🔥 Acum ești în top‑100 modele iModel!"
+    if lang.startswith("de"):
+        return "🔥 Du bist jetzt in den Top‑100 iModel‑Models!"
+    return "🔥 You’re now in the top‑100 iModel models!"
+
+async def maybe_trigger_after3(uid: int):
+    try:
+        info = STATS_USERS_INFO.get(uid)
+        if not info:
+            return
+        total = int(info.get("gens_ok", 0)) + int(info.get("gens_copy_ok", 0))
+        if total == 3 and not info.get("milestone3_sent"):
+            lang = USER_LANG.get(uid, LANG_DEFAULT)
+            await safe_send_text(uid, _msg_after3(lang))
+            info["milestone3_sent"] = 1
+            users_save()
+    except Exception:
+        pass
+
 async def send_stars_invoice(chat_id: int, title: str, desc: str, payload: str, amount_stars: int):
     prices = [LabeledPrice(label=title, amount=amount_stars)]
     await bot.send_invoice(
@@ -1703,12 +1879,42 @@ async def send_stars_invoice(chat_id: int, title: str, desc: str, payload: str, 
 @dp.message(Command("buy"))
 async def cmd_buy(m: Message):
     lang = L(m.chat.id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    # Localize subscription buttons
+    lng = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+    if lng.startswith("ru"):
+        btn_week = "🔥 1 неделя — 900★"
+        btn_day = "1 день — 200★"
+        btn_month = "1 месяц — 2400★"
+    elif lng.startswith("ro"):
+        btn_week = "🔥 1 săptămână — 900★"
+        btn_day = "1 zi — 200★"
+        btn_month = "1 lună — 2400★"
+    elif lng.startswith("de"):
+        btn_week = "🔥 1 Woche — 900★"
+        btn_day = "1 Tag — 200★"
+        btn_month = "1 Monat — 2400★"
+    else:
+        btn_week = "🔥 1 week — 900★"
+        btn_day = "1 day — 200★"
+        btn_month = "1 month — 2400★"
+
+    rows = [
         [InlineKeyboardButton(text=lang["buy_btn_10"],  callback_data="buy_stars_10")],
         [InlineKeyboardButton(text=lang["buy_btn_30"],  callback_data="buy_stars_30")],
         [InlineKeyboardButton(text=lang["buy_btn_100"], callback_data="buy_stars_100")],
+    ]
+    if STRIPE_ENABLED:
+        rows += [
+            [InlineKeyboardButton(text="💳 Card (Stripe) — 10",  callback_data="buy_stripe_10")],
+            [InlineKeyboardButton(text="💳 Card (Stripe) — 30",  callback_data="buy_stripe_30")],
+            [InlineKeyboardButton(text="💳 Card (Stripe) — 100", callback_data="buy_stripe_100")],
+        ]
+    rows += [
+        [InlineKeyboardButton(text=btn_week, callback_data="buy_sub_week")],
+        [InlineKeyboardButton(text=btn_day, callback_data="buy_sub_day"), InlineKeyboardButton(text=btn_month, callback_data="buy_sub_month")],
         [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
-    ])
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await safe_answer(m, lang["buy_title"], reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("buy_stars_"))
@@ -1724,6 +1930,66 @@ async def cb_buy_stars(c: CallbackQuery):
         await send_stars_invoice(c.message.chat.id, "iModel — 100 генераций", "Пакет 100 генераций", "pack_100", 1200)
     await safe_cb_answer(c, txt)
 
+def _stripe_price_for_pack(pack: str) -> Optional[str]:
+    if pack == "10":
+        return STRIPE_PRICE_10
+    if pack == "30":
+        return STRIPE_PRICE_30
+    if pack == "100":
+        return STRIPE_PRICE_100
+    return None
+
+def _stripe_pack_add(pack: str) -> int:
+    return {"10": 10, "30": 30, "100": 100}.get(pack, 0)
+
+async def _send_buy_link_stripe(chat_id: int, url: str):
+    try:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💳 Pay securely (Stripe)", url=url)]])
+        txt = {
+            "ru": "Оплата картой — безопасная ссылка Stripe",
+            "en": "Card payment — secure Stripe link",
+            "ro": "Plata cu cardul — link Stripe securizat",
+            "de": "Kartenzahlung — sicherer Stripe‑Link",
+        }.get(USER_LANG.get(chat_id, LANG_DEFAULT), "Secure Stripe checkout link")
+        await safe_send_text(chat_id, txt, reply_markup=kb)
+    except Exception:
+        pass
+
+@dp.callback_query(F.data.startswith("buy_stripe_"))
+async def cb_buy_stripe(c: CallbackQuery):
+    pack = c.data.split("_")[-1]
+    await safe_cb_answer(c)
+    if not STRIPE_ENABLED or stripe is None:
+        return await c.message.answer("Stripe is not available.")
+    price_id = _stripe_price_for_pack(pack)
+    if not price_id:
+        return await c.message.answer("Pack not available.")
+    try:
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[{"price": price_id, "quantity": 1}],
+            success_url=STRIPE_SUCCESS_URL,
+            cancel_url=STRIPE_CANCEL_URL,
+            client_reference_id=str(c.message.chat.id),
+            metadata={"uid": str(c.message.chat.id), "pack": str(pack)},
+        )
+        await _send_buy_link_stripe(c.message.chat.id, session.url)
+    except Exception as e:
+        await c.message.answer(f"Stripe error: {str(e)[:120]}")
+
+@dp.callback_query(F.data.startswith("buy_sub_"))
+async def cb_buy_sub(c: CallbackQuery):
+    kind = c.data.split("buy_sub_")[-1]
+    uid = c.message.chat.id
+    # Prices in Stars
+    if kind == "week":
+        await send_stars_invoice(uid, "iModel — Подписка на 1 неделю", "Неограниченная генерация 7 дней", "sub_week", 900)
+    elif kind == "day":
+        await send_stars_invoice(uid, "iModel — Подписка на 1 день", "Неограниченная генерация 24 часа", "sub_day", 200)
+    elif kind == "month":
+        await send_stars_invoice(uid, "iModel — Подписка на 1 месяц", "Неограниченная генерация 30 дней", "sub_month", 2400)
+    await safe_cb_answer(c)
+
 @dp.pre_checkout_query()
 async def process_pre_checkout_q(pcq: PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pcq.id, ok=True)
@@ -1735,13 +2001,49 @@ async def got_payment(m: Message):
     if payload == "pack_10": add = 10
     elif payload == "pack_30": add = 30
     elif payload == "pack_100": add = 100
+    # Time subscriptions
+    now = time.time()
+    period = 0
+    if payload == "sub_day":
+        period = 24 * 3600
+    elif payload == "sub_week":
+        period = 7 * 24 * 3600
+    elif payload == "sub_month":
+        period = 30 * 24 * 3600
     # ensure user is recorded with username for admin visibility
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
-    USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
-    _credits_save()
-    await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
+    if period > 0:
+        cur = float(SUBSCR_EXPIRY.get(m.chat.id, 0.0))
+        start_from = cur if cur > now else now
+        SUBSCR_EXPIRY[m.chat.id] = start_from + period
+        _subs_save()
+        # Localized confirmation
+        exp = int(SUBSCR_EXPIRY[m.chat.id])
+        exp_dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(exp))
+        txt = {
+            "ru": f"Подписка активирована до {exp_dt} (UTC). Приятной генерации!",
+            "en": f"Subscription active until {exp_dt} (UTC). Enjoy!",
+            "ro": f"Abonament activ până la {exp_dt} (UTC). Spor!",
+            "de": f"Abo aktiv bis {exp_dt} (UTC). Viel Spaß!",
+        }.get(USER_LANG.get(m.chat.id, LANG_DEFAULT), f"Subscription active until {exp_dt} (UTC).")
+        await safe_answer(m, txt)
+    else:
+        USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
+        _credits_save()
+        await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
+    # Detect if this is the first purchase for this user
+    try:
+        prior_pay = int(STATS_USERS_INFO.get(m.chat.id, {}).get("payments", 0))
+    except Exception:
+        prior_pay = 0
     stats_incr("payments", 1)
     _uadd(m.chat.id, "payments", 1)
+    if prior_pay == 0:
+        try:
+            lang = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+            await safe_send_text(m.chat.id, _msg_first_purchase(lang))
+        except Exception:
+            pass
 
 # ===================== COMMANDS =======================
 @dp.message(Command("version"))
@@ -1809,6 +2111,29 @@ async def cmd_start(m: Message):
                 stats_incr("referrals", 1)
                 stats_incr("ref_bonus_ref", REF_BONUS_REF)
                 stats_incr("ref_bonus_invited", REF_BONUS_NEW)
+                # Bonus: every 5 invited → +1 day Premium (time subscription)
+                try:
+                    cnt = int(REF_STATS[ref_id]["count"])
+                    if cnt % 5 == 0:
+                        now_ts = time.time()
+                        cur_exp = float(SUBSCR_EXPIRY.get(ref_id, 0.0))
+                        start_from = cur_exp if cur_exp > now_ts else now_ts
+                        SUBSCR_EXPIRY[ref_id] = start_from + 24*3600
+                        _subs_save()
+                        # Notify referrer
+                        exp_dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(int(SUBSCR_EXPIRY[ref_id])))
+                        note = {
+                            "ru": f"🎉 5 приглашённых! +1 день Premium активирован до {exp_dt} (UTC)",
+                            "en": f"🎉 5 invited! +1 day Premium activated until {exp_dt} (UTC)",
+                            "ro": f"🎉 5 invitați! +1 zi Premium activă până la {exp_dt} (UTC)",
+                            "de": f"🎉 5 Einladungen! +1 Tag Premium aktiv bis {exp_dt} (UTC)",
+                        }.get(USER_LANG.get(ref_id, LANG_DEFAULT), f"+1 day Premium active until {exp_dt} (UTC)")
+                        try:
+                            await safe_send_text(ref_id, note)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1902,6 +2227,19 @@ async def cmd_balance(m: Message):
     free = L(m.chat.id)["balance_free"] if is_free_user(m.chat.id, getattr(m.from_user, "username", None)) else ""
     n = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
     await safe_answer(m, L(m.chat.id)["balance"].format(n=n, free=free))
+    try:
+        exp = SUBSCR_EXPIRY.get(m.chat.id)
+        if exp and exp > time.time():
+            exp_dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(int(exp)))
+            note = {
+                "ru": f"Активная подписка до {exp_dt} (UTC)",
+                "en": f"Active subscription until {exp_dt} (UTC)",
+                "ro": f"Abonament activ până la {exp_dt} (UTC)",
+                "de": f"Abo aktiv bis {exp_dt} (UTC)",
+            }.get(USER_LANG.get(m.chat.id, LANG_DEFAULT), f"Active subscription until {exp_dt} (UTC)")
+            await safe_answer(m, note)
+    except Exception:
+        pass
     if n <= 0 and not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
         lang = L(m.chat.id)
         hint = lang.get("hint_refer_zero", "Invite a friend: /refer").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
@@ -1960,13 +2298,47 @@ async def cmd_refer(m: Message):
     my_id = m.chat.id
     link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{my_id}"
     st = REF_STATS.get(my_id, {"count": 0, "earned": 0})
-    await safe_answer(
-        m,
-        "👥 Пригласи друзей и получай бонусные генерации!\n"
-        f"Твоя ссылка: {link}\n\n"
-        f"Приглашено: {st['count']}\n"
-        f"Получено бонусов: {st['earned']} генераций"
+    # Progress to next Premium day
+    nxt = 5 - (int(st.get("count", 0)) % 5 or 5)
+    try:
+        lng = USER_LANG.get(my_id, LANG_DEFAULT)
+        if lng.startswith("ru"):
+            title = "👥 Пригласи друга — получи +3 генерации\n5 приглашённых = 1 день Premium"
+            copied = "📋 Скопировать"
+            openb = "🔗 Открыть"
+            prog = f"До следующего Premium дня: ещё {nxt}"
+        elif lng.startswith("ro"):
+            title = "👥 Invită un prieten — primești +3 generări\n5 invitați = 1 zi Premium"
+            copied = "📋 Copiază"
+            openb = "🔗 Deschide"
+            prog = f"Până la următoarea zi Premium: încă {nxt}"
+        elif lng.startswith("de"):
+            title = "👥 Lade einen Freund ein — +3 Generationen\n5 Einladungen = 1 Tag Premium"
+            copied = "📋 Kopieren"
+            openb = "🔗 Öffnen"
+            prog = f"Bis zum nächsten Premium‑Tag: noch {nxt}"
+        else:
+            title = "👥 Invite a friend — get +3 generations\n5 invited = 1 day Premium"
+            copied = "📋 Copy"
+            openb = "🔗 Open"
+            prog = f"To next Premium day: {nxt} more"
+    except Exception:
+        title = "Invite friends and earn rewards"
+        copied = "Copy"
+        openb = "Open"
+        prog = ""
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=openb, url=link)],
+        [InlineKeyboardButton(text=copied, callback_data=f"ref_copy_{my_id}")],
+    ])
+    text = (
+        f"{title}\n\n"
+        f"🔗 {link}\n"
+        f"👥 Invited: {int(st.get('count',0))} · 🎁 Earned: {int(st.get('earned',0))}\n"
+        f"{prog}"
     )
+    await safe_answer(m, text, reply_markup=kb)
 
 # ======= INLINE callbacks =======
 @dp.callback_query(F.data == "help_open")
@@ -1999,6 +2371,18 @@ async def cb_refer_open(c: CallbackQuery):
     await safe_cb_answer(c)
     await cmd_refer(c.message)
 
+@dp.callback_query(F.data.startswith("ref_copy_"))
+async def cb_ref_copy(c: CallbackQuery):
+    try:
+        uid = c.message.chat.id
+        if not BOT_USERNAME_GLOBAL:
+            return await safe_cb_answer(c)
+        link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{uid}"
+        await safe_cb_answer(c, "Ссылка скопирована в сообщение")
+        await c.message.answer(link)
+    except Exception:
+        pass
+
 @dp.callback_query(F.data.startswith("preset_"))
 async def cb_preset_pick(c: CallbackQuery):
     await safe_cb_answer(c)
@@ -2025,7 +2409,7 @@ async def cb_preset_pick(c: CallbackQuery):
         return
     # Have a reference → generate now
     if not has_credit(chat_id, getattr(c.from_user, "username", None)):
-        return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
+        return await c.message.answer(L(chat_id)["unlock"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
     seed_int = ((hash(chat_id) % 10_000_000) + idx)
@@ -2040,11 +2424,13 @@ async def cb_preset_pick(c: CallbackQuery):
     if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
         USER_CREDITS[chat_id] -= 1
         _credits_save()
+        maybe_send_limit_progress(chat_id)
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = preset.prompt
     LAST_PHOTO[chat_id] = result
     stats_incr("gens_ok", 1)
     _uadd(chat_id, "gens_ok", 1)
+    await maybe_trigger_after3(chat_id)
     hist = USER_HISTORY.setdefault(chat_id, [])
     hist.append(result)
     if len(hist) > GALLERY_LIMIT:
@@ -2230,7 +2616,7 @@ async def on_photo(m: Message):
 
             ensure_user_credit(m.chat.id)
             if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-                return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+                return await safe_answer(m, L(m.chat.id)["unlock"], reply_markup=kb_invite_buy(m.chat.id))
 
             wait = await safe_answer(m, L(m.chat.id)["gen"])
             seed = (hashlib.md5(style_bytes).hexdigest())
@@ -2267,11 +2653,13 @@ async def on_photo(m: Message):
             if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
                 USER_CREDITS[m.chat.id] -= 1
                 _credits_save()
+                maybe_send_limit_progress(m.chat.id)
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
             LAST_PHOTO[m.chat.id] = final_bytes
             stats_incr("gens_copy_ok", 1)
             _uadd(m.chat.id, "gens_copy_ok", 1)
+            await maybe_trigger_after3(m.chat.id)
 
             # история
             hist = USER_HISTORY.setdefault(m.chat.id, [])
@@ -2313,7 +2701,7 @@ async def on_photo(m: Message):
             if 0 <= idx < len(PRESETS):
                 preset = PRESETS[idx]
                 if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-                    return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+                    return await safe_answer(m, L(m.chat.id)["unlock"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
                 seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
                 final_bytes = generate_image_from_bytes(
@@ -2328,11 +2716,13 @@ async def on_photo(m: Message):
                 if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
                     USER_CREDITS[m.chat.id] -= 1
                     _credits_save()
+                    maybe_send_limit_progress(m.chat.id)
                 USER_LAST_OUTPUT[m.chat.id] = final_bytes
                 USER_LAST_PROMPT[m.chat.id] = preset.prompt
                 LAST_PHOTO[m.chat.id] = final_bytes
                 stats_incr("gens_ok", 1)
                 _uadd(m.chat.id, "gens_ok", 1)
+                await maybe_trigger_after3(m.chat.id)
                 hist = USER_HISTORY.setdefault(m.chat.id, [])
                 hist.append(final_bytes)
                 if len(hist) > GALLERY_LIMIT:
@@ -2362,7 +2752,7 @@ async def on_photo(m: Message):
 
     ensure_user_credit(m.chat.id)
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-        return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+        return await safe_answer(m, L(m.chat.id)["unlock"], reply_markup=kb_invite_buy(m.chat.id))
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     seed_int = (hash(m.chat.id) % 10_000_000)
@@ -2379,11 +2769,13 @@ async def on_photo(m: Message):
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
         USER_CREDITS[m.chat.id] -= 1
         _credits_save()
+        maybe_send_limit_progress(m.chat.id)
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
     LAST_PHOTO[m.chat.id] = final_bytes
     stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
+    await maybe_trigger_after3(m.chat.id)
 
     hist = USER_HISTORY.setdefault(m.chat.id, [])
     hist.append(final_bytes)
@@ -2435,7 +2827,7 @@ async def on_prompt(m: Message):
 
     ensure_user_credit(m.chat.id)
     if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
-        return await safe_answer(m, L(m.chat.id)["credits_none"])
+        return await safe_answer(m, L(m.chat.id)["unlock"], reply_markup=kb_invite_buy(m.chat.id))
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     ref = refs[-1]
@@ -2491,7 +2883,7 @@ async def cb_more(c: CallbackQuery):
     ensure_user_credit(chat_id)
     if not has_credit(chat_id, getattr(c.from_user, "username", None)):
         await safe_cb_answer(c)
-        return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
+        return await c.message.answer(L(chat_id)["unlock"], reply_markup=kb_invite_buy(chat_id))
 
     await safe_cb_answer(c)
     msg = await c.message.answer(L(chat_id)["gen"])
@@ -2515,6 +2907,7 @@ async def cb_more(c: CallbackQuery):
     LAST_PHOTO[chat_id] = result
     STATS["gens_ok"] += 1
     _uadd(chat_id, "gens_ok", 1)
+    await maybe_trigger_after3(chat_id)
 
     hist = USER_HISTORY.setdefault(chat_id, [])
     hist.append(result)
@@ -2660,6 +3053,14 @@ async def root_health():
 async def healthz():
     return {"status": "ok"}
 
+@app.get("/thanks")
+async def thanks():
+    return HTMLResponse("<html><body><h3>✅ Payment successful</h3><p>You can return to Telegram now.</p></body></html>")
+
+@app.get("/cancel")
+async def cancel():
+    return HTMLResponse("<html><body><h3>Payment canceled</h3><p>You can try again from the bot.</p></body></html>")
+
 @app.get("/metrics")
 async def http_metrics(request: Request):
     if METRICS_SECRET and request.query_params.get("secret") != METRICS_SECRET:
@@ -2669,6 +3070,42 @@ async def http_metrics(request: Request):
     resp["users"] = len(STATS_USERS_INFO)
     resp["uptime_sec"] = int(time.time() - STATS["start_ts"]) if STATS.get("start_ts") else 0
     return resp
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    if not STRIPE_ENABLED or stripe is None or not STRIPE_WEBHOOK_SECRET:
+        return JSONResponse({"status": "disabled"}, status_code=200)
+    try:
+        payload = await request.body()
+        sig = request.headers.get("Stripe-Signature")
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        return JSONResponse({"status": "bad signature", "error": str(e)[:160]}, status_code=400)
+
+    try:
+        et = event.get("type")
+        data = event.get("data", {}).get("object", {})
+        if et == "checkout.session.completed":
+            paid = str(data.get("payment_status", "")).lower() == "paid"
+            meta = data.get("metadata", {}) or {}
+            uid = int(meta.get("uid") or (data.get("client_reference_id") or 0))
+            pack = str(meta.get("pack") or "")
+            add = _stripe_pack_add(pack)
+            if paid and uid and add > 0:
+                ensure_user_credit(uid)
+                USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
+                _credits_save()
+                stats_incr("payments", 1)
+                _uadd(uid, "payments", 1)
+                # Notify user
+                try:
+                    lang = L(uid)
+                    await safe_send_text(uid, lang["bought"].format(add=add, all=USER_CREDITS.get(uid, 0)))
+                except Exception:
+                    pass
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"status": "error", "error": str(e)[:160]}, status_code=500)
 
 @app.get("/admin")
 async def admin_panel(request: Request):

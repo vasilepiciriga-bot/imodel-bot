@@ -5,3 +5,4 @@ requests
 replicate
 boto3
 openai
+stripe
