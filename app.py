@@ -866,6 +866,67 @@ async def safe_send_text(chat_id: int, text: str, **kwargs):
         print(f"[safe_send_text] bad request: {e}")
     return None
 
+# ===================== PROMO: +2 TO ALL ===============
+def _promo_two_msg(lang: str) -> str:
+    lang = (lang or LANG_DEFAULT).lower()
+    if lang.startswith("ru"):
+        return (
+            "Сегодня только: +2 бесплатные генерации в iModel. Обнови аватарку, примерь стиль, сделай кадр уровня журнала.\n"
+            "Бонус уже начислен на ваш баланс. Отправьте селфи — и получите результат за секунды.\n"
+            "/presets для идей • /copy чтобы скопировать стиль • /start"
+        )
+    if lang.startswith("ro"):
+        return (
+            "Doar azi: +2 generări gratuite în iModel. Reîmprospătează avatarul, încearcă un stil nou, rezultate de nivel revistă.\n"
+            "Bonusul a fost adăugat. Trimite un selfie — primești rezultatul în secunde.\n"
+            "/presets pentru idei • /copy pentru a copia stilul • /start"
+        )
+    if lang.startswith("de"):
+        return (
+            "Nur heute: +2 kostenlose Generierungen in iModel. Neues Profilbild, neuer Stil, Magazin‑Look.\n"
+            "Bonus ist bereits gutgeschrieben. Schicke ein Selfie — Ergebnis in Sekunden.\n"
+            "/presets für Ideen • /copy um Stil zu kopieren • /start"
+        )
+    # default EN
+    return (
+        "Today only: +2 free generations in iModel. Refresh your avatar, try a new style, get magazine‑level results.\n"
+        "Bonus already added to your balance. Send a selfie — get results in seconds.\n"
+        "/presets for ideas • /copy to copy a style • /start"
+    )
+
+@dp.message(Command("grant2all"))
+async def cmd_grant2all(m: Message):
+    # Admin‑only safety
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    # Grant +2 to all known users and send localized message
+    uids = list(STATS_USERS_INFO.keys())
+    if not uids:
+        return await safe_answer(m, "Нет сохранённых пользователей для рассылки.")
+    added = 0
+    sent = 0
+    for uid in uids:
+        try:
+            USER_CREDITS[uid] = USER_CREDITS.get(uid, FREE_QUOTA) + 2
+            added += 1
+        except Exception:
+            continue
+    try:
+        _credits_save()
+    except Exception:
+        pass
+    # Send messages in user language (if known)
+    for uid in uids:
+        try:
+            lang = USER_LANG.get(uid, LANG_DEFAULT)
+            text = _promo_two_msg(lang)
+            r = await safe_send_text(uid, text)
+            if r:
+                sent += 1
+        except Exception:
+            continue
+    await safe_answer(m, f"✅ Начислено +2 всем ({added}). Сообщение отправлено: {sent}.")
+
 # One-per-day referral hint
 async def maybe_send_referral_hint(uid: int):
     try:
