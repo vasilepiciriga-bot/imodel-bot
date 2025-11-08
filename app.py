@@ -1766,7 +1766,7 @@ def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     else:
         sub_txt = "🔒 Unlimited — from €2/day"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=sub_txt, callback_data="buy_sub_week")],
+        [InlineKeyboardButton(text=sub_txt, callback_data="buy_sub_3d")],
         [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
         [InlineKeyboardButton(text="⭐ " + lang.get("btn_buy", "Buy"), callback_data="buy_open")],
     ])
@@ -1882,20 +1882,16 @@ async def cmd_buy(m: Message):
     # Localize subscription buttons
     lng = USER_LANG.get(m.chat.id, LANG_DEFAULT)
     if lng.startswith("ru"):
-        btn_week = "🔥 1 неделя — 900★"
-        btn_day = "1 день — 200★"
+        btn_3d = "🔥 3 дня — 900★"
         btn_month = "1 месяц — 2400★"
     elif lng.startswith("ro"):
-        btn_week = "🔥 1 săptămână — 900★"
-        btn_day = "1 zi — 200★"
+        btn_3d = "🔥 3 zile — 900★"
         btn_month = "1 lună — 2400★"
     elif lng.startswith("de"):
-        btn_week = "🔥 1 Woche — 900★"
-        btn_day = "1 Tag — 200★"
+        btn_3d = "🔥 3 Tage — 900★"
         btn_month = "1 Monat — 2400★"
     else:
-        btn_week = "🔥 1 week — 900★"
-        btn_day = "1 day — 200★"
+        btn_3d = "🔥 3 days — 900★"
         btn_month = "1 month — 2400★"
 
     rows = [
@@ -1910,8 +1906,8 @@ async def cmd_buy(m: Message):
             [InlineKeyboardButton(text="💳 Card (Stripe) — 100", callback_data="buy_stripe_100")],
         ]
     rows += [
-        [InlineKeyboardButton(text=btn_week, callback_data="buy_sub_week")],
-        [InlineKeyboardButton(text=btn_day, callback_data="buy_sub_day"), InlineKeyboardButton(text=btn_month, callback_data="buy_sub_month")],
+        [InlineKeyboardButton(text=btn_3d, callback_data="buy_sub_3d")],
+        [InlineKeyboardButton(text=btn_month, callback_data="buy_sub_month")],
         [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1982,10 +1978,8 @@ async def cb_buy_sub(c: CallbackQuery):
     kind = c.data.split("buy_sub_")[-1]
     uid = c.message.chat.id
     # Prices in Stars
-    if kind == "week":
-        await send_stars_invoice(uid, "iModel — Подписка на 1 неделю", "Неограниченная генерация 7 дней", "sub_week", 900)
-    elif kind == "day":
-        await send_stars_invoice(uid, "iModel — Подписка на 1 день", "Неограниченная генерация 24 часа", "sub_day", 200)
+    if kind == "3d":
+        await send_stars_invoice(uid, "iModel — Подписка на 3 дня", "Неограниченная генерация 72 часа", "sub_3d", 900)
     elif kind == "month":
         await send_stars_invoice(uid, "iModel — Подписка на 1 месяц", "Неограниченная генерация 30 дней", "sub_month", 2400)
     await safe_cb_answer(c)
@@ -2004,10 +1998,8 @@ async def got_payment(m: Message):
     # Time subscriptions
     now = time.time()
     period = 0
-    if payload == "sub_day":
-        period = 24 * 3600
-    elif payload == "sub_week":
-        period = 7 * 24 * 3600
+    if payload == "sub_3d":
+        period = 3 * 24 * 3600
     elif payload == "sub_month":
         period = 30 * 24 * 3600
     # ensure user is recorded with username for admin visibility
