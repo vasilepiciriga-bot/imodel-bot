@@ -2051,7 +2051,70 @@ async def cmd_pricing(m: Message):
     if n <= 0 and not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
         lang = L(m.chat.id)
         hint = lang.get("hint_refer_zero", "Invite a friend: /refer").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
-        await safe_answer(m, hint, reply_markup=kb_invite_buy(m.chat.id))
+    await safe_answer(m, hint, reply_markup=kb_invite_buy(m.chat.id))
+
+@dp.message(Command("audit"))
+async def cmd_audit(m: Message):
+    # Admin-only
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) < 2:
+        return await safe_answer(m, "Usage: /audit <@username|user_id> [more...]")
+
+    def find_by_username(handle: str) -> list[int]:
+        uname = handle.lstrip("@").lower()
+        out = []
+        for uid, info in STATS_USERS_INFO.items():
+            try:
+                u = (info.get("username") or "").lower()
+                if u == uname:
+                    out.append(int(uid))
+            except Exception:
+                pass
+        return out
+
+    lines = []
+    now = time.time()
+    for token in parts[1:]:
+        uids: list[int] = []
+        try:
+            if token.startswith("@") or not token.isdigit():
+                uids = find_by_username(token)
+            else:
+                uids = [int(token)] if int(token) in STATS_USERS_INFO else []
+        except Exception:
+            uids = []
+        if not uids:
+            lines.append(f"{token}: not found")
+            continue
+        for uid in uids:
+            info = STATS_USERS_INFO.get(uid, {})
+            gens = int(info.get("gens_ok", 0)) + int(info.get("gens_copy_ok", 0))
+            pays = int(info.get("payments", 0))
+            uname = info.get("username") or ""
+            active_sub = float(SUBSCR_EXPIRY.get(uid, 0.0))
+            sub_note = (f"active until {time.strftime('%Y-%m-%d %H:%M', time.gmtime(int(active_sub)))} (UTC)" if active_sub > now else "-")
+            free_flags = []
+            if is_admin(uid, uname):
+                free_flags.append("admin")
+            if uid in FREE_USERS:
+                free_flags.append("whitelist")
+            if active_sub > now:
+                free_flags.append("subscription")
+            free_str = ", ".join(free_flags) if free_flags else "no"
+            bal = ("∞" if is_free_user(uid, uname) else USER_CREDITS.get(uid, FREE_QUOTA))
+            ref = REF_STATS.get(uid, {"count": 0, "earned": 0})
+            invited = int(ref.get("count", 0))
+            earned = int(ref.get("earned", 0))
+            last_seen = info.get("last_seen")
+            last_note = time.strftime('%Y-%m-%d %H:%M', time.gmtime(int(last_seen))) if last_seen else "-"
+            lines.append(
+                f"uid={uid} @" + uname +
+                f" | gens={gens} pays={pays} bal={bal}\n"
+                f"   free={free_str} | sub={sub_note} | invited={invited} (+{earned}) | last={last_note}"
+            )
+    await safe_answer(m, "\n".join(lines))
 
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
