@@ -451,6 +451,38 @@ _credits_load()
 # Subscriptions (time-based)
 SUBSCR_EXPIRY: Dict[int, float] = {}
 
+# Referral persistence
+REFS_FILE = os.path.join(DATA_DIR, "refstats.json")
+
+def _refs_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = REFS_FILE + ".tmp"
+        payload = json.dumps({str(k): {"count": int(v.get("count",0)), "earned": int(v.get("earned",0))} for k, v in REF_STATS.items()}, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, REFS_FILE)
+        _s3_put_text(STATE_PREFIX + "refstats.json", payload)
+    except Exception as e:
+        print("[refs] save error:", str(e)[:160])
+
+def _refs_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "refstats.json")
+        data = None
+        if txt:
+            data = json.loads(txt)
+        elif os.path.exists(REFS_FILE):
+            with open(REFS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        for k, v in (data or {}).items():
+            try:
+                REF_STATS[int(k)] = {"count": int(v.get("count",0)), "earned": int(v.get("earned",0))}
+            except Exception:
+                continue
+    except Exception as e:
+        print("[refs] load error:", str(e)[:160])
+
 def _subs_save():
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -481,6 +513,7 @@ def _subs_load():
         print("[subs] load error:", str(e)[:160])
 
 _subs_load()
+_refs_load()
 
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
@@ -508,8 +541,9 @@ USER_HISTORY: Dict[int, List[bytes]] = {}
 GALLERY_LIMIT = 5
 
 # Рефералка
-REF_BONUS_NEW  = int(os.getenv("REF_BONUS_NEW", "3"))
-REF_BONUS_REF  = int(os.getenv("REF_BONUS_REF", "3"))
+REF_BONUS_NEW  = int(os.getenv("REF_BONUS_NEW", "1"))
+REF_BONUS_REF  = int(os.getenv("REF_BONUS_REF", "1"))
+REF_PREMIUM_THRESHOLD = int(os.getenv("REF_PREMIUM_THRESHOLD", "15"))  # +1 day Premium per N invited
 REF_MAP: Dict[int, int] = {}
 REF_STATS: Dict[int, Dict[str, int]] = {}
 
@@ -2116,6 +2150,84 @@ async def cmd_audit(m: Message):
             )
     await safe_answer(m, "\n".join(lines))
 
+@dp.message(Command("sub_revoke"))
+async def cmd_sub_revoke(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        return await safe_answer(m, "Usage: /sub_revoke <user_id>")
+    uid = int(parts[1])
+    SUBSCR_EXPIRY[uid] = 0.0
+    _subs_save()
+    await safe_answer(m, f"Revoked Premium for {uid}.")
+
+@dp.message(Command("sub_set"))
+async def cmd_sub_set(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) != 3:
+        return await safe_answer(m, "Usage: /sub_set <user_id> <days>")
+    try:
+        uid = int(parts[1]); days = float(parts[2])
+    except Exception:
+        return await safe_answer(m, "Usage: /sub_set <user_id> <days>")
+    now_ts = time.time()
+    cur_exp = float(SUBSCR_EXPIRY.get(uid, 0.0))
+    start_from = cur_exp if cur_exp > now_ts else now_ts
+    SUBSCR_EXPIRY[uid] = start_from + int(days * 24*3600)
+    _subs_save()
+    exp_dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(int(SUBSCR_EXPIRY[uid])))
+    await safe_answer(m, f"Premium for {uid} set until {exp_dt} (UTC)")
+
+@dp.message(Command("credits_set"))
+async def cmd_credits_set(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) != 3:
+        return await safe_answer(m, "Usage: /credits_set <user_id> <amount>")
+    try:
+        uid = int(parts[1]); amount = int(parts[2])
+    except Exception:
+        return await safe_answer(m, "Usage: /credits_set <user_id> <amount>")
+    ensure_user_credit(uid)
+    USER_CREDITS[uid] = max(0, amount)
+    _credits_save()
+    await safe_answer(m, f"Credits for {uid}: {USER_CREDITS[uid]}")
+
+@dp.message(Command("audit_top"))
+async def cmd_audit_top(m: Message):
+    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    topn = 20
+    if len(parts) == 2 and parts[1].isdigit():
+        topn = max(1, min(100, int(parts[1])))
+    items = []
+    now = time.time()
+    for uid, info in STATS_USERS_INFO.items():
+        pays = int(info.get("payments", 0))
+        if pays > 0:
+            continue
+        gens = int(info.get("gens_ok", 0)) + int(info.get("gens_copy_ok", 0))
+        if gens <= 0:
+            continue
+        uname = info.get("username") or ""
+        sub_active = float(SUBSCR_EXPIRY.get(uid, 0.0)) > now
+        items.append((gens, uid, uname, sub_active))
+    items.sort(reverse=True)
+    lines = ["Top generators with 0 payments:"]
+    for gens, uid, uname, sub_active in items[:topn]:
+        flags = []
+        if is_admin(uid, uname): flags.append("admin")
+        if uid in FREE_USERS: flags.append("whitelist")
+        if sub_active: flags.append("subscription")
+        bal = ("∞" if is_free_user(uid, uname) else USER_CREDITS.get(uid, FREE_QUOTA))
+        lines.append(f"{gens} · {uid} @" + (uname or "-") + f" · bal={bal} · {','.join(flags) or 'no flags'}")
+    await safe_answer(m, "\n".join(lines))
+
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
     if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
@@ -2161,15 +2273,16 @@ async def cmd_start(m: Message):
                 REF_STATS.setdefault(ref_id, {"count": 0, "earned": 0})
                 REF_STATS[ref_id]["count"] += 1
                 REF_STATS[ref_id]["earned"] += REF_BONUS_REF
+                _refs_save()
                 USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
                 _credits_save()
                 stats_incr("referrals", 1)
                 stats_incr("ref_bonus_ref", REF_BONUS_REF)
                 stats_incr("ref_bonus_invited", REF_BONUS_NEW)
-                # Bonus: every 5 invited → +1 day Premium (time subscription)
+                # Bonus: every N invited → +1 day Premium (time subscription)
                 try:
                     cnt = int(REF_STATS[ref_id]["count"])
-                    if cnt % 5 == 0:
+                    if REF_PREMIUM_THRESHOLD > 0 and (cnt % REF_PREMIUM_THRESHOLD == 0):
                         now_ts = time.time()
                         cur_exp = float(SUBSCR_EXPIRY.get(ref_id, 0.0))
                         start_from = cur_exp if cur_exp > now_ts else now_ts
@@ -2177,11 +2290,12 @@ async def cmd_start(m: Message):
                         _subs_save()
                         # Notify referrer
                         exp_dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(int(SUBSCR_EXPIRY[ref_id])))
+                        n_str = str(REF_PREMIUM_THRESHOLD)
                         note = {
-                            "ru": f"🎉 5 приглашённых! +1 день Premium активирован до {exp_dt} (UTC)",
-                            "en": f"🎉 5 invited! +1 day Premium activated until {exp_dt} (UTC)",
-                            "ro": f"🎉 5 invitați! +1 zi Premium activă până la {exp_dt} (UTC)",
-                            "de": f"🎉 5 Einladungen! +1 Tag Premium aktiv bis {exp_dt} (UTC)",
+                            "ru": f"🎉 {n_str} приглашённых! +1 день Premium активирован до {exp_dt} (UTC)",
+                            "en": f"🎉 {n_str} invited! +1 day Premium activated until {exp_dt} (UTC)",
+                            "ro": f"🎉 {n_str} invitați! +1 zi Premium activă până la {exp_dt} (UTC)",
+                            "de": f"🎉 {n_str} Einladungen! +1 Tag Premium aktiv bis {exp_dt} (UTC)",
                         }.get(USER_LANG.get(ref_id, LANG_DEFAULT), f"+1 day Premium active until {exp_dt} (UTC)")
                         try:
                             await safe_send_text(ref_id, note)
@@ -2354,29 +2468,31 @@ async def cmd_refer(m: Message):
     link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{my_id}"
     st = REF_STATS.get(my_id, {"count": 0, "earned": 0})
     # Progress to next Premium day
-    nxt = 5 - (int(st.get("count", 0)) % 5 or 5)
+    cnt = int(st.get("count", 0))
+    thr = max(1, int(REF_PREMIUM_THRESHOLD))
+    rem = (thr - (cnt % thr)) if (cnt % thr) != 0 else thr
     try:
         lng = USER_LANG.get(my_id, LANG_DEFAULT)
         if lng.startswith("ru"):
-            title = "👥 Пригласи друга — получи +3 генерации\n5 приглашённых = 1 день Premium"
+            title = "👥 Пригласи друга — получи +1 генерацию\n15 приглашённых = 1 день Premium"
             copied = "📋 Скопировать"
             openb = "🔗 Открыть"
-            prog = f"До следующего Premium дня: ещё {nxt}"
+            prog = f"До следующего Premium дня: ещё {rem}"
         elif lng.startswith("ro"):
-            title = "👥 Invită un prieten — primești +3 generări\n5 invitați = 1 zi Premium"
+            title = "👥 Invită un prieten — primești +1 generare\n15 invitați = 1 zi Premium"
             copied = "📋 Copiază"
             openb = "🔗 Deschide"
-            prog = f"Până la următoarea zi Premium: încă {nxt}"
+            prog = f"Până la următoarea zi Premium: încă {rem}"
         elif lng.startswith("de"):
-            title = "👥 Lade einen Freund ein — +3 Generationen\n5 Einladungen = 1 Tag Premium"
+            title = "👥 Lade einen Freund ein — +1 Generation\n15 Einladungen = 1 Tag Premium"
             copied = "📋 Kopieren"
             openb = "🔗 Öffnen"
-            prog = f"Bis zum nächsten Premium‑Tag: noch {nxt}"
+            prog = f"Bis zum nächsten Premium‑Tag: noch {rem}"
         else:
-            title = "👥 Invite a friend — get +3 generations\n5 invited = 1 day Premium"
+            title = "👥 Invite a friend — get +1 generation\n15 invited = 1 day Premium"
             copied = "📋 Copy"
             openb = "🔗 Open"
-            prog = f"To next Premium day: {nxt} more"
+            prog = f"To next Premium day: {rem} more"
     except Exception:
         title = "Invite friends and earn rewards"
         copied = "Copy"
