@@ -3622,6 +3622,7 @@ async def admin_panel(request: Request):
             dlq_len = int(await r.llen(Q_UPSCALE_DLQ))
             raw = await r.lrange(Q_UPSCALE_DLQ, -10, -1)
             import json as _json
+            import base64 as _b64
             rows = []
             for s in raw or []:
                 try:
@@ -3634,10 +3635,14 @@ async def admin_panel(request: Request):
                 err = (it.get("error") or "")[:80]
                 url = (job.get("gen_url") or "")
                 short = (url[:64] + "…") if len(url) > 64 else url
-                rows.append(f"<tr><td>{cid}</td><td>{reason}</td><td>{err}</td><td>{short}</td></tr>")
+                b64 = _b64.b64encode(s.encode("utf-8")).decode("ascii")
+                rows.append(
+                    f"<tr><td>{cid}</td><td>{reason}</td><td>{err}</td><td>{short}</td>"
+                    f"<td><a href=\"/admin/queues/requeue?secret={ADMIN_PANEL_SECRET}&payload={b64}\">Requeue</a></td></tr>"
+                )
             table = (
                 f"<div class=\"muted\">upscale: {up_len} · dlq: {dlq_len}</div>"
-                + "<table><tr><th>User</th><th>Reason</th><th>Error</th><th>URL</th></tr>"
+                + "<table><tr><th>User</th><th>Reason</th><th>Error</th><th>URL</th><th></th></tr>"
                 + ("".join(rows) if rows else "<tr><td colspan=4 class=\"muted\">No DLQ items</td></tr>")
                 + "</table>"
             )
@@ -3735,6 +3740,7 @@ async def admin_panel(request: Request):
           {queues_html}
         </div>
       </div>
+      
 
       <div class="section">
         <div class="card">
@@ -3781,6 +3787,41 @@ async def admin_panel(request: Request):
   </html>
     """
     return HTMLResponse(content=html)
+
+@app.post("/admin/queues/requeue")
+async def admin_queues_requeue(request: Request):
+    if ADMIN_PANEL_SECRET and request.query_params.get("secret") != ADMIN_PANEL_SECRET:
+        return JSONResponse({"status": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+        raw = body.get("payload")
+        if not raw or not isinstance(raw, str):
+            return JSONResponse({"ok": False, "error": "bad payload"}, status_code=400)
+        from queue_utils import dlq_requeue
+        ok = await dlq_requeue(raw)
+        return JSONResponse({"ok": bool(ok)})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:160]}, status_code=500)
+
+@app.get("/admin/queues/requeue")
+async def admin_queues_requeue_get(request: Request):
+    if ADMIN_PANEL_SECRET and request.query_params.get("secret") != ADMIN_PANEL_SECRET:
+        return JSONResponse({"status": "forbidden"}, status_code=403)
+    import base64
+    try:
+        b64 = request.query_params.get("payload")
+        if not b64:
+            return JSONResponse({"ok": False, "error": "no payload"}, status_code=400)
+        raw = base64.b64decode(b64.encode("ascii")).decode("utf-8", errors="ignore")
+        from queue_utils import dlq_requeue
+        ok = await dlq_requeue(raw)
+        # Redirect back to admin
+        loc = f"/admin?secret={ADMIN_PANEL_SECRET}"
+        if ok:
+            return HTMLResponse("<meta http-equiv='refresh' content='0;url=" + loc + "'>Requeued")
+        return HTMLResponse("<meta http-equiv='refresh' content='2;url=" + loc + "'>Failed to requeue")
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:160]}, status_code=500)
 
 
 @api.on_event("shutdown")

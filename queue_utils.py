@@ -78,3 +78,29 @@ async def queues_snapshot(max_items: int = 10) -> dict:
     except Exception:
         pass
     return out
+
+async def dlq_requeue(raw_payload: str) -> bool:
+    """Move a DLQ item back to the main queue. `raw_payload` must equal the stored DLQ JSON string."""
+    r = await get_redis()
+    if not r:
+        return False
+    try:
+        data = json.loads(raw_payload)
+        job = data.get("job") or {}
+        if not isinstance(job, dict):
+            return False
+        # Reset attempt counter if present
+        if "attempt" in job:
+            try:
+                job["attempt"] = 0
+            except Exception:
+                pass
+        await r.rpush(Q_UPSCALE, json.dumps(job))
+        # Remove one occurrence from DLQ
+        try:
+            await r.lrem(Q_UPSCALE_DLQ, 1, raw_payload)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
