@@ -1876,7 +1876,18 @@ async def generate_image_with_preview_async(
     if QUEUE_ENABLED:
         try:
             from queue_utils import enqueue_upscale
-            await enqueue_upscale(send_to.chat.id if hasattr(send_to, "chat") else int(send_to), gen_url, caption="✅")
+            # Send a transient status message and pass its id to the worker
+            try:
+                if hasattr(send_to, "answer"):
+                    st = await send_to.answer("🔧 Upscaling…")
+                elif hasattr(send_to, "chat"):
+                    st = await bot.send_message(send_to.chat.id, "🔧 Upscaling…")
+                else:
+                    st = await bot.send_message(int(send_to), "🔧 Upscaling…")
+                st_id = getattr(st, "message_id", None)
+            except Exception:
+                st_id = None
+            await enqueue_upscale(send_to.chat.id if hasattr(send_to, "chat") else int(send_to), gen_url, caption="✅", status_message_id=st_id, attempt=0)
         except Exception as e:
             print("enqueue upscale error:", str(e)[:160])
         return nano_bytes

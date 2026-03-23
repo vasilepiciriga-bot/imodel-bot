@@ -20,7 +20,7 @@ async def get_redis() -> Optional["aioredis.Redis"]:
         _redis = await aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
     return _redis
 
-async def enqueue_upscale(chat_id: int, gen_url: str, caption: str = "✅") -> bool:
+async def enqueue_upscale(chat_id: int, gen_url: str, caption: str = "✅", status_message_id: int | None = None, attempt: int = 0) -> bool:
     r = await get_redis()
     if not r:
         return False
@@ -29,7 +29,8 @@ async def enqueue_upscale(chat_id: int, gen_url: str, caption: str = "✅") -> b
         "chat_id": int(chat_id),
         "gen_url": gen_url,
         "caption": caption,
+        "status_message_id": int(status_message_id) if status_message_id else None,
+        "attempt": int(attempt),
     })
     await r.rpush(Q_UPSCALE, payload)
     return True
-

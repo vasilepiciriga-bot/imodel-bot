@@ -3,16 +3,20 @@ import json
 import asyncio
 from typing import Optional
 
-from queue_utils import get_redis, Q_UPSCALE
+from queue_utils import get_redis, Q_UPSCALE, enqueue_upscale
 
 # Import app environment and helpers (bot, stats, download, etc.)
-from app import bot, _download_with_retries, ESRGAN_MODEL, ESRGAN_DISABLED, DISABLE_ESRGAN, replicate_generate
+from app import bot, _download_with_retries, ESRGAN_MODEL, ESRGAN_DISABLED, DISABLE_ESRGAN, replicate_generate, stats_incr
 from aiogram.types import BufferedInputFile
+
+MAX_RETRIES_UPSCALE = int(os.getenv("MAX_RETRIES_UPSCALE", "2"))
 
 async def process_upscale(job: dict) -> None:
     chat_id = int(job.get("chat_id"))
     gen_url = str(job.get("gen_url"))
     caption = str(job.get("caption") or "✅")
+    status_msg_id = job.get("status_message_id")
+    attempt = int(job.get("attempt") or 0)
 
     if not gen_url or (not ESRGAN_MODEL) or DISABLE_ESRGAN or ESRGAN_DISABLED:
         # Just resend the original as a fallback
@@ -20,6 +24,7 @@ async def process_upscale(job: dict) -> None:
         if b:
             try:
                 await bot.send_photo(chat_id, BufferedInputFile(b, filename="imodel_result.jpg"), caption=caption)
+                stats_incr("finals", 1)
             except Exception:
                 pass
         return
@@ -33,14 +38,35 @@ async def process_upscale(job: dict) -> None:
             b = _download_with_retries(gen_url)
         if b:
             await bot.send_photo(chat_id, BufferedInputFile(b, filename="imodel_result.jpg"), caption=caption)
+            stats_incr("finals", 1)
+        # Clean status message
+        if status_msg_id:
+            try:
+                await bot.delete_message(chat_id, status_msg_id)
+            except Exception:
+                pass
     except Exception:
-        # Silent fallback
+        # Retry with simple backoff, then fallback
+        if attempt < MAX_RETRIES_UPSCALE:
+            try:
+                await asyncio.sleep(max(1, 2 ** attempt))
+                await enqueue_upscale(chat_id, gen_url, caption=caption, status_message_id=status_msg_id, attempt=attempt+1)
+                return
+            except Exception:
+                pass
         try:
             b = _download_with_retries(gen_url)
             if b:
-                await bot.send_photo(chat_id, BufferedInputFile(b, filename="imodel_result.jpg"), caption=caption)
+                await bot.send_photo(chat_id, BufferedInputFile(b, filename="imodel_result.jpg"), caption=caption + " (fallback)")
+                stats_incr("finals", 1)
         except Exception:
             pass
+        # Clean status message
+        if status_msg_id:
+            try:
+                await bot.delete_message(chat_id, status_msg_id)
+            except Exception:
+                pass
 
 async def run_worker():
     r = await get_redis()
@@ -68,4 +94,3 @@ async def run_worker():
 
 if __name__ == "__main__":
     asyncio.run(run_worker())
-
