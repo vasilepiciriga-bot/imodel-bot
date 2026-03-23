@@ -34,12 +34,14 @@
 - `DISABLE_WEBHOOK=1` — не трогать вебхук (удобно для второго инстанса/воркера).
 - `REDIS_URL=redis://localhost:6379/0` — адрес Redis для очереди.
 - `MAX_RETRIES_UPSCALE=2` — сколько раз повторять апскейл в воркере при ошибках.
+- `REDIS_Q_UPSCALE`, `REDIS_Q_UPSCALE_DLQ` — имена очередей (опционально).
 
 ## Воркеры
 - Установить Redis и запустить worker:
   - `pip install -r requirements.txt`
   - `REDIS_URL=redis://localhost:6379/0 python worker.py`
 - При `QUEUE_ENABLED=1` сервер отправляет 🟡 Preview сразу, а финальный апскейл доставит worker (✅) отдельно.
+- В админ‑панели добавлен блок Queues: длина очереди и последние элементы DLQ.
 
 ## Copy Mode
 1) Отправьте фото‑стиль (сцена).  

@@ -3,7 +3,7 @@ import json
 import asyncio
 from typing import Optional
 
-from queue_utils import get_redis, Q_UPSCALE, enqueue_upscale
+from queue_utils import get_redis, Q_UPSCALE, enqueue_upscale, enqueue_dead
 
 # Import app environment and helpers (bot, stats, download, etc.)
 from app import bot, _download_with_retries, ESRGAN_MODEL, ESRGAN_DISABLED, DISABLE_ESRGAN, replicate_generate, stats_incr
@@ -45,7 +45,7 @@ async def process_upscale(job: dict) -> None:
                 await bot.delete_message(chat_id, status_msg_id)
             except Exception:
                 pass
-    except Exception:
+    except Exception as e:
         # Retry with simple backoff, then fallback
         if attempt < MAX_RETRIES_UPSCALE:
             try:
@@ -54,6 +54,11 @@ async def process_upscale(job: dict) -> None:
                 return
             except Exception:
                 pass
+        # Push to DLQ
+        try:
+            await enqueue_dead("upscale", job, reason="max_retries", error=str(e))
+        except Exception:
+            pass
         try:
             b = _download_with_retries(gen_url)
             if b:

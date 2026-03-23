@@ -3609,6 +3609,44 @@ async def admin_panel(request: Request):
         ref_items.append({"uid": rid, "count": st.get("count", 0), "earned": st.get("earned", 0)})
     top_ref = sorted(ref_items, key=lambda x: x["count"], reverse=True)[:10]
 
+    async def render_queues_async() -> str:
+        try:
+            from queue_utils import get_redis, Q_UPSCALE, Q_UPSCALE_DLQ
+        except Exception:
+            return "<div class=\"muted\">queues: module not available</div>"
+        try:
+            r = await get_redis()
+            if not r:
+                return "<div class=\"muted\">Redis disabled</div>"
+            up_len = int(await r.llen(Q_UPSCALE))
+            dlq_len = int(await r.llen(Q_UPSCALE_DLQ))
+            raw = await r.lrange(Q_UPSCALE_DLQ, -10, -1)
+            import json as _json
+            rows = []
+            for s in raw or []:
+                try:
+                    it = _json.loads(s)
+                except Exception:
+                    continue
+                job = it.get("job", {})
+                cid = job.get("chat_id")
+                reason = it.get("reason")
+                err = (it.get("error") or "")[:80]
+                url = (job.get("gen_url") or "")
+                short = (url[:64] + "…") if len(url) > 64 else url
+                rows.append(f"<tr><td>{cid}</td><td>{reason}</td><td>{err}</td><td>{short}</td></tr>")
+            table = (
+                f"<div class=\"muted\">upscale: {up_len} · dlq: {dlq_len}</div>"
+                + "<table><tr><th>User</th><th>Reason</th><th>Error</th><th>URL</th></tr>"
+                + ("".join(rows) if rows else "<tr><td colspan=4 class=\"muted\">No DLQ items</td></tr>")
+                + "</table>"
+            )
+            return table
+        except Exception as e:
+            return f"<div class=\"muted\">queues error: {str(e)[:120]}</div>"
+
+    queues_html = await render_queues_async()
+
     html = f"""
 <!doctype html>
 <html lang="en">
@@ -3688,6 +3726,13 @@ async def admin_panel(request: Request):
           <div class="muted">Financial</div>
           <div>Payments: <b>{STATS.get('payments',0)}</b> · Promo used: <b>{STATS.get('promo_used',0)}</b></div>
           <div class="muted" style="margin-top:8px;">Published → channel: {STATS.get('published_channel',0)} · group: {STATS.get('published_group',0)} · auto: {STATS.get('auto_post',0)}</div>
+        </div>
+      </div>
+
+      <div class="grid section">
+        <div class="card" style="grid-column: span 4;">
+          <div class="muted">Queues (Redis)</div>
+          {queues_html}
         </div>
       </div>
 
