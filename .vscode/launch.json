@@ -5,11 +5,32 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "type": "chrome",
+            "name": "Go: Web (iModel v3)",
+            "type": "go",
             "request": "launch",
-            "name": "Launch Chrome against localhost",
-            "url": "http://localhost:8080",
-            "webRoot": "${workspaceFolder}"
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/web",
+            "env": {
+                "PORT": "8080",
+                "WEBHOOK_SECRET": "dev-secret",
+                "BOT_TOKEN": "${env:BOT_TOKEN}",
+                "REPLICATE_API_TOKEN": "${env:REPLICATE_API_TOKEN}",
+                "REDIS_ADDR": "127.0.0.1:6379",
+                "DATABASE_URL": "postgres://localhost:5432/imodel?sslmode=disable"
+            }
+        },
+        {
+            "name": "Go: Worker (iModel v3)",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/worker",
+            "env": {
+                "BOT_TOKEN": "${env:BOT_TOKEN}",
+                "REPLICATE_API_TOKEN": "${env:REPLICATE_API_TOKEN}",
+                "REDIS_ADDR": "127.0.0.1:6379",
+                "DATABASE_URL": "postgres://localhost:5432/imodel?sslmode=disable"
+            }
         }
     ]
 }

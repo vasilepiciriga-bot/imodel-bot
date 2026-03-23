@@ -1,0 +1,2 @@
+web: /usr/local/bin/web
+worker: /usr/local/bin/worker
