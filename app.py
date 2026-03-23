@@ -89,6 +89,7 @@ ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
 ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "1") == "1"
 PREVIEW_FIRST = os.getenv("PREVIEW_FIRST", "1") == "1"
 QUEUE_ENABLED = os.getenv("QUEUE_ENABLED", "1") == "1"
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Metrics/Stats
 METRICS_SECRET = os.getenv("METRICS_SECRET", "")
@@ -1746,7 +1747,7 @@ async def generate_image_from_bytes_async(
         
 
 async def generate_image_with_preview_async(
-    send_to: Message,
+    send_to: object,
     img_bytes: bytes,
     user_prompt: str,
     lang: str = "ru",
@@ -1862,28 +1863,40 @@ async def generate_image_with_preview_async(
 
     # Send preview now
     try:
-        await safe_answer_photo(send_to, BufferedInputFile(nano_bytes, filename="imodel_preview.jpg"), caption="🟡 Preview")
+        if hasattr(send_to, "answer_photo"):
+            await safe_answer_photo(send_to, BufferedInputFile(nano_bytes, filename="imodel_preview.jpg"), caption="🟡 Preview")
+        else:
+            await bot.send_photo(int(send_to), BufferedInputFile(nano_bytes, filename="imodel_preview.jpg"), caption="🟡 Preview")
         stats_incr("previews", 1)
     except Exception as e:
         print("send preview error:", str(e)[:160])
 
     # Upscale to final (may fallback to preview)
-    try:
-        global ESRGAN_DISABLED
-        if not ESRGAN_MODEL or ESRGAN_DISABLED or DISABLE_ESRGAN:
+    # Upscale to final: either inline or enqueue to worker
+    if QUEUE_ENABLED:
+        try:
+            from queue_utils import enqueue_upscale
+            await enqueue_upscale(send_to.chat.id if hasattr(send_to, "chat") else int(send_to), gen_url, caption="✅")
+        except Exception as e:
+            print("enqueue upscale error:", str(e)[:160])
+        return nano_bytes
+    else:
+        try:
+            global ESRGAN_DISABLED
+            if not ESRGAN_MODEL or ESRGAN_DISABLED or DISABLE_ESRGAN:
+                return nano_bytes
+            up_url = replicate_generate(ESRGAN_MODEL, {"image": gen_url, "scale": 4, "face_enhance": False, "model": "RealESRGAN_x4plus"})
+            if up_url and up_url.startswith("http"):
+                up_bytes = _download_with_retries(up_url)
+                if up_bytes:
+                    return up_bytes
             return nano_bytes
-        up_url = replicate_generate(ESRGAN_MODEL, {"image": gen_url, "scale": 4, "face_enhance": False, "model": "RealESRGAN_x4plus"})
-        if up_url and up_url.startswith("http"):
-            up_bytes = _download_with_retries(up_url)
-            if up_bytes:
-                return up_bytes
-        return nano_bytes
-    except Exception as e:
-        em = str(e)
-        print("preview upscale error:", em[:200])
-        if "404" in em:
-            ESRGAN_DISABLED = True
-        return nano_bytes
+        except Exception as e:
+            em = str(e)
+            print("preview upscale error:", em[:200])
+            if "404" in em:
+                ESRGAN_DISABLED = True
+            return nano_bytes
 
 
 # ======= Автопост «до/после» (опционально) ===========

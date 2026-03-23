@@ -6,3 +6,4 @@ replicate
 boto3
 openai
 stripe
+redis>=5
