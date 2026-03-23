@@ -33,7 +33,7 @@ def _b64(img_bytes: bytes) -> str:
     return base64.b64encode(img_bytes).decode("utf-8")
 
 def craft_prompt_from_style_image(style_bytes: bytes) -> Optional[Dict[str, str]]:
-    \"\"\"Return {'prompt': str, 'negative': str, 'seed_hint': str} from a style image via OpenAI Vision.\"\"\"
+    """Return {'prompt': str, 'negative': str, 'seed_hint': str} from a style image via OpenAI Vision."""
     if not OPENAI_API_KEY or OpenAI is None:
         return None
     client = OpenAI(api_key=OPENAI_API_KEY)

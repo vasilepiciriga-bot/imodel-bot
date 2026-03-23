@@ -13,6 +13,7 @@ import base64
 import random
 import hashlib
 import asyncio
+from urllib.parse import urlsplit, urlunsplit
 from typing import Optional, Dict, List, Set
 
 import requests
@@ -53,6 +54,7 @@ BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
 WEBHOOK_BASE   = os.getenv("WEBHOOK_BASE", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret123")
 WEBHOOK_URL = f"{WEBHOOK_BASE}/?secret={WEBHOOK_SECRET}"
+DISABLE_WEBHOOK = os.getenv("DISABLE_WEBHOOK", "0") == "1"
 
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
@@ -85,6 +87,8 @@ else:
 # Filter toggles
 ALLOW_NSFW   = os.getenv("ALLOW_NSFW", "0") == "1"
 ALLOW_CELEBS = os.getenv("ALLOW_CELEBS", "1") == "1"
+PREVIEW_FIRST = os.getenv("PREVIEW_FIRST", "1") == "1"
+QUEUE_ENABLED = os.getenv("QUEUE_ENABLED", "1") == "1"
 
 # Metrics/Stats
 METRICS_SECRET = os.getenv("METRICS_SECRET", "")
@@ -111,6 +115,8 @@ STATS = {
     "nudges_sent": 0,
     "nudges_errors": 0,
     "nudges_granted": 0,
+    "previews": 0,
+    "finals": 0,
 }
 STATS_USERS: Set[int] = set()
 STATS_USERS_INFO: Dict[int, Dict[str, object]] = {}
@@ -1072,7 +1078,13 @@ def s3_put_and_presign(img_bytes: bytes, key_prefix: str = "inputs/") -> Optiona
             Params={"Bucket": S3_BUCKET, "Key": key},
             ExpiresIn=3600
         )
-        print("S3 presigned url:", url[:110], "...")
+        # Avoid leaking signed parameters in logs
+        try:
+            parts = urlsplit(url)
+            masked = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+            print("S3 presigned url:", masked)
+        except Exception:
+            pass
         return url
     except Exception as e:
         print("S3 upload/presign error:", str(e)[:200])
@@ -1709,7 +1721,170 @@ def generate_image_from_bytes(
         if "404" in em:
             ESRGAN_DISABLED = True
             print("→ Disable upscaler for this runtime (404)")
+
+    return nano_bytes
+
+async def generate_image_from_bytes_async(
+    img_bytes: bytes,
+    user_prompt: str,
+    lang: str = "ru",
+    seed: Optional[int] = None,
+    strict: bool = False,
+    style_bytes: Optional[bytes] = None,
+    lock_scene: bool = True,
+) -> Optional[bytes]:
+    return await asyncio.to_thread(
+        generate_image_from_bytes,
+        img_bytes,
+        user_prompt,
+        lang,
+        seed,
+        strict,
+        style_bytes,
+        lock_scene,
+    )
+        
+
+async def generate_image_with_preview_async(
+    send_to: Message,
+    img_bytes: bytes,
+    user_prompt: str,
+    lang: str = "ru",
+    seed: Optional[int] = None,
+    strict: bool = False,
+    style_bytes: Optional[bytes] = None,
+    lock_scene: bool = True,
+) -> Optional[bytes]:
+    """Two-phase generation: send preview (no upscale) first, then return final bytes.
+    Falls back to normal generation if preview fails."""
+    if blocked(user_prompt):
+        print("⛔ Заблокировано фильтром")
+        return None
+
+    refined = craft_prompt_gpt(user_prompt, lang=lang, allow_refine=not strict)
+    if strict and lock_scene:
+        refined = f"{refined}. {SCENE_LOCK}. Exact same background, composition, lighting, color grading; only replace the face."
+
+    src_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
+    if not src_url:
+        return None
+    style_url: Optional[str] = None
+    if strict and style_bytes:
+        style_url = s3_put_and_presign(style_bytes, key_prefix="style/")
+
+    def _inputs_common(p: str, seed_val: Optional[int]):
+        if strict and lock_scene:
+            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
+        elif strict:
+            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
+        else:
+            neg = NEGATIVE_LOCK
+        base = {"prompt": p, "negative_prompt": neg}
+        if seed_val is not None:
+            base["seed"] = seed_val
+        return base
+
+    # --- Phase 1: try to get Nano (preview) URL ---
+    def _try_preview(p: str, seed_val: Optional[int]) -> Optional[str]:
+        inputs_common = _inputs_common(p, seed_val)
+        # style+selfie combos
+        if style_url:
+            candidates = [
+                {"image_input": [style_url, src_url]},
+                {"image_input": [src_url, style_url]},
+                {"image": style_url, "face_image": src_url},
+                {"image": style_url, "person_image": src_url},
+                {"image": style_url, "target_face": src_url},
+                {"image": src_url, "style_image": style_url},
+                {"source_image": style_url, "image": src_url},
+                {"background": style_url, "image": src_url},
+                {"reference": style_url, "image": src_url},
+                {"content_image": style_url, "face_image": src_url},
+            ]
+            cfg_variants: List[Dict[str, object]] = [
+                {}, {"guidance_scale": 7.5}, {"guidance": 7.5}, {"cfg": 7.0}, {"cfg_scale": 7.0},
+                {"strength": 0.8}, {"prompt_strength": 0.85}, {"num_inference_steps": 28},
+            ]
+            for variant in candidates:
+                try:
+                    for ce in cfg_variants:
+                        inp = dict(inputs_common); inp.update(variant); inp.update(ce)
+                        url = replicate_generate(NANOBANANA_MODEL, inp)
+                        if url == "SENSITIVE":
+                            return "SENSITIVE"
+                        if url:
+                            return url
+                except Exception as e:
+                    print("preview variant error:", str(e)[:200])
+        # selfie only
+        for ce in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+            try:
+                inp = dict(inputs_common); inp.update(ce); inp["image_input"] = [src_url]
+                url = replicate_generate(NANOBANANA_MODEL, inp)
+                if url == "SENSITIVE":
+                    return "SENSITIVE"
+                if url:
+                    return url
+            except Exception as e:
+                print("preview image_input error:", str(e)[:200])
+        for ce in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
+            try:
+                inp = dict(inputs_common); inp.update(ce); inp["image"] = src_url
+                url = replicate_generate(NANOBANANA_MODEL, inp)
+                if url == "SENSITIVE":
+                    return "SENSITIVE"
+                if url:
+                    return url
+            except Exception as e:
+                print("preview image error:", str(e)[:200])
+        return None
+
+    gen_url = _try_preview(refined, seed)
+    if gen_url == "SENSITIVE":
+        gen_url = _try_preview(safer_variant(refined), seed)
+    if (not gen_url or not str(gen_url).startswith("http")) and not strict:
+        hard = f"{refined}. Ultra keep identity. Absolutely same face features. {SCENE_LOCK}"
+        gen_url = _try_preview(hard, seed)
+    if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
+        print("preview url missing — fallback to normal generation")
+        return await generate_image_from_bytes_async(img_bytes, user_prompt, lang, seed, strict, style_bytes, lock_scene)
+
+    nano_bytes = _download_with_retries(gen_url)
+    if not nano_bytes:
+        print("preview download failed — fallback to normal generation")
+        return await generate_image_from_bytes_async(img_bytes, user_prompt, lang, seed, strict, style_bytes, lock_scene)
+    try:
+        if hashlib.md5(nano_bytes).hexdigest() == hashlib.md5(img_bytes).hexdigest():
+            print("preview equals input — treat as failure")
+            return await generate_image_from_bytes_async(img_bytes, user_prompt, lang, seed, strict, style_bytes, lock_scene)
+    except Exception:
+        pass
+
+    # Send preview now
+    try:
+        await safe_answer_photo(send_to, BufferedInputFile(nano_bytes, filename="imodel_preview.jpg"), caption="🟡 Preview")
+        stats_incr("previews", 1)
+    except Exception as e:
+        print("send preview error:", str(e)[:160])
+
+    # Upscale to final (may fallback to preview)
+    try:
+        global ESRGAN_DISABLED
+        if not ESRGAN_MODEL or ESRGAN_DISABLED or DISABLE_ESRGAN:
+            return nano_bytes
+        up_url = replicate_generate(ESRGAN_MODEL, {"image": gen_url, "scale": 4, "face_enhance": False, "model": "RealESRGAN_x4plus"})
+        if up_url and up_url.startswith("http"):
+            up_bytes = _download_with_retries(up_url)
+            if up_bytes:
+                return up_bytes
         return nano_bytes
+    except Exception as e:
+        em = str(e)
+        print("preview upscale error:", em[:200])
+        if "404" in em:
+            ESRGAN_DISABLED = True
+        return nano_bytes
+
 
 # ======= Автопост «до/после» (опционально) ===========
 async def post_before_after_to_channel(user_id: int):
@@ -2584,10 +2759,12 @@ async def cb_preset_pick(c: CallbackQuery):
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
     seed_int = ((hash(chat_id) % 10_000_000) + idx)
-    result = generate_image_from_bytes(
+    result = await (generate_image_with_preview_async(
+        c.message,
         ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int
-    )
+        seed=seed_int) if PREVIEW_FIRST else generate_image_from_bytes_async(
+        ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
+        seed=seed_int))
     if not result:
         stats_incr("gens_fail", 1)
         _uadd(chat_id, "gens_fail", 1)
@@ -2795,7 +2972,7 @@ async def on_photo(m: Message):
 
             # строгий режим: жёсткая сцена + identity lock + negative
             # 2) Генерим по selfie + текстовому промпту (БЕЗ передачи style-image в модель)
-            final_bytes = generate_image_from_bytes(
+            final_bytes = await (generate_image_with_preview_async(
                 img_bytes,
                 scene_spec,
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
@@ -2803,10 +2980,18 @@ async def on_photo(m: Message):
                 strict=True,
                 style_bytes=None,
                 lock_scene=False,
-            )
+            ) if PREVIEW_FIRST else generate_image_from_bytes_async(
+                img_bytes,
+                scene_spec,
+                lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+                seed=seed_int,
+                strict=True,
+                style_bytes=None,
+                lock_scene=False,
+            ))
             if not final_bytes:
                 # вторая попытка: ещё жёстче
-                final_bytes = generate_image_from_bytes(
+                final_bytes = await (generate_image_with_preview_async(
                     img_bytes,
                     scene_spec + ". Keep face absolutely unchanged, do not beautify, do not reshape.",
                     lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
@@ -2814,7 +2999,15 @@ async def on_photo(m: Message):
                     strict=True,
                     style_bytes=None,
                     lock_scene=False,
-                )
+                ) if PREVIEW_FIRST else generate_image_from_bytes_async(
+                    img_bytes,
+                    scene_spec + ". Keep face absolutely unchanged, do not beautify, do not reshape.",
+                    lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+                    seed=seed_int,
+                    strict=True,
+                    style_bytes=None,
+                    lock_scene=False,
+                ))
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
                     stats_incr("gens_copy_fail", 1)
@@ -2875,10 +3068,11 @@ async def on_photo(m: Message):
                     return await safe_answer(m, L(m.chat.id)["unlock"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
                 seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
-                final_bytes = generate_image_from_bytes(
+                final_bytes = await (generate_image_with_preview_async(
                     img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    seed=seed_int
-                )
+                    seed=seed_int) if PREVIEW_FIRST else generate_image_from_bytes_async(
+                    img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+                    seed=seed_int))
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
                     stats_incr("gens_fail", 1)
@@ -2927,10 +3121,11 @@ async def on_photo(m: Message):
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     seed_int = (hash(m.chat.id) % 10_000_000)
-    final_bytes = generate_image_from_bytes(
+    final_bytes = await (generate_image_with_preview_async(
         img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int
-    )
+        seed=seed_int) if PREVIEW_FIRST else generate_image_from_bytes_async(
+        img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+        seed=seed_int))
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
         stats_incr("gens_fail", 1)
@@ -3003,10 +3198,11 @@ async def on_prompt(m: Message):
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     ref = refs[-1]
     seed_int = (hash(m.chat.id) % 10_000_000)
-    final_bytes = generate_image_from_bytes(
+    final_bytes = await (generate_image_with_preview_async(
         ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int
-    )
+        seed=seed_int) if PREVIEW_FIRST else generate_image_from_bytes_async(
+        ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+        seed=seed_int))
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
         stats_incr("gens_fail", 1)
@@ -3061,10 +3257,12 @@ async def cb_more(c: CallbackQuery):
     ref = refs[-1]
     # тот же промпт, seed + 1 (минимальная вариативность, лицо стабильное)
     seed_int = ((hash(chat_id) % 10_000_000) + 1)
-    result = generate_image_from_bytes(
+    result = await (generate_image_with_preview_async(
+        c.message,
         ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int
-    )
+        seed=seed_int) if PREVIEW_FIRST else generate_image_from_bytes_async(
+        ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
+        seed=seed_int))
     if not result:
         STATS["gens_fail"] += 1
         _uadd(chat_id, "gens_fail", 1)
@@ -3114,6 +3312,7 @@ async def ensure_webhook():
             await bot.set_webhook(
                 url=WEBHOOK_URL,
                 drop_pending_updates=False,
+                secret_token=WEBHOOK_SECRET,
             )
             print("Webhook set OK")
             return
@@ -3149,9 +3348,11 @@ async def on_startup():
     global BOT_USERNAME_GLOBAL
     BOT_USERNAME_GLOBAL = me.username
 
-    if BOT_TOKEN and WEBHOOK_BASE:
+    if BOT_TOKEN and WEBHOOK_BASE and not DISABLE_WEBHOOK:
         await ensure_webhook()
-        print(f"✅ Вебхук установлен: {WEBHOOK_URL}")
+        print("✅ Вебхук установлен")
+    elif DISABLE_WEBHOOK:
+        print("⚠️ Вебхук отключён (DISABLE_WEBHOOK=1)")
     else:
         print("⚠️ Нет BOT_TOKEN или WEBHOOK_BASE")
 
@@ -3184,14 +3385,18 @@ async def on_startup():
 async def on_shutdown():
     print("🛑 Shutting down...")
     try:
-        await bot.delete_webhook()
+        if not DISABLE_WEBHOOK:
+            await bot.delete_webhook()
     finally:
         await bot.session.close()
-    print("✅ Webhook removed")
+    if not DISABLE_WEBHOOK:
+        print("✅ Webhook removed")
 
 @app.post("/")
 async def telegram_webhook(request: Request):
-    if request.query_params.get("secret") != WEBHOOK_SECRET:
+    hdr = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    q = request.query_params.get("secret")
+    if not ((hdr and hdr == WEBHOOK_SECRET) or (q and q == WEBHOOK_SECRET)):
         return JSONResponse({"status": "forbidden"}, status_code=403)
     data = await request.json()
     try:
@@ -3234,7 +3439,7 @@ async def cancel():
 
 @app.get("/metrics")
 async def http_metrics(request: Request):
-    if METRICS_SECRET and request.query_params.get("secret") != METRICS_SECRET:
+    if (not METRICS_SECRET) or (request.query_params.get("secret") != METRICS_SECRET):
         return JSONResponse({"status": "forbidden"}, status_code=403)
     resp = dict(STATS)
     # Persisted users count (survives restarts)
@@ -3280,7 +3485,7 @@ async def stripe_webhook(request: Request):
 
 @app.get("/admin")
 async def admin_panel(request: Request):
-    if ADMIN_PANEL_SECRET and request.query_params.get("secret") != ADMIN_PANEL_SECRET:
+    if (not ADMIN_PANEL_SECRET) or (request.query_params.get("secret") != ADMIN_PANEL_SECRET):
         return JSONResponse({"status": "forbidden"}, status_code=403)
     now = time.time()
     # Use persisted user info to avoid reset after restarts
