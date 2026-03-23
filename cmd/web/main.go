@@ -11,11 +11,13 @@ import (
 
     "github.com/gofiber/fiber/v2"
     "github.com/hibiken/asynq"
+    "imodel-bot/internal/admin"
     "imodel-bot/internal/bot"
     "imodel-bot/internal/config"
     "imodel-bot/internal/log"
     "imodel-bot/internal/repo"
     "imodel-bot/internal/services/queue"
+    "strconv"
 )
 
 func main() {
@@ -118,6 +120,39 @@ func main() {
         rows, err := store.ListStatsDaily(ctx, 30)
         if err != nil { return c.Status(500).JSON(fiber.Map{"error": err.Error()}) }
         return c.JSON(rows)
+    })
+
+    // Admin UI + user lookup
+    admin.RegisterAdminUI(app, cfg, store)
+
+    // Admin: grant credits
+    app.Post("/admin/grant", func(c *fiber.Ctx) error {
+        if c.Get("X-Admin-Secret") != cfg.AdminSecret || cfg.AdminSecret == "" { return c.SendStatus(http.StatusUnauthorized) }
+        var req struct{ UID int64 `json:"uid"`; N int `json:"n"` }
+        if err := c.BodyParser(&req); err != nil || req.UID == 0 || req.N == 0 { return c.SendStatus(http.StatusBadRequest) }
+        if err := store.AddCredits(ctx, req.UID, req.N); err != nil { return c.Status(500).JSON(fiber.Map{"error": err.Error()}) }
+        bal, _ := store.GetCredits(ctx, req.UID)
+        return c.JSON(fiber.Map{"ok": true, "uid": req.UID, "added": req.N, "balance": bal})
+    })
+
+    // Admin: whitelist set
+    app.Post("/admin/whitelist", func(c *fiber.Ctx) error {
+        if c.Get("X-Admin-Secret") != cfg.AdminSecret || cfg.AdminSecret == "" { return c.SendStatus(http.StatusUnauthorized) }
+        var req struct{ UID int64 `json:"uid"`; Value bool `json:"value"` }
+        if err := c.BodyParser(&req); err != nil || req.UID == 0 { return c.SendStatus(http.StatusBadRequest) }
+        if err := store.SetWhitelist(ctx, req.UID, req.Value); err != nil { return c.Status(500).JSON(fiber.Map{"error": err.Error()}) }
+        return c.JSON(fiber.Map{"ok": true})
+    })
+
+    // Admin: whitelist list
+    app.Get("/admin/whitelist", func(c *fiber.Ctx) error {
+        if c.Get("X-Admin-Secret") != cfg.AdminSecret || cfg.AdminSecret == "" { return c.SendStatus(http.StatusUnauthorized) }
+        limit := 50; offset := 0
+        if v := c.Query("limit"); v != "" { if n, err := strconv.Atoi(v); err == nil { limit = n } }
+        if v := c.Query("offset"); v != "" { if n, err := strconv.Atoi(v); err == nil { offset = n } }
+        items, total, err := store.ListWhitelist(ctx, offset, limit)
+        if err != nil { return c.Status(500).JSON(fiber.Map{"error": err.Error()}) }
+        return c.JSON(fiber.Map{"total": total, "items": items})
     })
 
 	addr := ":8080"

@@ -48,8 +48,9 @@ func (h *Handler) HandleGenerate(ctx context.Context, t *asynq.Task) error {
     if err != nil { return err }
 
     if h.cfg.PreviewFirst {
-        // For MVP, reuse the same URL as preview
         if h.db != nil { _ = h.db.UpdateGenerationPreview(ctx, p.GID, url) }
+        // Send quick preview to the chat
+        _ = images.SendPhoto(h.cfg.BotToken, p.ChatID, url, "🟡 Preview")
     }
 
     // Enqueue upscale

@@ -1,4 +1,4 @@
-.PHONY: web worker build run-web run-worker migrate
+.PHONY: web worker build run-web run-worker migrate set-webhook compose-up compose-build
 
 build:
 	CGO_ENABLED=0 go build -o bin/web ./cmd/web
@@ -11,4 +11,13 @@ run-worker:
 	go run ./cmd/worker
 
 migrate:
-	@echo "Run goose or golang-migrate with migrations/ on $(DATABASE_URL)"
+	go run ./scripts/migrate.go
+
+set-webhook:
+	go run ./scripts/set_webhook.go -token $$BOT_TOKEN -url $$PUBLIC_URL/tg/webhook -secret $$WEBHOOK_SECRET
+
+compose-build:
+	docker compose build
+
+compose-up:
+	docker compose up -d
