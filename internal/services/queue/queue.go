@@ -15,6 +15,7 @@ const (
 
 	QueueDefault  = "default"
 	QueueCritical = "critical"
+	QueuePro      = "pro" // priority queue for Pro/Unlimited subscribers
 )
 
 type GeneratePayload struct {
@@ -48,6 +49,13 @@ type NudgePayload struct {
 func EnqueueGenerate(ctx context.Context, c *asynq.Client, p GeneratePayload) (*asynq.TaskInfo, error) {
 	b, _ := json.Marshal(p)
 	t := asynq.NewTask(TypeGenerate, b, asynq.Queue(QueueCritical))
+	return c.EnqueueContext(ctx, t)
+}
+
+// EnqueueGeneratePro routes to the high-priority queue for Pro/Unlimited subscribers.
+func EnqueueGeneratePro(ctx context.Context, c *asynq.Client, p GeneratePayload) (*asynq.TaskInfo, error) {
+	b, _ := json.Marshal(p)
+	t := asynq.NewTask(TypeGenerate, b, asynq.Queue(QueuePro))
 	return c.EnqueueContext(ctx, t)
 }
 

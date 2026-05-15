@@ -17,6 +17,7 @@ import (
     "imodel-bot/internal/log"
     "imodel-bot/internal/repo"
     "imodel-bot/internal/services/queue"
+    "imodel-bot/internal/webapp"
     "strconv"
 )
 
@@ -121,6 +122,9 @@ func main() {
         if err != nil { return c.Status(500).JSON(fiber.Map{"error": err.Error()}) }
         return c.JSON(rows)
     })
+
+    // Telegram Mini App
+    webapp.Register(app, cfg, store, asynqClient)
 
     // Admin UI + user lookup
     admin.RegisterAdminUI(app, cfg, store)

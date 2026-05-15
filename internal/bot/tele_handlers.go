@@ -47,14 +47,34 @@ func InitTele(ctx context.Context, cfg config.Config, logger ilog.Logger, client
 func registerHandlers() {
     if tbot == nil { return }
     tbot.Handle("/start", func(c tb.Context) error {
-        // referral: /start <payload>
-        if store != nil { _ = store.EnsureUser(context.Background(), c.Sender().ID, c.Sender().Username, "en") }
+        uid := c.Sender().ID
+        lang := "en"
+        if tgLang := c.Sender().LanguageCode; tgLang != "" { lang = tgLang }
+        if store != nil { _ = store.EnsureUser(context.Background(), uid, c.Sender().Username, lang) }
+
+        // referral link: /start ref_<referrerID>
         parts := strings.Fields(c.Message().Text)
         if len(parts) > 1 && strings.HasPrefix(parts[1], "ref_") {
-            refID := atoiSafe(strings.TrimPrefix(parts[1], "ref_"))
-            if store != nil { _ = store.UpsertReferral(context.Background(), c.Sender().ID, int64(refID)) }
+            refID := int64(atoiSafe(strings.TrimPrefix(parts[1], "ref_")))
+            if store != nil { _ = store.UpsertReferral(context.Background(), uid, refID) }
         }
-        lang := getUserLang(c)
+
+        // give 1 free credit on first /start (idempotent)
+        if store != nil {
+            if granted, _ := store.ClaimStartBonus(context.Background(), uid); granted {
+                _ = c.Send("🎁 Welcome gift: 1 free generation added to your account!")
+            }
+        }
+
+        lang = getUserLang(c)
+        // Show Mini App button if PUBLIC_URL is configured
+        if appCfg.PublicURL != "" {
+            appURL := appCfg.PublicURL + "/app"
+            mk := &tb.ReplyMarkup{InlineKeyboard: [][]tb.InlineButton{{
+                {Text: "🎨 Open iModel App", WebApp: &tb.WebApp{URL: appURL}},
+            }}}
+            return c.Send(i18n.T(lang, "onboard_welcome"), mk)
+        }
         return c.Send(i18n.T(lang, "onboard_welcome"))
     })
     tbot.Handle("/help", func(c tb.Context) error { return c.Send(i18n.T("en", "help")) })
@@ -113,7 +133,13 @@ func registerHandlers() {
             }
         }
         gid := newID()
-        _, err := queue.EnqueueGenerate(context.Background(), asynqClient, queue.GeneratePayload{GID: gid, ChatID: c.Chat().ID, Mode: "normal", Prompt: text})
+        payload := queue.GeneratePayload{GID: gid, ChatID: c.Chat().ID, Mode: "normal", Prompt: text}
+        var err error
+        if isProUser(c.Sender().ID) {
+            _, err = queue.EnqueueGeneratePro(context.Background(), asynqClient, payload)
+        } else {
+            _, err = queue.EnqueueGenerate(context.Background(), asynqClient, payload)
+        }
         if err != nil { return c.Send("Error") }
         lang := getUserLang(c)
         return c.Send(i18n.T(lang, "gen"))
@@ -164,8 +190,14 @@ func registerHandlers() {
             }
         }
         gid := newID()
-        _, err := queue.EnqueueGenerate(context.Background(), asynqClient, queue.GeneratePayload{GID: gid, ChatID: c.Chat().ID, Mode: "normal", Prompt: prompt, Negative: negative, SelfieURL: fileURL})
-        if err != nil { return c.Send("Error") }
+        payload := queue.GeneratePayload{GID: gid, ChatID: c.Chat().ID, Mode: "normal", Prompt: prompt, Negative: negative, SelfieURL: fileURL}
+        var enqErr error
+        if isProUser(c.Sender().ID) {
+            _, enqErr = queue.EnqueueGeneratePro(context.Background(), asynqClient, payload)
+        } else {
+            _, enqErr = queue.EnqueueGenerate(context.Background(), asynqClient, payload)
+        }
+        if enqErr != nil { return c.Send("Error") }
         lang := getUserLang(c)
         return c.Send(i18n.T(lang, "gen"))
     })
@@ -198,6 +230,24 @@ func registerHandlers() {
             pageStr := strings.TrimPrefix(data, "gal:")
             page := atoiSafe(pageStr)
             return sendGalleryPage(c, page)
+        }
+        if strings.HasPrefix(data, "sub:") {
+            key := strings.TrimPrefix(data, "sub:")
+            if p := domain.FindSubPlan(key); p != nil {
+                err := payments.SendSubscriptionInvoice(
+                    appCfg.BotToken,
+                    c.Sender().ID,
+                    "iModel "+p.Label,
+                    p.Description,
+                    "sub:"+p.Key,
+                    p.Stars,
+                )
+                if err != nil {
+                    return c.Respond(&tb.CallbackResponse{Text: "Payment init failed"})
+                }
+                return c.Respond()
+            }
+            return c.Respond(&tb.CallbackResponse{Text: "Unknown plan"})
         }
         if strings.HasPrefix(data, "buy:") {
             key := strings.TrimPrefix(data, "buy:")
@@ -248,13 +298,32 @@ func registerHandlers() {
         if strings.HasPrefix(payload, "buy:") {
             key := strings.TrimPrefix(payload, "buy:")
             if p := domain.FindPack(key); p != nil && store != nil {
-                _ = store.AddCredits(context.Background(), c.Sender().ID, p.Credits)
+                uid := c.Sender().ID
+                _ = store.AddCredits(context.Background(), uid, p.Credits)
+                _ = store.PayReferralBonus(context.Background(), uid)
                 bal := 0
-                if n, err := store.GetCredits(context.Background(), c.Sender().ID); err == nil { bal = n }
+                if n, err := store.GetCredits(context.Background(), uid); err == nil { bal = n }
                 lang := getUserLang(c)
                 msg := strings.ReplaceAll(i18n.T(lang, "bought"), "{add}", fmt.Sprintf("%d", p.Credits))
                 msg = strings.ReplaceAll(msg, "{all}", fmt.Sprintf("%d", bal))
                 return c.Send(msg)
+            }
+        }
+        if strings.HasPrefix(payload, "sub:") {
+            key := strings.TrimPrefix(payload, "sub:")
+            if p := domain.FindSubPlan(key); p != nil && store != nil {
+                uid := c.Sender().ID
+                _ = store.SetSubscription(context.Background(), uid, p.Key, p.Credits, p.Stars, payload)
+                _ = store.PayReferralBonus(context.Background(), uid)
+                var msg string
+                if p.Credits < 0 {
+                    msg = fmt.Sprintf("🚀 *%s* activated! Unlimited generations for 30 days.", p.Label)
+                } else {
+                    bal := 0
+                    if n, err := store.GetCredits(context.Background(), uid); err == nil { bal = n }
+                    msg = fmt.Sprintf("✅ *%s* activated! +%d credits added. Balance: %d.", p.Label, p.Credits, bal)
+                }
+                return c.Send(msg, tb.ModeMarkdown)
             }
         }
         return nil
@@ -299,13 +368,40 @@ func registerHandlers() {
         return c.Send(msg)
     })
 
+    // /subscribe — show subscription plans
+    tbot.Handle("/subscribe", func(c tb.Context) error {
+        var rows [][]tb.InlineButton
+        for _, p := range domain.SubPlans {
+            btn := tb.InlineButton{
+                Unique: "sub_" + p.Key,
+                Text:   fmt.Sprintf("%s — %d★/mo", p.Label, p.Stars),
+                Data:   "sub:" + p.Key,
+            }
+            rows = append(rows, []tb.InlineButton{btn})
+        }
+        mk := &tb.ReplyMarkup{InlineKeyboard: rows}
+        text := "🌟 *Choose your plan:*\n\n" +
+            "⭐ *Basic* — 400★/mo\n30 generations per month\n\n" +
+            "💎 *Pro* — 900★/mo\n100 generations + priority queue + Copy mode\n\n" +
+            "🚀 *Unlimited* — 2000★/mo\nUnlimited generations + priority queue + all features\n\n" +
+            "_Billed monthly via Telegram Stars. Cancel anytime._"
+        return c.Send(text, mk, tb.ModeMarkdown)
+    })
+
     // Referral link: /refer
     tbot.Handle("/refer", func(c tb.Context) error {
         uname := ""
         if tbot != nil && tbot.Me != nil { uname = tbot.Me.Username }
         if uname == "" { return c.Send("Unable to detect bot username.") }
         link := fmt.Sprintf("https://t.me/%s?start=ref_%d", uname, c.Sender().ID)
-        return c.Send("Invite a friend: " + link)
+        msg := fmt.Sprintf(
+            "👥 *Invite friends & earn credits*\n\nYour referral link:\n`%s`\n\n"+
+                "• Your friend gets 1 free generation on signup\n"+
+                "• You get *+3 credits* when they make their first purchase\n\n"+
+                "Share the link and start earning!",
+            link,
+        )
+        return c.Send(msg, tb.ModeMarkdown)
     })
 }
 
@@ -377,3 +473,10 @@ func isFreeUser(uid int64) bool {
     return false
 }
 func isAdmin(uid int64) bool { return appCfg.AdminIDs != nil && appCfg.AdminIDs[uid] }
+
+func isProUser(uid int64) bool {
+    if isAdmin(uid) { return true }
+    if store == nil { return false }
+    tier := store.GetSubTier(context.Background(), uid)
+    return tier == "pro" || tier == "unlimited"
+}

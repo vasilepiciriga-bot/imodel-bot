@@ -137,3 +137,74 @@ func (s *Store) UpsertReferral(ctx context.Context, userID, referrerID int64) er
     _, err := s.DB.Exec(ctx, `insert into referrals(user_id, referrer_id) values($1,$2) on conflict(user_id) do nothing`, userID, referrerID)
     return err
 }
+
+// ClaimStartBonus atomically gives 1 credit on first /start. Returns true if credit was granted.
+func (s *Store) ClaimStartBonus(ctx context.Context, tgID int64) (bool, error) {
+    if s.DB == nil { return false, nil }
+    tag, err := s.DB.Exec(ctx, `
+        update users set credits = coalesce(credits,0) + 1, start_bonus_claimed = true
+        where tg_id = $1 and coalesce(start_bonus_claimed, false) = false
+    `, tgID)
+    if err != nil { return false, err }
+    return tag.RowsAffected() > 0, nil
+}
+
+// GetSubTier returns the user's active subscription tier ("basic", "pro", "unlimited") or "".
+func (s *Store) GetSubTier(ctx context.Context, tgID int64) string {
+    if s.DB == nil { return "" }
+    var tier string
+    err := s.DB.QueryRow(ctx, `
+        select coalesce(nullif(sub_tier,''),'') from users
+        where tg_id = $1 and sub_until > now()
+    `, tgID).Scan(&tier)
+    if err != nil { return "" }
+    return tier
+}
+
+// SetSubscription activates a subscription tier for 30 days and adds credits.
+// For unlimited tier pass credits = -1 to skip credit addition.
+func (s *Store) SetSubscription(ctx context.Context, tgID int64, tier string, credits int, stars int, payload string) error {
+    if s.DB == nil { return nil }
+    tx, err := s.DB.Begin(ctx)
+    if err != nil { return err }
+    defer tx.Rollback(ctx)
+    _, err = tx.Exec(ctx, `
+        update users set sub_tier = $2, sub_until = now() + interval '30 days'
+        where tg_id = $1
+    `, tgID, tier)
+    if err != nil { return err }
+    if credits > 0 {
+        _, err = tx.Exec(ctx, `update users set credits = coalesce(credits,0) + $2 where tg_id = $1`, tgID, credits)
+        if err != nil { return err }
+    }
+    _, err = tx.Exec(ctx, `
+        insert into subscription_events(user_id, tier, stars, payload) values($1,$2,$3,$4)
+    `, tgID, tier, stars, payload)
+    if err != nil { return err }
+    return tx.Commit(ctx)
+}
+
+// HasUnlimitedSub returns true if user has an active unlimited subscription.
+func (s *Store) HasUnlimitedSub(ctx context.Context, tgID int64) bool {
+    return s.GetSubTier(ctx, tgID) == "unlimited"
+}
+
+// PayReferralBonus gives +3 credits to the referrer on the referred user's first purchase.
+// Safe to call multiple times — bonus is only paid once per referral.
+func (s *Store) PayReferralBonus(ctx context.Context, userID int64) error {
+    if s.DB == nil { return nil }
+    tx, err := s.DB.Begin(ctx)
+    if err != nil { return err }
+    defer tx.Rollback(ctx)
+    var referrerID int64
+    err = tx.QueryRow(ctx, `
+        select referrer_id from referrals
+        where user_id = $1 and coalesce(bonus_paid, false) = false and referrer_id is not null
+    `, userID).Scan(&referrerID)
+    if err != nil { return nil } // no referral or already paid — not an error
+    _, err = tx.Exec(ctx, `update users set credits = coalesce(credits,0) + 3 where tg_id = $1`, referrerID)
+    if err != nil { return err }
+    _, err = tx.Exec(ctx, `update referrals set bonus_paid = true where user_id = $1`, userID)
+    if err != nil { return err }
+    return tx.Commit(ctx)
+}

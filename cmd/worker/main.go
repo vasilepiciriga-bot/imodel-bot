@@ -22,7 +22,7 @@ func main() {
 
     srv := asynq.NewServer(asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB}, asynq.Config{
         Concurrency: cfg.WorkerConcurrency,
-        Queues:      map[string]int{queue.QueueDefault: 10, queue.QueueCritical: 20},
+        Queues:      map[string]int{queue.QueuePro: 30, queue.QueueCritical: 20, queue.QueueDefault: 10},
     })
     h := queue.NewHandler(cfg, logger, store)
 	mux := asynq.NewServeMux()

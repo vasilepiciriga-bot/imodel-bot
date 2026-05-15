@@ -65,9 +65,25 @@ func (h *Handler) HandleUpscale(ctx context.Context, t *asynq.Task) error {
 	if err := json.Unmarshal(t.Payload(), &p); err != nil { return err }
 	if h.rep == nil { return errors.New("replicate not configured") }
 
-    // ESRGAN upscale
-    up, err := h.rep.Generate(ctx, h.cfg.ESRGAN, map[string]any{"image": p.URL, "scale": 4, "face_enhance": false})
-    if err != nil || up == "" { up = p.URL }
+    // ESRGAN upscale with retry (up to 3 attempts, exponential backoff)
+    var up string
+    upscaled := false
+    for attempt := 0; attempt < 3; attempt++ {
+        if attempt > 0 {
+            time.Sleep(time.Duration(attempt*attempt) * 3 * time.Second)
+        }
+        var err error
+        up, err = h.rep.Generate(ctx, h.cfg.ESRGAN, map[string]any{"image": p.URL, "scale": 4, "face_enhance": true})
+        if err == nil && up != "" {
+            upscaled = true
+            break
+        }
+        h.log.Warn("esrgan attempt failed", "attempt", attempt+1, "err", err)
+    }
+    if !upscaled {
+        up = p.URL
+        _ = images.SendMessage(h.cfg.BotToken, p.ChatID, "⚠️ Upscale temporarily unavailable, sending preview quality.")
+    }
 
     finalURL := up
     // Try save to S3 for durability
@@ -94,6 +110,7 @@ func (h *Handler) isFreeUser(uid int64) bool {
     if h.cfg.AdminIDs != nil && h.cfg.AdminIDs[uid] { return true }
     if h.cfg.WhitelistIDs != nil && h.cfg.WhitelistIDs[uid] { return true }
     if h.db != nil && h.db.IsWhitelisted(context.Background(), uid) { return true }
+    if h.db != nil && h.db.HasUnlimitedSub(context.Background(), uid) { return true }
     return false
 }
 

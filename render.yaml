@@ -1,0 +1,88 @@
+services:
+  - type: web
+    name: imodel-web
+    env: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile.v3
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: ENV
+        value: prod
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: imodel-db
+          property: connectionString
+      - key: REDIS_ADDR
+        fromService:
+          name: imodel-redis
+          type: redis
+          property: connectionString
+      - key: ADMIN_PANEL_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: PREVIEW_FIRST
+        value: "1"
+
+  - type: worker
+    name: imodel-worker
+    env: docker
+    dockerfilePath: ./Dockerfile.v3
+    startCommand: /usr/local/bin/worker
+    envVars:
+      - key: ENV
+        value: prod
+      - key: BOT_TOKEN
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: imodel-db
+          property: connectionString
+      - key: REDIS_ADDR
+        fromService:
+          name: imodel-redis
+          type: redis
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: PREVIEW_FIRST
+        value: "1"
+
+databases:
+  - name: imodel-db
+    plan: starter
+
+redis:
+  - name: imodel-redis
+    plan: starter
