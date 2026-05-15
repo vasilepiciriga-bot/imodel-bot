@@ -14,6 +14,8 @@ type Config struct {
     AdminSecret    string
     AdminIDs       map[int64]bool
     WhitelistIDs   map[int64]bool
+    AdminBasicUser string
+    AdminBasicPass string
 
 	RedisAddr      string
 	RedisPassword  string
@@ -69,6 +71,8 @@ func Load() Config {
         AdminSecret:   getenv("ADMIN_PANEL_SECRET", getenv("METRICS_SECRET", "")),
         AdminIDs:      parseIDs(getenv("ADMIN_IDS", "")),
         WhitelistIDs:  parseIDs(getenv("WHITELIST_IDS", "")),
+        AdminBasicUser: getenv("ADMIN_BASIC_USER", ""),
+        AdminBasicPass: getenv("ADMIN_BASIC_PASS", ""),
 
 		RedisAddr:     getenv("REDIS_ADDR", getenv("REDIS_URL", "127.0.0.1:6379")),
 		RedisPassword: getenv("REDIS_PASSWORD", ""),

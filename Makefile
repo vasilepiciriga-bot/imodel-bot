@@ -1,4 +1,4 @@
-.PHONY: web worker build run-web run-worker migrate set-webhook compose-up compose-build
+.PHONY: web worker build run-web run-worker migrate set-webhook compose-up compose-build env-migrate
 
 build:
 	CGO_ENABLED=0 go build -o bin/web ./cmd/web
@@ -21,3 +21,6 @@ compose-build:
 
 compose-up:
 	docker compose up -d
+
+env-migrate:
+	go run ./scripts/env_migrate.go -in old.env -out .env

@@ -1,11 +1,13 @@
 package admin
 
 import (
-	"strconv"
+    "encoding/base64"
+    "strings"
+    "strconv"
 
-	"github.com/gofiber/fiber/v2"
-	"imodel-bot/internal/config"
-	"imodel-bot/internal/repo"
+    "github.com/gofiber/fiber/v2"
+    "imodel-bot/internal/config"
+    "imodel-bot/internal/repo"
 )
 
 // RegisterAdminUI wires lightweight admin HTML and JSON endpoints.
@@ -31,10 +33,17 @@ func RegisterAdminUI(app *fiber.App, cfg config.Config, store *repo.Store) {
 	})
 
 	// Minimal HTML admin page (client-side calls with X-Admin-Secret from localStorage)
-	app.Get("/admin/ui", func(c *fiber.Ctx) error {
-		html := adminHTML()
-		return c.Type("html").SendString(html)
-	})
+    app.Get("/admin/ui", func(c *fiber.Ctx) error {
+        if needBasic(cfg) {
+            u, p, ok := parseBasic(c.Get("Authorization"))
+            if !ok || u != cfg.AdminBasicUser || p != cfg.AdminBasicPass {
+                c.Set("WWW-Authenticate", "Basic realm=\"Admin\"")
+                return c.SendStatus(fiber.StatusUnauthorized)
+            }
+        }
+        html := adminHTML()
+        return c.Type("html").SendString(html)
+    })
 }
 
 func adminHTML() string {
@@ -83,4 +92,16 @@ function lookup(){ const id=parseInt(document.getElementById('luid').value||'0')
 function loadwl(){ fetch('/admin/whitelist',{headers:H()}).then(r=>r.json()).then(j=>document.getElementById('list_out').textContent=JSON.stringify(j,null,2)).catch(e=>alert(e)); }
 </script>
 </body></html>`
+}
+
+func needBasic(cfg config.Config) bool { return cfg.AdminBasicUser != "" || cfg.AdminBasicPass != "" }
+
+func parseBasic(auth string) (user, pass string, ok bool) {
+    const prefix = "Basic "
+    if !strings.HasPrefix(auth, prefix) { return "","",false }
+    raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(auth[len(prefix):]))
+    if err != nil { return "","",false }
+    parts := strings.SplitN(string(raw), ":", 2)
+    if len(parts) != 2 { return "","",false }
+    return parts[0], parts[1], true
 }
