@@ -397,8 +397,13 @@ def is_free_user(uid: int, username: Optional[str] = None) -> bool:
     return is_admin(uid, username)
 
 # ===================== State ========================
-BOT_RUNTIME_TOKEN = BOT_TOKEN or "123456:missing-render-bot-token"
-bot = Bot(token=BOT_RUNTIME_TOKEN)
+_PLACEHOLDER_TOKEN = "1000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+BOT_RUNTIME_TOKEN = BOT_TOKEN or _PLACEHOLDER_TOKEN
+try:
+    bot = Bot(token=BOT_RUNTIME_TOKEN)
+except Exception as _bot_err:
+    print(f"[WARN] Bot init failed ({_bot_err}), using placeholder — set BOT_TOKEN env var", flush=True)
+    bot = Bot(token=_PLACEHOLDER_TOKEN)
 dp = Dispatcher()
 app = FastAPI(title="iModel Bot")
 api = app  # alias
@@ -3869,10 +3874,3 @@ async def admin_panel(request: Request):
     return HTMLResponse(content=html)
 
 
-@api.on_event("shutdown")
-async def on_shutdown():
-    try:
-        await bot.session.close()
-    except Exception:
-        pass
-    
