@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramRetryAfter
+from aiogram.utils.token import validate_token, TokenValidationError
 from aiogram.types import (
     Message, Update, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -51,7 +52,14 @@ except Exception:
 APP_VERSION = "iModel 2.6.0"
 
 # ===================== ENV ==========================
-BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN      = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN_RAW  = BOT_TOKEN
+try:
+    if BOT_TOKEN:
+        validate_token(BOT_TOKEN)
+except TokenValidationError as e:
+    print(f"⚠️ Invalid BOT_TOKEN format; Telegram disabled for this boot: {e}")
+    BOT_TOKEN = ""
 WEBHOOK_BASE   = os.getenv("WEBHOOK_BASE", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret123")
 WEBHOOK_ALLOW_QUERY_SECRET = os.getenv("WEBHOOK_ALLOW_QUERY_SECRET", "0") == "1"

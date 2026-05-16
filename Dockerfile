@@ -13,5 +13,5 @@ RUN pip install -U pip && pip install -r requirements.txt
 
 COPY . .
 
-# Render/Railway provide PORT at runtime; default keeps local Docker simple.
-CMD ["sh", "-c", "uvicorn app:api --host 0.0.0.0 --port ${PORT:-8080}"]
+# boot.py prints startup diagnostics and respects Render/Railway PORT.
+CMD ["python", "boot.py"]
