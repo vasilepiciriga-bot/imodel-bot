@@ -13,5 +13,5 @@ RUN pip install -U pip && pip install -r requirements.txt
 
 COPY . .
 
-# FastAPI на 8080 (Railway экспонирует сам)
-CMD ["uvicorn", "app:api", "--host", "0.0.0.0", "--port", "8080"]
+# Render/Railway provide PORT at runtime; default keeps local Docker simple.
+CMD ["sh", "-c", "uvicorn app:api --host 0.0.0.0 --port ${PORT:-8080}"]

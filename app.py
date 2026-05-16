@@ -389,7 +389,8 @@ def is_free_user(uid: int, username: Optional[str] = None) -> bool:
     return is_admin(uid, username)
 
 # ===================== State ========================
-bot = Bot(token=BOT_TOKEN)
+BOT_RUNTIME_TOKEN = BOT_TOKEN or "123456:missing-render-bot-token"
+bot = Bot(token=BOT_RUNTIME_TOKEN)
 dp = Dispatcher()
 app = FastAPI(title="iModel Bot")
 api = app  # alias
@@ -3364,9 +3365,15 @@ async def on_startup():
         print("Publish group:", PUBLISH_GROUP_ID)
     print("Models → main:", NANOBANANA_MODEL or "<unset>")
 
-    me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
-    BOT_USERNAME_GLOBAL = me.username
+    if BOT_TOKEN:
+        try:
+            me = await bot.get_me()
+            BOT_USERNAME_GLOBAL = me.username
+        except Exception as e:
+            print("Telegram get_me error:", str(e)[:200])
+    else:
+        print("⚠️ Нет BOT_TOKEN; Telegram handlers disabled until env is configured")
 
     if BOT_TOKEN and WEBHOOK_BASE:
         await ensure_webhook()
@@ -3374,24 +3381,28 @@ async def on_startup():
     else:
         print("⚠️ Нет BOT_TOKEN или WEBHOOK_BASE")
 
-    await bot.set_my_commands(
-        commands=[
-            BotCommand(command="start",   description="Начать"),
-            BotCommand(command="buy",     description="Купить звёздами"),
-            BotCommand(command="promo",   description="Промокод"),
-            BotCommand(command="balance", description="Баланс"),
-            BotCommand(command="presets", description="Идеи описаний"),
-            BotCommand(command="lang",    description="Сменить язык"),
-            BotCommand(command="gallery", description="Моя галерея"),
-            BotCommand(command="refer",   description="Реферальная ссылка"),
-            BotCommand(command="pricing", description="Тарифы"),
-            BotCommand(command="copy",    description="Скопировать фото"),
-            BotCommand(command="help",    description="Помощь"),
-            BotCommand(command="clear",   description="Очистить память"),
-            BotCommand(command="version", description="Версия"),
-        ],
-        scope=BotCommandScopeDefault()
-    )
+    if BOT_TOKEN:
+        try:
+            await bot.set_my_commands(
+                commands=[
+                    BotCommand(command="start",   description="Начать"),
+                    BotCommand(command="buy",     description="Купить звёздами"),
+                    BotCommand(command="promo",   description="Промокод"),
+                    BotCommand(command="balance", description="Баланс"),
+                    BotCommand(command="presets", description="Идеи описаний"),
+                    BotCommand(command="lang",    description="Сменить язык"),
+                    BotCommand(command="gallery", description="Моя галерея"),
+                    BotCommand(command="refer",   description="Реферальная ссылка"),
+                    BotCommand(command="pricing", description="Тарифы"),
+                    BotCommand(command="copy",    description="Скопировать фото"),
+                    BotCommand(command="help",    description="Помощь"),
+                    BotCommand(command="clear",   description="Очистить память"),
+                    BotCommand(command="version", description="Версия"),
+                ],
+                scope=BotCommandScopeDefault()
+            )
+        except Exception as e:
+            print("set_my_commands error:", str(e)[:200])
     # Background nudges
     try:
         if NUDGE_ENABLED:
@@ -3408,7 +3419,8 @@ async def on_startup():
 async def on_shutdown():
     print("🛑 Shutting down...")
     try:
-        await bot.delete_webhook()
+        if BOT_TOKEN:
+            await bot.delete_webhook()
     finally:
         await bot.session.close()
     print("✅ Webhook removed")
