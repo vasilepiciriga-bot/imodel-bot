@@ -5,3 +5,6 @@ requests
 replicate
 boto3
 openai
+Pillow
+python-dotenv
+pytest
