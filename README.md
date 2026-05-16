@@ -1,6 +1,6 @@
 # iModel — Telegram AI Photo Bot
 
-Пайплайн: Telegram фото/промпт → job → GPT/Vision (опционально) → Replicate Nano Banana → Real-ESRGAN → S3 original/Telegram copy → доставка в Telegram.
+Пайплайн: Telegram фото/промпт → job → GPT/Vision (опционально) → Replicate Nano Banana → S3 original/Telegram copy → доставка в Telegram.
 
 Бот нормализует результат под лимиты Telegram `sendPhoto` и автоматически падает назад на `sendDocument`, если Telegram отклоняет фото.
 

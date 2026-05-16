@@ -1,6 +1,6 @@
 # app.py — iModel v2.6.0
 # Copy-mode v2 (Scene Lock) + Identity Lock ++ Negative + Stable Seed
-# Остальное: AutoLang + GPT refine + S3 + Replicate (NanoBanana + RealESRGAN_x4plus)
+# Остальное: AutoLang + GPT refine + S3 + Replicate (NanoBanana)
 # Stars + Whitelist/Admin unlimited + Promo + 3 langs + pricing + gallery + refer
 # Безопасные отправки; Видео/анимация отключены. Доставка — байты.
 
@@ -333,8 +333,6 @@ def _s3_get_text(key: str) -> Optional[str]:
 
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
-ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
-ESRGAN_DISABLED  = False  # auto-disable on first 404
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -1525,15 +1523,6 @@ def generate_group_post_image(lang: str) -> Optional[bytes]:
         if url and url.startswith("http"):
             img = _download_with_retries(url)
             if img:
-                # Optional upscale
-                try:
-                    up = replicate_generate(ESRGAN_MODEL, {"image": url, "scale": 2, "face_enhance": False, "model":"RealESRGAN_x4plus"})
-                    if up and up.startswith("http"):
-                        upb = _download_with_retries(up)
-                        if upb:
-                            return upb
-                except Exception as e:
-                    print("group ESRGAN error:", str(e)[:160])
                 return img
     except Exception as e:
         print("group image generate error:", str(e)[:160])
@@ -2135,30 +2124,7 @@ def generate_image_from_bytes(
     except Exception:
         pass
 
-    # Бережный апскейл
-    try:
-        global ESRGAN_DISABLED
-        if not ESRGAN_MODEL or ESRGAN_DISABLED:
-            return nano_bytes
-        up_url = replicate_generate(ESRGAN_MODEL, {
-            "image": gen_url,
-            "scale": 4,
-            "face_enhance": False,
-            "model": "RealESRGAN_x4plus"
-        })
-        if up_url and up_url.startswith("http"):
-            up_bytes = _download_with_retries(up_url)
-            if up_bytes:
-                print("→ ESRGAN x4plus OK")
-                return up_bytes
-        return nano_bytes
-    except Exception as e:
-        em = str(e)
-        print("ESRGAN error:", em[:200])
-        if "404" in em:
-            ESRGAN_DISABLED = True
-            print("→ Disable upscaler for this runtime (404)")
-        return nano_bytes
+    return nano_bytes
 
 
 def _public_job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -3396,7 +3362,7 @@ async def on_startup():
         print("Gallery channel:", GALLERY_CHANNEL_ID, "AUTO_POST:", AUTO_POST)
     if PUBLISH_GROUP_ID:
         print("Publish group:", PUBLISH_GROUP_ID)
-    print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>")
+    print("Models → main:", NANOBANANA_MODEL or "<unset>")
 
     me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
