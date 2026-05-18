@@ -1,5 +1,5 @@
-# app.py — iModel v2.6.0
-# Copy-mode v2 (Scene Lock) + Identity Lock ++ Negative + Stable Seed
+# app.py — iModel v2.7.0
+# Copy-mode v2 (Scene Lock) + Identity Lock
 # Остальное: AutoLang + GPT refine + S3 + Replicate NanoBanana
 # Stars + Whitelist/Admin unlimited + Promo + 3 langs + pricing + gallery + refer
 # Безопасные отправки; Видео/анимация отключены. Доставка — байты.
@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import io
 import json
 import re
 import time
@@ -16,10 +17,12 @@ import random
 import hashlib
 import hmac
 import asyncio
-from typing import Optional, Dict, List, Set
+import html as html_lib
+from urllib.parse import parse_qsl
+from typing import Optional, Dict, List, Set, Any, Tuple
 
 import requests
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, HTMLResponse
 
 from aiogram import Bot, Dispatcher, F
@@ -31,7 +34,7 @@ from aiogram.types import (
     LabeledPrice, PreCheckoutQuery,
     BufferedInputFile,
     BotCommand, BotCommandScopeDefault,
-    InputMediaPhoto,
+    InputMediaPhoto, WebAppInfo,
 )
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 
@@ -39,13 +42,25 @@ import replicate
 import boto3
 from botocore.config import Config
 
+try:
+    import psycopg
+except Exception:
+    psycopg = None
+
+try:
+    from PIL import Image, ImageFilter, ImageStat
+except Exception:
+    Image = None
+    ImageFilter = None
+    ImageStat = None
+
 # ---------- OpenAI (GPT + Vision) ----------
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
 
-APP_VERSION = "iModel 2.6.0"
+APP_VERSION = "iModel 2.7.0"
 
 # ===================== ENV ==========================
 BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
@@ -63,6 +78,9 @@ os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MODEL_VISION = os.getenv("OPENAI_MODEL_VISION", OPENAI_MODEL)
+
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or ""
+DB_READY = False
 
 # Auto posts to group (educational, witty)
 GROUP_POSTS_ENABLED   = os.getenv("GROUP_POSTS_ENABLED", "0") == "1"
@@ -112,9 +130,283 @@ STATS = {
     "nudges_sent": 0,
     "nudges_errors": 0,
     "nudges_granted": 0,
+    "jobs_created": 0,
+    "jobs_done": 0,
+    "jobs_failed": 0,
+    "delivery_photo_ok": 0,
+    "delivery_document_ok": 0,
+    "delivery_failed": 0,
+    "generation_latency_total_ms": 0,
+    "generation_latency_count": 0,
 }
 STATS_USERS: Set[int] = set()
 STATS_USERS_INFO: Dict[int, Dict[str, object]] = {}
+
+def _safe_user_hash(uid: Optional[int]) -> str:
+    if not uid:
+        return ""
+    salt = WEBHOOK_SECRET or BOT_TOKEN or "imodel"
+    return hashlib.sha256(f"{uid}:{salt[:12]}".encode("utf-8")).hexdigest()[:16]
+
+def log_event(event: str, **fields: Any):
+    payload: Dict[str, Any] = {
+        "ts": round(time.time(), 3),
+        "event": event,
+        "app": APP_VERSION,
+    }
+    for k, v in fields.items():
+        if v is None:
+            continue
+        if k in {"chat_id", "user_id", "uid"} or k.endswith("_uid"):
+            payload[f"{k}_hash"] = _safe_user_hash(int(v)) if str(v).lstrip("-").isdigit() else ""
+            continue
+        if isinstance(v, (str, int, float, bool, list, dict)):
+            payload[k] = v
+        else:
+            payload[k] = str(v)
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+def _db_connect():
+    if not DATABASE_URL or psycopg is None:
+        return None
+    return psycopg.connect(DATABASE_URL, autocommit=True)
+
+def _db_execute(sql: str, params: tuple = ()) -> bool:
+    if not DB_READY:
+        return False
+    try:
+        with _db_connect() as conn:
+            if conn is None:
+                return False
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+        return True
+    except Exception as e:
+        log_event("db_execute_error", error=str(e)[:180])
+        return False
+
+def _db_fetchall(sql: str, params: tuple = ()) -> List[tuple]:
+    if not DB_READY:
+        return []
+    try:
+        with _db_connect() as conn:
+            if conn is None:
+                return []
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return list(cur.fetchall() or [])
+    except Exception as e:
+        log_event("db_fetch_error", error=str(e)[:180])
+        return []
+
+def db_init():
+    global DB_READY
+    if not DATABASE_URL or psycopg is None:
+        DB_READY = False
+        if DATABASE_URL and psycopg is None:
+            log_event("db_disabled", reason="psycopg_not_installed")
+        return
+    try:
+        with _db_connect() as conn:
+            if conn is None:
+                DB_READY = False
+                return
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_users (
+                        uid BIGINT PRIMARY KEY,
+                        username TEXT,
+                        info_json TEXT NOT NULL DEFAULT '{}',
+                        role TEXT NOT NULL DEFAULT 'user',
+                        grants_json TEXT NOT NULL DEFAULT '[]',
+                        created_at DOUBLE PRECISION NOT NULL,
+                        updated_at DOUBLE PRECISION NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_credits (
+                        uid BIGINT PRIMARY KEY,
+                        credits INTEGER NOT NULL,
+                        updated_at DOUBLE PRECISION NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_stats_totals (
+                        key TEXT PRIMARY KEY,
+                        value BIGINT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_stats_daily (
+                        day TEXT NOT NULL,
+                        key TEXT NOT NULL,
+                        value BIGINT NOT NULL,
+                        PRIMARY KEY (day, key)
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        kind TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        chat_id BIGINT,
+                        username TEXT,
+                        prompt TEXT,
+                        model TEXT,
+                        timeline_json TEXT NOT NULL DEFAULT '[]',
+                        result_json TEXT NOT NULL DEFAULT '{}',
+                        error TEXT,
+                        created_at DOUBLE PRECISION NOT NULL,
+                        updated_at DOUBLE PRECISION NOT NULL
+                    )
+                """)
+                cur.execute("ALTER TABLE imodel_jobs ADD COLUMN IF NOT EXISTS result_json TEXT NOT NULL DEFAULT '{}'")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_audit_log (
+                        id BIGSERIAL PRIMARY KEY,
+                        actor_uid BIGINT,
+                        action TEXT NOT NULL,
+                        target_uid BIGINT,
+                        data_json TEXT NOT NULL DEFAULT '{}',
+                        created_at DOUBLE PRECISION NOT NULL
+                    )
+                """)
+        DB_READY = True
+        log_event("db_ready", backend="postgres")
+    except Exception as e:
+        DB_READY = False
+        log_event("db_init_error", error=str(e)[:240])
+
+def _db_save_stats_totals():
+    if not DB_READY:
+        return
+    rows = [(k, int(v)) for k, v in STATS.items() if k != "start_ts" and isinstance(v, (int, float))]
+    for k, v in rows:
+        _db_execute(
+            "INSERT INTO imodel_stats_totals(key, value) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            (k, v),
+        )
+
+def _db_load_stats_totals() -> Dict[str, int]:
+    rows = _db_fetchall("SELECT key, value FROM imodel_stats_totals")
+    return {str(k): int(v) for k, v in rows}
+
+def _db_save_stats_daily():
+    if not DB_READY:
+        return
+    for day, vals in STATS_DAILY.items():
+        for k, v in vals.items():
+            _db_execute(
+                "INSERT INTO imodel_stats_daily(day, key, value) VALUES (%s, %s, %s) "
+                "ON CONFLICT (day, key) DO UPDATE SET value = EXCLUDED.value",
+                (day, k, int(v)),
+            )
+
+def _db_load_stats_daily() -> Dict[str, Dict[str, int]]:
+    out: Dict[str, Dict[str, int]] = {}
+    for day, key, value in _db_fetchall("SELECT day, key, value FROM imodel_stats_daily"):
+        out.setdefault(str(day), {})[str(key)] = int(value)
+    return out
+
+def _db_save_user(uid: int, info: Dict[str, object]):
+    if not DB_READY:
+        return
+    role = USER_ROLES.get(uid) or role_for_user(uid, str(info.get("username") or "") or None)
+    grants = sorted(USER_GRANTS.get(uid, set()))
+    _db_execute(
+        "INSERT INTO imodel_users(uid, username, info_json, role, grants_json, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (uid) DO UPDATE SET username = EXCLUDED.username, info_json = EXCLUDED.info_json, "
+        "role = EXCLUDED.role, grants_json = EXCLUDED.grants_json, updated_at = EXCLUDED.updated_at",
+        (
+            uid,
+            str(info.get("username") or "")[:64],
+            json.dumps(info, ensure_ascii=False),
+            role,
+            json.dumps(grants, ensure_ascii=False),
+            float(info.get("first_seen", time.time()) or time.time()),
+            time.time(),
+        ),
+    )
+
+def _db_load_users() -> Dict[int, Dict[str, object]]:
+    out: Dict[int, Dict[str, object]] = {}
+    rows = _db_fetchall("SELECT uid, info_json, role, grants_json FROM imodel_users")
+    for uid, info_json, role, grants_json in rows:
+        try:
+            iuid = int(uid)
+            info = json.loads(info_json or "{}")
+            out[iuid] = info
+            loaded_role = str(role or "user")
+            username = str(info.get("username") or "")
+            if iuid in ADMIN_IDS:
+                loaded_role = "owner"
+            elif username and username.lower() in ADMIN_USERNAMES and loaded_role == "user":
+                loaded_role = "admin"
+            USER_ROLES[iuid] = loaded_role
+            USER_GRANTS[iuid] = set(json.loads(grants_json or "[]"))
+        except Exception:
+            continue
+    return out
+
+def _db_save_credit(uid: int, credits: int):
+    if not DB_READY:
+        return
+    _db_execute(
+        "INSERT INTO imodel_credits(uid, credits, updated_at) VALUES (%s, %s, %s) "
+        "ON CONFLICT (uid) DO UPDATE SET credits = EXCLUDED.credits, updated_at = EXCLUDED.updated_at",
+        (uid, int(credits), time.time()),
+    )
+
+def _db_load_credits() -> Dict[int, int]:
+    return {int(uid): int(credits) for uid, credits in _db_fetchall("SELECT uid, credits FROM imodel_credits")}
+
+def _db_job_to_dict(row: tuple) -> Dict[str, Any]:
+    (
+        job_id, kind, status, chat_id, username, prompt, model,
+        timeline_json, result_json, error, created_at, updated_at,
+    ) = row
+    try:
+        timeline = json.loads(timeline_json or "[]")
+    except Exception:
+        timeline = []
+    try:
+        result = json.loads(result_json or "{}")
+    except Exception:
+        result = {}
+    job: Dict[str, Any] = {
+        "job_id": str(job_id),
+        "kind": str(kind or "generation"),
+        "status": str(status or "queued"),
+        "chat_id": int(chat_id) if chat_id is not None else None,
+        "username": str(username or ""),
+        "prompt": str(prompt or ""),
+        "model": str(model or NANOBANANA_MODEL),
+        "timeline": timeline,
+        "error": str(error or ""),
+        "created_at": float(created_at or time.time()),
+        "updated_at": float(updated_at or time.time()),
+    }
+    if isinstance(result, dict):
+        job.update(result)
+    return job
+
+def _db_load_recent_jobs(limit: int = 50) -> List[Dict[str, Any]]:
+    rows = _db_fetchall(
+        "SELECT job_id, kind, status, chat_id, username, prompt, model, timeline_json, result_json, error, created_at, updated_at "
+        "FROM imodel_jobs ORDER BY updated_at DESC LIMIT %s",
+        (int(limit),),
+    )
+    return [_db_job_to_dict(row) for row in rows]
+
+def _db_load_job(job_id: str) -> Optional[Dict[str, Any]]:
+    rows = _db_fetchall(
+        "SELECT job_id, kind, status, chat_id, username, prompt, model, timeline_json, result_json, error, created_at, updated_at "
+        "FROM imodel_jobs WHERE job_id = %s LIMIT 1",
+        (job_id,),
+    )
+    return _db_job_to_dict(rows[0]) if rows else None
 
 # ===== Persistent stats storage =====
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -150,6 +442,7 @@ def stats_save_totals():
         # Don't persist huge sets in totals
         to_save.pop("start_ts", None)
         _save_json_atomic(STATS_TOTALS_FILE, to_save)
+        _db_save_stats_totals()
         try:
             _s3_put_text(STATE_PREFIX + "stats_totals.json", json.dumps(to_save, ensure_ascii=False))
         except Exception:
@@ -159,14 +452,20 @@ def stats_save_totals():
 
 def stats_save_daily():
     _save_json_atomic(STATS_DAILY_FILE, STATS_DAILY)
+    _db_save_stats_daily()
     try:
         _s3_put_text(STATE_PREFIX + "stats_daily.json", json.dumps(STATS_DAILY, ensure_ascii=False))
     except Exception:
         pass
 
-def users_save():
+def users_save(uid: Optional[int] = None):
     try:
         _save_json_atomic(USERS_FILE, STATS_USERS_INFO)
+        if uid is not None and uid in STATS_USERS_INFO:
+            _db_save_user(uid, STATS_USERS_INFO[uid])
+        elif DB_READY:
+            for u, info in STATS_USERS_INFO.items():
+                _db_save_user(int(u), info)
         try:
             _s3_put_text(STATE_PREFIX + "users.json", json.dumps(STATS_USERS_INFO, ensure_ascii=False))
         except Exception:
@@ -178,10 +477,14 @@ def stats_load():
     global STATS_DAILY
     try:
         loaded = None
-        txt = _s3_get_text(STATE_PREFIX + "stats_totals.json")
-        if txt:
-            loaded = json.loads(txt)
-        elif os.path.exists(STATS_TOTALS_FILE):
+        db_loaded = _db_load_stats_totals()
+        if db_loaded:
+            loaded = db_loaded
+        else:
+            txt = _s3_get_text(STATE_PREFIX + "stats_totals.json")
+            if txt:
+                loaded = json.loads(txt)
+        if loaded is None and os.path.exists(STATS_TOTALS_FILE):
             with open(STATS_TOTALS_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
         if loaded:
@@ -191,26 +494,37 @@ def stats_load():
                         STATS[k] = v
                 except Exception:
                     pass
+            _db_save_stats_totals()
     except Exception as e:
         print("[stats] load totals error:", str(e)[:160])
     try:
-        txt = _s3_get_text(STATE_PREFIX + "stats_daily.json")
-        if txt:
-            STATS_DAILY = json.loads(txt) or {}
-        elif os.path.exists(STATS_DAILY_FILE):
-            with open(STATS_DAILY_FILE, "r", encoding="utf-8") as f:
-                STATS_DAILY = json.load(f) or {}
+        db_daily = _db_load_stats_daily()
+        if db_daily:
+            STATS_DAILY = db_daily
         else:
-            STATS_DAILY = {}
+            txt = _s3_get_text(STATE_PREFIX + "stats_daily.json")
+            if txt:
+                STATS_DAILY = json.loads(txt) or {}
+            elif os.path.exists(STATS_DAILY_FILE):
+                with open(STATS_DAILY_FILE, "r", encoding="utf-8") as f:
+                    STATS_DAILY = json.load(f) or {}
+            else:
+                STATS_DAILY = {}
+        if DB_READY and STATS_DAILY:
+            _db_save_stats_daily()
     except Exception as e:
         print("[stats] load daily error:", str(e)[:160])
         STATS_DAILY = {}
     try:
         data = None
-        txt = _s3_get_text(STATE_PREFIX + "users.json")
-        if txt:
-            data = json.loads(txt) or {}
-        elif os.path.exists(USERS_FILE):
+        db_users = _db_load_users()
+        if db_users:
+            data = db_users
+        else:
+            txt = _s3_get_text(STATE_PREFIX + "users.json")
+            if txt:
+                data = json.loads(txt) or {}
+        if data is None and os.path.exists(USERS_FILE):
             with open(USERS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
         if data:
@@ -219,6 +533,7 @@ def stats_load():
                     STATS_USERS_INFO[int(uid_str)] = info
                 except Exception:
                     continue
+            users_save()
     except Exception as e:
         print("[users] load error:", str(e)[:160])
 
@@ -266,7 +581,7 @@ def _touch_user(uid: int, username: Optional[str] = None):
             info["username"] = username[:64]
     # persist user info after updates
     try:
-        users_save()
+        users_save(uid)
     except Exception:
         pass
 
@@ -280,7 +595,7 @@ def _uadd(uid: int, key: str, n: int = 1):
     except Exception:
         info[key] = n
     try:
-        users_save()
+        users_save(uid)
     except Exception:
         pass
 
@@ -366,12 +681,130 @@ ADMIN_USERNAMES = {
     if u.strip()
 }
 
+VALID_ROLES = {"owner", "admin", "operator", "support", "publisher", "user", "banned"}
+ROLE_GRANTS: Dict[str, Set[str]] = {
+    "owner": {
+        "admin.view", "users.manage", "credits.grant", "jobs.view", "jobs.retry",
+        "broadcast.send", "gallery.publish", "promos.manage", "logs.view",
+    },
+    "admin": {
+        "admin.view", "users.manage", "credits.grant", "jobs.view", "jobs.retry",
+        "gallery.publish", "promos.manage", "logs.view",
+    },
+    "operator": {"admin.view", "jobs.view", "jobs.retry", "logs.view"},
+    "support": {"admin.view", "jobs.view"},
+    "publisher": {"gallery.publish"},
+    "user": set(),
+    "banned": set(),
+}
+USER_ROLES: Dict[int, str] = {}
+USER_GRANTS: Dict[int, Set[str]] = {}
+AUDIT_LOG: List[Dict[str, Any]] = []
+JOBS: Dict[str, Dict[str, Any]] = {}
+
 def is_admin(uid: int, username: Optional[str] = None) -> bool:
     if uid in ADMIN_IDS:
         return True
     if username:
         return username.lower() in ADMIN_USERNAMES
     return False
+
+def role_for_user(uid: int, username: Optional[str] = None) -> str:
+    if uid in USER_ROLES:
+        return USER_ROLES[uid]
+    if uid in ADMIN_IDS:
+        return "owner"
+    if username and username.lower() in ADMIN_USERNAMES:
+        return "admin"
+    return "user"
+
+def grants_for_user(uid: int, username: Optional[str] = None) -> Set[str]:
+    role = role_for_user(uid, username)
+    return set(ROLE_GRANTS.get(role, set())) | set(USER_GRANTS.get(uid, set()))
+
+def has_grant(uid: int, username: Optional[str], grant: str) -> bool:
+    return grant in grants_for_user(uid, username)
+
+def audit_log(actor_uid: Optional[int], action: str, target_uid: Optional[int] = None, **data: Any):
+    entry = {
+        "actor_uid": actor_uid,
+        "action": action,
+        "target_uid": target_uid,
+        "data": data,
+        "created_at": time.time(),
+    }
+    AUDIT_LOG.append(entry)
+    if len(AUDIT_LOG) > 500:
+        del AUDIT_LOG[:-500]
+    if DB_READY:
+        _db_execute(
+            "INSERT INTO imodel_audit_log(actor_uid, action, target_uid, data_json, created_at) VALUES (%s, %s, %s, %s, %s)",
+            (actor_uid, action, target_uid, json.dumps(data, ensure_ascii=False), entry["created_at"]),
+        )
+    log_event("audit", actor_uid=actor_uid, action=action, target_uid=target_uid, data=data)
+
+def _job_result_json(job: Dict[str, Any]) -> str:
+    result = {}
+    for key in ("output_url", "output_bytes", "delivery_message_id"):
+        if key in job:
+            result[key] = job.get(key)
+    return json.dumps(result, ensure_ascii=False)
+
+def _db_save_job(job: Dict[str, Any]):
+    if not DB_READY:
+        return
+    _db_execute(
+        "INSERT INTO imodel_jobs(job_id, kind, status, chat_id, username, prompt, model, timeline_json, result_json, error, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (job_id) DO UPDATE SET status = EXCLUDED.status, chat_id = EXCLUDED.chat_id, "
+        "username = EXCLUDED.username, prompt = EXCLUDED.prompt, model = EXCLUDED.model, "
+        "timeline_json = EXCLUDED.timeline_json, result_json = EXCLUDED.result_json, "
+        "error = EXCLUDED.error, updated_at = EXCLUDED.updated_at",
+        (
+            job.get("job_id"),
+            job.get("kind", "generation"),
+            job.get("status", "queued"),
+            job.get("chat_id"),
+            str(job.get("username") or "")[:64],
+            str(job.get("prompt") or "")[:4000],
+            str(job.get("model") or NANOBANANA_MODEL),
+            json.dumps(job.get("timeline") or [], ensure_ascii=False),
+            _job_result_json(job),
+            str(job.get("error") or "")[:1000],
+            float(job.get("created_at") or time.time()),
+            float(job.get("updated_at") or time.time()),
+        ),
+    )
+
+def record_job(job_id: Optional[str] = None, **updates: Any) -> Dict[str, Any]:
+    jid = job_id or uuid.uuid4().hex
+    job = JOBS.setdefault(jid, {"job_id": jid, "created_at": time.time(), "timeline": []})
+    job.update(updates)
+    job["updated_at"] = time.time()
+    _db_save_job(job)
+    log_event("job_record", job_id=jid, status=job.get("status"), kind=job.get("kind"), chat_id=job.get("chat_id"))
+    return job
+
+def job_event(job_id: Optional[str], event: str, **fields: Any):
+    if not job_id:
+        return
+    job = JOBS.setdefault(job_id, {"job_id": job_id, "created_at": time.time(), "timeline": []})
+    item = {"ts": round(time.time(), 3), "event": event}
+    item.update({k: v for k, v in fields.items() if v is not None})
+    timeline = job.setdefault("timeline", [])
+    if isinstance(timeline, list):
+        timeline.append(item)
+        if len(timeline) > 40:
+            del timeline[:-40]
+    job["updated_at"] = time.time()
+    _db_save_job(job)
+    log_event(event, job_id=job_id, chat_id=job.get("chat_id"), **fields)
+
+def load_recent_jobs_from_db(limit: int = 50):
+    if not DB_READY:
+        return
+    for job in reversed(_db_load_recent_jobs(limit)):
+        JOBS[str(job["job_id"])] = job
 
 def is_free_user(uid: int, username: Optional[str] = None) -> bool:
     """Whitelist или админ (безлимит)."""
@@ -393,6 +826,7 @@ USER_LANG: Dict[int, str]          = {}   # язык
 USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
 USER_ONBOARDED: Set[int]           = set()
+USER_LAST_JOB: Dict[int, str]      = {}
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -406,12 +840,19 @@ def _credits_save():
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(payload)
         os.replace(tmp, CREDITS_FILE)
+        if DB_READY:
+            for uid, credits in USER_CREDITS.items():
+                _db_save_credit(int(uid), int(credits))
         _s3_put_text(STATE_PREFIX + "credits.json", payload)
     except Exception as e:
         print("[credits] save error:", str(e)[:160])
 
 def _credits_load():
     try:
+        db_credits = _db_load_credits()
+        if db_credits:
+            USER_CREDITS.update(db_credits)
+            return
         # Prefer S3 state if available
         txt = _s3_get_text(STATE_PREFIX + "credits.json")
         if txt:
@@ -421,8 +862,7 @@ def _credits_load():
                     USER_CREDITS[int(k)] = int(v)
                 except Exception:
                     continue
-            return
-        if os.path.exists(CREDITS_FILE):
+        elif os.path.exists(CREDITS_FILE):
             with open(CREDITS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for k, v in (data or {}).items():
@@ -430,6 +870,9 @@ def _credits_load():
                     USER_CREDITS[int(k)] = int(v)
                 except Exception:
                     continue
+        if DB_READY and USER_CREDITS:
+            for uid, credits in USER_CREDITS.items():
+                _db_save_credit(int(uid), int(credits))
     except Exception as e:
         print("[credits] load error:", str(e)[:160])
 
@@ -930,11 +1373,24 @@ async def safe_answer(m: Message, text: str, **kwargs):
 
 async def safe_answer_photo(m: Message, photo: BufferedInputFile, **kwargs):
     try:
-        return await m.answer_photo(photo=photo, **kwargs)
+        resp = await m.answer_photo(photo=photo, **kwargs)
+        jid = USER_LAST_JOB.get(m.chat.id)
+        if jid:
+            record_job(jid, status="delivered")
+            job_event(jid, "telegram_delivered", method="photo")
+            stats_incr("delivery_photo_ok", 1)
+            USER_LAST_JOB.pop(m.chat.id, None)
+        return resp
     except (TelegramForbiddenError, TelegramNotFound):
         print(f"[safe_answer_photo] blocked/not found: chat_id={m.chat.id}")
     except TelegramBadRequest as e:
         print(f"[safe_answer_photo] bad request: {e}")
+    jid = USER_LAST_JOB.get(m.chat.id)
+    if jid:
+        record_job(jid, status="delivery_failed", error="telegram_photo_failed")
+        job_event(jid, "telegram_delivery_failed", method="photo")
+        stats_incr("delivery_failed", 1)
+        USER_LAST_JOB.pop(m.chat.id, None)
     return None
 
 async def safe_edit_text(msg: Message, text: str):
@@ -1044,6 +1500,8 @@ REPLICATE_LAST_ERROR: str = ""
 def replicate_generate(model: str, inputs: dict) -> Optional[str]:
     global REPLICATE_LAST_ERROR
     REPLICATE_LAST_ERROR = ""
+    t0 = time.time()
+    log_event("replicate_start", model=model, input_keys=sorted(inputs.keys()))
     # Allow passing either owner/name or owner/name:version
     model_name = model
     model_version = None
@@ -1075,10 +1533,12 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
             out = getattr(pred, "output", None) or (pred.get("output") if isinstance(pred, dict) else None)
             url = _extract_first_url(out)
             if url:
+                log_event("replicate_done", model=model, prediction_id=pid, latency_ms=int((time.time() - t0) * 1000))
                 return url
             try:
                 url = _extract_first_url(dict(pred))
                 if url:
+                    log_event("replicate_done", model=model, prediction_id=pid, latency_ms=int((time.time() - t0) * 1000))
                     return url
             except Exception:
                 pass
@@ -1086,6 +1546,7 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
         em = str(e)
         REPLICATE_LAST_ERROR = em
         print("replicate.predictions.create error:", em[:200])
+        log_event("replicate_error", model=model, error=em[:240])
         if "sensitive" in em.lower():
             return "SENSITIVE"
 
@@ -1094,11 +1555,13 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
         out = replicate.run(model if not model_version else f"{model_name}:{model_version}", input=inputs)
         url = _extract_first_url(out)
         if url:
+            log_event("replicate_done", model=model, latency_ms=int((time.time() - t0) * 1000), path="run")
             return url
     except Exception as e2:
         em2 = str(e2)
         REPLICATE_LAST_ERROR = em2
         print("replicate.run error:", em2[:200])
+        log_event("replicate_error", model=model, error=em2[:240], path="run")
         if "sensitive" in em2.lower():
             return "SENSITIVE"
 
@@ -1712,18 +2175,67 @@ async def nudge_loop():
         await asyncio.sleep(3600)
 
 # ===================== CORE GEN ======================
+def assess_selfie_quality(img_bytes: bytes) -> Tuple[bool, str]:
+    if Image is None or ImageStat is None or ImageFilter is None:
+        return True, "unchecked"
+    try:
+        im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        w, h = im.size
+        if w < 320 or h < 320:
+            return False, "small"
+        gray = im.convert("L")
+        mean = ImageStat.Stat(gray).mean[0]
+        if mean < 35:
+            return False, "dark"
+        if mean > 240:
+            return False, "overexposed"
+        edges = gray.filter(ImageFilter.FIND_EDGES)
+        edge_mean = ImageStat.Stat(edges).mean[0]
+        if edge_mean < 4.0:
+            return False, "blurry"
+        return True, "ok"
+    except Exception:
+        return True, "unreadable_skip"
+
+def selfie_quality_text(chat_id: int, reason: str) -> str:
+    lang = USER_LANG.get(chat_id, LANG_DEFAULT)
+    if lang == "ru":
+        return "Фото слишком тёмное, маленькое или размытое. Пришлите чёткое селфи крупнее, с лицом в хорошем свете."
+    if lang == "ro":
+        return "Poza este prea întunecată, mică sau neclară. Trimite un selfie clar, mai mare, cu fața bine luminată."
+    if lang == "de":
+        return "Das Foto ist zu dunkel, klein oder unscharf. Bitte sende ein klares, größeres Selfie mit gut beleuchtetem Gesicht."
+    return "The photo is too dark, small, or blurry. Please send a clear larger selfie with your face in good light."
+
 def generate_image_from_bytes(
     img_bytes: bytes,
     user_prompt: str,
     lang: str = "ru",
-    seed: Optional[int] = None,
     strict: bool = False,
     style_bytes: Optional[bytes] = None,
     lock_scene: bool = True,
     user_id: Optional[int] = None,
+    job_id: Optional[str] = None,
 ) -> Optional[bytes]:
+    t0 = time.time()
+    if job_id is None:
+        job = record_job(
+            kind="generation",
+            status="running",
+            chat_id=user_id,
+            prompt=user_prompt,
+            model=NANOBANANA_MODEL,
+        )
+        job_id = str(job["job_id"])
+    else:
+        record_job(job_id, status="running", chat_id=user_id, prompt=user_prompt, model=NANOBANANA_MODEL)
+    if user_id is not None:
+        USER_LAST_JOB[int(user_id)] = str(job_id)
+    job_event(job_id, "generation_started", strict=strict, lock_scene=lock_scene)
     if blocked(user_prompt):
         print("⛔ Заблокировано фильтром")
+        record_job(job_id, status="failed", error="blocked")
+        job_event(job_id, "generation_failed", error="blocked")
         return None
 
     # In strict (Copy Mode), avoid GPT rephrasing to keep scene constraints intact
@@ -1734,133 +2246,111 @@ def generate_image_from_bytes(
         refined = f"{refined}. {SCENE_LOCK}. Exact same background, composition, lighting, color grading; only replace the face."
 
     print(f"→ Генерация: {refined[:180]}...")
+    job_event(job_id, "prompt_refined", prompt=refined[:500])
 
     src_url = s3_put_and_presign(img_bytes, key_prefix="inputs/")
     if not src_url:
         print("→ Не удалось получить S3 presigned URL")
+        record_job(job_id, status="failed", error="s3_input_failed")
+        job_event(job_id, "generation_failed", error="s3_input_failed")
         return None
+    job_event(job_id, "s3_input_ready")
 
     style_url: Optional[str] = None
     if strict and style_bytes:
         style_url = s3_put_and_presign(style_bytes, key_prefix="style/")
         if not style_url:
             print("→ Не удалось получить S3 URL для style-ref (продолжаем без него)")
-
-    def try_nano(p: str, seed_val: Optional[int] = None) -> Optional[str]:
-        if strict and lock_scene:
-            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}"
-        elif strict:
-            neg = f"{NEGATIVE_LOCK}, {STRICT_NEGATIVE}"
         else:
-            neg = NEGATIVE_LOCK
+            job_event(job_id, "s3_style_ready")
+
+    def try_nano(p: str) -> Optional[str]:
+        if strict and lock_scene:
+            guard = f"{SCENE_LOCK}. Preserve the exact same person and facial identity. Avoid: {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}."
+        elif strict:
+            guard = f"Preserve the exact same person and facial identity. Avoid: {STRICT_NEGATIVE}."
+        else:
+            guard = f"Keep the same person from the selfie. Avoid: {NEGATIVE_LOCK}."
         inputs_common = {
-            "prompt": p,
-            "negative_prompt": neg,
+            "prompt": f"{p}. {guard}",
+            "output_format": "jpg",
         }
-        if seed_val is not None:
-            inputs_common["seed"] = seed_val
 
         # If we have a style reference, try two-image conditions first
         if style_url:
             candidates: List[Dict[str, object]] = []
-            # Common combos across popular face-replace/copy-scene models
+            # Official Nano Banana multi-image contract.
             candidates.append({"image_input": [style_url, src_url]})
             candidates.append({"image_input": [src_url, style_url]})
-            candidates.append({"image": style_url, "face_image": src_url})
-            candidates.append({"image": style_url, "person_image": src_url})
-            candidates.append({"image": style_url, "target_face": src_url})
-            candidates.append({"image": src_url, "style_image": style_url})
-            candidates.append({"source_image": style_url, "image": src_url})
-            candidates.append({"background": style_url, "image": src_url})
-            candidates.append({"reference": style_url, "image": src_url})
-            candidates.append({"content_image": style_url, "face_image": src_url})
-
-            # Common guidance/cfg knobs across models
-            cfg_variants: List[Dict[str, object]] = [
-                {},
-                {"guidance_scale": 7.5},
-                {"guidance": 7.5},
-                {"cfg": 7.0},
-                {"cfg_scale": 7.0},
-                {"strength": 0.8},
-                {"prompt_strength": 0.85},
-                {"num_inference_steps": 28},
-            ]
 
             for variant in candidates:
                 try:
-                    for cfg_extra in cfg_variants:
-                        inp = dict(inputs_common)
-                        inp.update(variant)
-                        inp.update(cfg_extra)
-                        url = replicate_generate(NANOBANANA_MODEL, inp)
-                        if url == "SENSITIVE":
-                            return "SENSITIVE"
-                        if url:
-                            print("NanoBanana OK (style+selfie variant)", variant.keys(), cfg_extra)
-                            return url
+                    inp = dict(inputs_common)
+                    inp.update(variant)
+                    job_event(job_id, "replicate_request", variant=list(variant.keys()))
+                    url = replicate_generate(NANOBANANA_MODEL, inp)
+                    if url == "SENSITIVE":
+                        return "SENSITIVE"
+                    if url:
+                        print("NanoBanana OK (style+selfie variant)", variant.keys())
+                        return url
                 except Exception as e:
                     print("NanoBanana variant exception:", str(e)[:200])
 
         # 1) image_input (список) — только selfie
         try:
-            for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
-                inp = dict(inputs_common)
-                inp.update(cfg_extra)
-                inp["image_input"] = [src_url]
-                url = replicate_generate(NANOBANANA_MODEL, inp)
-                if url == "SENSITIVE":
-                    return "SENSITIVE"
-                if url:
-                    print("NanoBanana OK (image_input)", cfg_extra)
-                    return url
+            inp = dict(inputs_common)
+            inp["image_input"] = [src_url]
+            job_event(job_id, "replicate_request", variant=["image_input"])
+            url = replicate_generate(NANOBANANA_MODEL, inp)
+            if url == "SENSITIVE":
+                return "SENSITIVE"
+            if url:
+                print("NanoBanana OK (image_input)")
+                return url
         except Exception as e:
             print("NanoBanana image_input exception:", str(e)[:200])
 
-        # 2) image (одна) — только selfie
-        try:
-            for cfg_extra in [{}, {"guidance_scale": 7.5}, {"strength": 0.8}, {"num_inference_steps": 28}]:
-                inp = dict(inputs_common)
-                inp.update(cfg_extra)
-                inp["image"] = src_url
-                url = replicate_generate(NANOBANANA_MODEL, inp)
-                if url == "SENSITIVE":
-                    return "SENSITIVE"
-                if url:
-                    print("NanoBanana OK (image)", cfg_extra)
-                    return url
-        except Exception as e2:
-            print("NanoBanana image exception:", str(e2)[:200])
-
         return None
 
-    gen_url = try_nano(refined, seed_val=seed)
+    gen_url = try_nano(refined)
     if gen_url == "SENSITIVE":
         print("→ Sensitive → safer variant")
-        gen_url = try_nano(safer_variant(refined), seed_val=seed)
+        gen_url = try_nano(safer_variant(refined))
 
     # Если «уплыло лицо» — усилить замки и повторить 1 раз
     if (not gen_url or not str(gen_url).startswith("http")) and not strict:
         hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features. {SCENE_LOCK}"
-        gen_url = try_nano(hard_lock, seed_val=seed)
+        gen_url = try_nano(hard_lock)
 
     if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
         print("→ gen_url пустой/sensitive")
+        record_job(job_id, status="failed", error="empty_generation_url")
+        job_event(job_id, "generation_failed", error="empty_generation_url")
         return None
 
     nano_bytes = _download_with_retries(gen_url)
     if not nano_bytes:
         print("→ не скачали NanoBanana")
+        record_job(job_id, status="failed", error="download_failed")
+        job_event(job_id, "generation_failed", error="download_failed")
         return None
 
     # If model just echoed the same selfie (no change), treat as failure
     try:
         if hashlib.md5(nano_bytes).hexdigest() == hashlib.md5(img_bytes).hexdigest():
             print("→ output equals input (likely echo) — treating as failure")
+            record_job(job_id, status="failed", error="output_equals_input")
+            job_event(job_id, "generation_failed", error="output_equals_input")
             return None
     except Exception:
         pass
 
+    latency_ms = int((time.time() - t0) * 1000)
+    stats_incr("generation_latency_total_ms", latency_ms)
+    stats_incr("generation_latency_count", 1)
+    record_job(job_id, status="generated")
+    job_event(job_id, "generation_done", latency_ms=latency_ms, output_bytes=len(nano_bytes))
     return nano_bytes
 
 # ======= Автопост «до/после» (опционально) ===========
@@ -1938,7 +2428,7 @@ def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
 
 def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [
             InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
             InlineKeyboardButton(text="💰 " + lang["btn_balance"],  callback_data="balance"),
@@ -1953,7 +2443,10 @@ def main_menu_inline(chat_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=lang.get("menu_refer", "🎁 /refer"), callback_data="refer_open"),
             InlineKeyboardButton(text=lang.get("menu_invite", "👥 Invite"), callback_data="refer_open"),
         ],
-    ])
+    ]
+    if WEBHOOK_BASE:
+        rows.append([InlineKeyboardButton(text="📱 iModel Mini App", web_app=WebAppInfo(url=f"{WEBHOOK_BASE}/webapp"))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def kb_help(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
@@ -2217,12 +2710,62 @@ async def cmd_stats(m: Message):
     ]
     await safe_answer(m, "\n".join(lines))
 
+@dp.message(Command("grant"))
+async def cmd_grant(m: Message):
+    username = getattr(m.from_user, "username", None)
+    if not has_grant(m.chat.id, username, "users.manage"):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) < 3:
+        roles = ", ".join(sorted(VALID_ROLES))
+        return await safe_answer(m, f"Usage: /grant <telegram_id> <role>\nRoles: {roles}")
+    try:
+        target_uid = int(parts[1])
+    except Exception:
+        return await safe_answer(m, "Invalid telegram_id")
+    role = parts[2].strip().lower()
+    if role not in VALID_ROLES:
+        return await safe_answer(m, f"Invalid role. Use: {', '.join(sorted(VALID_ROLES))}")
+    USER_ROLES[target_uid] = role
+    info = STATS_USERS_INFO.setdefault(target_uid, {"first_seen": time.time(), "last_seen": time.time(), "username": ""})
+    users_save(target_uid)
+    audit_log(m.chat.id, "role.set", target_uid, role=role)
+    await safe_answer(m, f"✅ Role for {target_uid}: {role}")
+
+@dp.message(Command("credits"))
+async def cmd_credits_admin(m: Message):
+    username = getattr(m.from_user, "username", None)
+    if not has_grant(m.chat.id, username, "credits.grant"):
+        return await safe_answer(m, L(m.chat.id)["admin_only"])
+    parts = (m.text or "").split()
+    if len(parts) < 3:
+        return await safe_answer(m, "Usage: /credits <telegram_id> <delta>")
+    try:
+        target_uid = int(parts[1])
+        delta = int(parts[2])
+    except Exception:
+        return await safe_answer(m, "Invalid arguments")
+    ensure_user_credit(target_uid)
+    USER_CREDITS[target_uid] = int(USER_CREDITS.get(target_uid, FREE_QUOTA)) + delta
+    _credits_save()
+    audit_log(m.chat.id, "credits.delta", target_uid, delta=delta, balance=USER_CREDITS[target_uid])
+    await safe_answer(m, f"✅ Balance for {target_uid}: {USER_CREDITS[target_uid]}")
+
 @dp.message(Command("copy"))
 async def cmd_copy(m: Message):
     USER_COPY_MODE.add(m.chat.id)
     USER_COPY_STYLE.pop(m.chat.id, None)
     USER_COPY_PROMPT.pop(m.chat.id, None)
     await safe_answer(m, L(m.chat.id)["copy_intro"])
+
+@dp.message(Command("app"))
+async def cmd_app(m: Message):
+    if not WEBHOOK_BASE:
+        return await safe_answer(m, "Mini App URL is not configured.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Open iModel Mini App", web_app=WebAppInfo(url=f"{WEBHOOK_BASE}/webapp"))]
+    ])
+    await safe_answer(m, "iModel Mini App", reply_markup=kb)
 
 
 @dp.message(Command("start"))
@@ -2476,10 +3019,9 @@ async def cb_preset_pick(c: CallbackQuery):
         return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    seed_int = ((hash(chat_id) % 10_000_000) + idx)
     result = generate_image_from_bytes(
         ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int, user_id=chat_id
+        user_id=chat_id
     )
     if not result:
         stats_incr("gens_fail", 1)
@@ -2694,6 +3236,10 @@ async def on_photo(m: Message):
             style_bytes = USER_COPY_STYLE.get(m.chat.id)
             if not style_bytes:
                 return await safe_answer(m, L(m.chat.id)["copy_need_style"])
+            ok, reason = assess_selfie_quality(img_bytes)
+            if not ok:
+                log_event("selfie_rejected", chat_id=m.chat.id, reason=reason)
+                return await safe_answer(m, selfie_quality_text(m.chat.id, reason))
 
             # 1) Берём уже подготовленный/отредактированный пользователем промпт, либо пробуем сгенерировать
             scene_spec = USER_COPY_PROMPT.get(m.chat.id)
@@ -2710,19 +3256,15 @@ async def on_photo(m: Message):
                 return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
             wait = await safe_answer(m, L(m.chat.id)["gen"])
-            seed = (hashlib.md5(style_bytes).hexdigest())
-            seed_int = int(seed[:8], 16)
-
             # строгий режим: жёсткая сцена + identity lock + negative
-            # 2) Генерим по selfie + текстовому промпту (БЕЗ передачи style-image в модель)
+            # 2) Генерим по official multi-image contract: [scene, selfie]
             final_bytes = generate_image_from_bytes(
                 img_bytes,
                 scene_spec,
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                seed=seed_int,
                 strict=True,
-                style_bytes=None,
-                lock_scene=False,
+                style_bytes=style_bytes,
+                lock_scene=True,
                 user_id=m.chat.id,
             )
             if not final_bytes:
@@ -2731,10 +3273,9 @@ async def on_photo(m: Message):
                     img_bytes,
                     scene_spec + ". Keep face absolutely unchanged, do not beautify, do not reshape.",
                     lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    seed=seed_int,
                     strict=True,
-                    style_bytes=None,
-                    lock_scene=False,
+                    style_bytes=style_bytes,
+                    lock_scene=True,
                     user_id=m.chat.id,
                 )
                 if not final_bytes:
@@ -2780,6 +3321,11 @@ async def on_photo(m: Message):
             return
 
     # ----- Обычный режим -----
+    ok, reason = assess_selfie_quality(img_bytes)
+    if not ok:
+        log_event("selfie_rejected", chat_id=m.chat.id, reason=reason)
+        return await safe_answer(m, selfie_quality_text(m.chat.id, reason))
+
     USER_REFS.setdefault(m.chat.id, [])
     USER_REFS[m.chat.id] = (USER_REFS[m.chat.id] + [img_bytes])[-4:]
     LAST_REF[m.chat.id] = img_bytes
@@ -2794,10 +3340,9 @@ async def on_photo(m: Message):
                 if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
                     return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
-                seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
                 final_bytes = generate_image_from_bytes(
                     img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    seed=seed_int, user_id=m.chat.id
+                    user_id=m.chat.id
                 )
                 if not final_bytes:
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2844,10 +3389,9 @@ async def on_photo(m: Message):
         return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
-    seed_int = (hash(m.chat.id) % 10_000_000)
     final_bytes = generate_image_from_bytes(
         img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int, user_id=m.chat.id
+        user_id=m.chat.id
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2918,10 +3462,9 @@ async def on_prompt(m: Message):
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     ref = refs[-1]
-    seed_int = (hash(m.chat.id) % 10_000_000)
     final_bytes = generate_image_from_bytes(
         ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int, user_id=m.chat.id
+        user_id=m.chat.id
     )
     if not final_bytes:
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -2975,11 +3518,9 @@ async def cb_more(c: CallbackQuery):
     await safe_cb_answer(c)
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    # тот же промпт, seed + 1 (минимальная вариативность, лицо стабильное)
-    seed_int = ((hash(chat_id) % 10_000_000) + 1)
     result = generate_image_from_bytes(
         ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int
+        user_id=chat_id
     )
     if not result:
         STATS["gens_fail"] += 1
@@ -3055,7 +3596,10 @@ async def on_startup():
     print(f"=== {APP_VERSION} ===")
     # Load persisted stats/users
     try:
+        db_init()
         stats_load()
+        _credits_load()
+        load_recent_jobs_from_db()
         print("Loaded persisted stats.")
     except Exception as e:
         print("Stats load error:", str(e)[:160])
@@ -3089,6 +3633,7 @@ async def on_startup():
             BotCommand(command="refer",   description="Реферальная ссылка"),
             BotCommand(command="pricing", description="Тарифы"),
             BotCommand(command="copy",    description="Скопировать фото"),
+            BotCommand(command="app",     description="Mini App"),
             BotCommand(command="help",    description="Помощь"),
             BotCommand(command="clear",   description="Очистить память"),
             BotCommand(command="version", description="Версия"),
@@ -3123,22 +3668,136 @@ def _telegram_webhook_authorized(request: Request) -> bool:
         return bool(WEBHOOK_SECRET and hmac.compare_digest(query_secret, WEBHOOK_SECRET))
     return False
 
+def validate_webapp_init_data(init_data: str) -> Optional[Dict[str, Any]]:
+    if not BOT_TOKEN or not init_data:
+        return None
+    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+    supplied_hash = pairs.pop("hash", "")
+    if not supplied_hash:
+        return None
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+    expected = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, supplied_hash):
+        return None
+    try:
+        auth_date = int(pairs.get("auth_date", "0") or "0")
+        if auth_date and time.time() - auth_date > 7 * 86400:
+            return None
+    except Exception:
+        return None
+    try:
+        user = json.loads(pairs.get("user") or "{}")
+    except Exception:
+        user = {}
+    uid = int(user.get("id") or 0)
+    if not uid:
+        return None
+    return {"uid": uid, "username": user.get("username") or "", "user": user}
+
+def _webapp_secret() -> bytes:
+    return (WEBHOOK_SECRET or BOT_TOKEN or "imodel").encode("utf-8")
+
+def make_webapp_token(uid: int, username: str = "") -> str:
+    payload = {"uid": int(uid), "username": username[:64], "iat": int(time.time())}
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    sig = hmac.new(_webapp_secret(), raw.encode("utf-8"), hashlib.sha256).hexdigest()
+    token = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"{token}.{sig}"
+
+def parse_webapp_token(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        body, sig = token.split(".", 1)
+        raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode("utf-8")
+        expected = hmac.new(_webapp_secret(), raw.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            return None
+        payload = json.loads(raw)
+        if time.time() - int(payload.get("iat", 0)) > 7 * 86400:
+            return None
+        return payload
+    except Exception:
+        return None
+
+def webapp_user_from_request(request: Request) -> Optional[Dict[str, Any]]:
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        payload = parse_webapp_token(auth.split(" ", 1)[1].strip())
+        if payload:
+            return payload
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    validated = validate_webapp_init_data(init_data)
+    if validated:
+        return {"uid": validated["uid"], "username": validated.get("username", "")}
+    return None
+
+def public_job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
+    hidden = {"image_bytes", "style_bytes"}
+    return {k: v for k, v in job.items() if k not in hidden and not isinstance(v, (bytes, bytearray))}
+
+async def run_webapp_generation_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        return
+    uid = int(job.get("chat_id") or 0)
+    record_job(job_id, status="running")
+    try:
+        final_bytes = await asyncio.to_thread(
+            generate_image_from_bytes,
+            job["image_bytes"],
+            str(job.get("prompt") or ""),
+            lang=str(job.get("lang") or LANG_DEFAULT),
+            strict=False,
+            style_bytes=None,
+            lock_scene=True,
+            user_id=uid,
+            job_id=job_id,
+        )
+    except Exception as e:
+        final_bytes = None
+        record_job(job_id, status="failed", error=str(e)[:500])
+    if not final_bytes:
+        stats_incr("jobs_failed", 1)
+        record_job(job_id, status="failed", error=JOBS.get(job_id, {}).get("error") or "generation_failed")
+        return
+    output_url = s3_put_and_presign(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
+    if uid and not is_free_user(uid, str(job.get("username") or "")):
+        ensure_user_credit(uid)
+        USER_CREDITS[uid] = max(0, int(USER_CREDITS.get(uid, FREE_QUOTA)) - 1)
+        _credits_save()
+    stats_incr("jobs_done", 1)
+    record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes))
+
+
+async def _process_telegram_update(data: Dict[str, Any], received_at: float):
+    try:
+        update = Update.model_validate(data)
+        await dp.feed_update(bot, update)
+        log_event(
+            "telegram_update_done",
+            update_id=data.get("update_id"),
+            latency_ms=int((time.time() - received_at) * 1000),
+        )
+    except Exception as e:
+        log_event("telegram_update_error", update_id=data.get("update_id"), error=str(e)[:240])
 
 @app.post("/")
-async def telegram_webhook(request: Request):
+async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
     if not _telegram_webhook_authorized(request):
         return JSONResponse({"status": "forbidden"}, status_code=403)
     data = await request.json()
+    received_at = time.time()
     try:
         stats_incr("updates", 1)
         t = data.get("message", {}) or data.get("edited_message", {}) or data.get("callback_query", {})
         chat = (t.get("chat") or t.get("message", {}).get("chat") or {})
-        print("[webhook] update received:", {
-            "keys": list(data.keys())[:3],
-            "chat_id": chat.get("id"),
-            "from": (t.get("from") or {}).get("id"),
-            "type": t.get("text", "<media>") if isinstance(t, dict) else "<unknown>",
-        })
+        log_event(
+            "telegram_update_received",
+            update_id=data.get("update_id"),
+            chat_id=chat.get("id"),
+            user_id=(t.get("from") or {}).get("id"),
+            update_type=t.get("text", "<media>") if isinstance(t, dict) else "<unknown>",
+        )
         user_obj = (t.get("from") or {})
         uid = user_obj.get("id")
         uname = user_obj.get("username")
@@ -3147,8 +3806,7 @@ async def telegram_webhook(request: Request):
             _touch_user(uid, uname)
     except Exception:
         pass
-    update = Update.model_validate(data)
-    await dp.feed_update(bot, update)
+    background_tasks.add_task(_process_telegram_update, data, received_at)
     return {"ok": True}
 
 @app.get("/")
@@ -3159,6 +3817,221 @@ async def root_health():
 async def healthz():
     return {"status": "ok"}
 
+@app.get("/webapp")
+async def webapp_index():
+    html = """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>iModel Studio</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root { color-scheme: dark; --bg:#080b12; --panel:#111722; --soft:#1b2433; --text:#f4f7fb; --muted:#93a4b8; --accent:#79ffe1; --hot:#ff6fb1; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; font:15px/1.45 -apple-system,BlinkMacSystemFont,Inter,Segoe UI,sans-serif; background:radial-gradient(circle at 20% 0%, #263b5f 0, transparent 34%), linear-gradient(155deg,#070910,#141927 55%,#0a0d14); color:var(--text); }
+    .app { width:min(980px,100%); margin:0 auto; padding:18px 16px 32px; }
+    .hero { padding:26px 0 18px; }
+    .brand { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; }
+    .logo { font-weight:800; letter-spacing:.02em; font-size:20px; }
+    .pill { border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.06); border-radius:999px; padding:7px 10px; color:var(--muted); font-size:12px; }
+    h1 { font-size:36px; line-height:1.02; margin:0 0 10px; letter-spacing:0; }
+    p { color:var(--muted); margin:0; }
+    .grid { display:grid; gap:12px; grid-template-columns:1fr; }
+    .panel { background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04)); border:1px solid rgba(255,255,255,.12); border-radius:14px; padding:14px; box-shadow:0 18px 50px rgba(0,0,0,.24); }
+    label { display:block; color:#c7d3e2; font-size:13px; margin:0 0 8px; }
+    textarea, input[type=file] { width:100%; border:1px solid rgba(255,255,255,.14); background:#0e1420; color:var(--text); border-radius:10px; padding:12px; outline:none; }
+    textarea { min-height:92px; resize:vertical; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+    button { border:0; border-radius:10px; padding:12px 14px; font-weight:700; color:#071016; background:linear-gradient(135deg,var(--accent),#8ea7ff); cursor:pointer; }
+    button.secondary { color:var(--text); background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.14); }
+    .status { margin-top:12px; color:#d5e1f0; white-space:pre-wrap; }
+    .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
+    .card { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); border-radius:12px; padding:12px; min-height:92px; }
+    .card b { display:block; margin-bottom:6px; }
+    @media (max-width:700px){ h1{font-size:31px}.cards{grid-template-columns:1fr}.app{padding-inline:14px} }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="hero">
+      <div class="brand"><div class="logo">iModel Studio</div><div class="pill" id="balance">credits: --</div></div>
+      <h1>AI photo studio inside Telegram</h1>
+      <p>Create polished portraits, copy a scene, track jobs, and keep your face identity consistent.</p>
+    </section>
+    <section class="grid">
+      <div class="panel">
+        <label>Selfie</label>
+        <input id="photo" type="file" accept="image/*" />
+        <label style="margin-top:12px">Scene</label>
+        <textarea id="prompt" placeholder="Wedding guest, cinematic candid photo, many people around, warm lights"></textarea>
+        <div class="actions">
+          <button id="generate">Generate</button>
+          <button class="secondary" id="refresh">Refresh balance</button>
+        </div>
+        <div class="status" id="status">Ready.</div>
+      </div>
+      <div class="cards">
+        <div class="card"><b>Face Lock v2</b><span>Official multi-image Nano Banana flow with identity-first prompting.</span></div>
+        <div class="card"><b>Jobs</b><span>Async status polling for Mini App generations.</span></div>
+        <div class="card"><b>Gallery</b><span>Recent ready jobs appear as the backend stores outputs.</span></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const tg = window.Telegram?.WebApp;
+    tg?.ready(); tg?.expand();
+    let token = "";
+    const $ = id => document.getElementById(id);
+    async function api(path, opts={}) {
+      const headers = Object.assign({"Content-Type":"application/json"}, opts.headers || {});
+      if (token) headers.Authorization = "Bearer " + token;
+      return fetch(path, Object.assign({}, opts, {headers}));
+    }
+    async function session() {
+      const r = await fetch("/api/v1/webapp/session", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({initData: tg?.initData || ""})});
+      if (!r.ok) { $("status").textContent = "Open this inside Telegram to authenticate."; return; }
+      const data = await r.json(); token = data.token; await me();
+    }
+    async function me() {
+      const r = await api("/api/v1/me");
+      if (!r.ok) return;
+      const data = await r.json(); $("balance").textContent = "credits: " + data.credits + " · " + data.role;
+    }
+    function fileToB64(file) {
+      return new Promise((resolve,reject)=>{ const fr=new FileReader(); fr.onload=()=>resolve(fr.result); fr.onerror=reject; fr.readAsDataURL(file); });
+    }
+    async function poll(id) {
+      for (let i=0;i<80;i++) {
+        const r = await api("/api/v1/generations/" + id);
+        const data = await r.json();
+        $("status").textContent = "Job " + data.status + (data.output_url ? "\\n" + data.output_url : "");
+        if (["ready","failed"].includes(data.status)) { await me(); return; }
+        await new Promise(r=>setTimeout(r,2500));
+      }
+    }
+    $("refresh").onclick = me;
+    $("generate").onclick = async () => {
+      const file = $("photo").files[0]; const prompt = $("prompt").value.trim();
+      if (!file || !prompt) { $("status").textContent = "Choose selfie and scene."; return; }
+      $("status").textContent = "Uploading...";
+      const image_b64 = await fileToB64(file);
+      const r = await api("/api/v1/generations", {method:"POST", body:JSON.stringify({prompt, image_b64})});
+      const data = await r.json();
+      if (!r.ok) { $("status").textContent = data.error || "Failed"; return; }
+      $("status").textContent = "Queued: " + data.job_id; poll(data.job_id);
+    };
+    session();
+  </script>
+</body>
+</html>
+    """
+    return HTMLResponse(content=html)
+
+@app.post("/api/v1/webapp/session")
+async def api_webapp_session(request: Request):
+    data = await request.json()
+    validated = validate_webapp_init_data(str(data.get("initData") or ""))
+    if not validated:
+        return JSONResponse({"error": "invalid_init_data"}, status_code=403)
+    uid = int(validated["uid"])
+    username = str(validated.get("username") or "")
+    _touch_user(uid, username)
+    ensure_user_credit(uid)
+    return {
+        "token": make_webapp_token(uid, username),
+        "user": validated.get("user") or {},
+        "credits": USER_CREDITS.get(uid, FREE_QUOTA),
+        "role": role_for_user(uid, username),
+        "grants": sorted(grants_for_user(uid, username)),
+    }
+
+@app.get("/api/v1/me")
+async def api_me(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    ensure_user_credit(uid)
+    return {
+        "chat_id": uid,
+        "username": username,
+        "credits": USER_CREDITS.get(uid, FREE_QUOTA),
+        "role": role_for_user(uid, username),
+        "grants": sorted(grants_for_user(uid, username)),
+    }
+
+@app.get("/api/v1/gallery")
+async def api_gallery(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    source_jobs = list(JOBS.values())
+    if DB_READY:
+        db_jobs = _db_load_recent_jobs(100)
+        if db_jobs:
+            source_jobs = db_jobs
+    items = [
+        public_job_snapshot(j)
+        for j in source_jobs
+        if int(j.get("chat_id") or 0) == uid and j.get("status") == "ready"
+    ][-20:]
+    return {"items": items}
+
+@app.post("/api/v1/generations")
+async def api_create_generation(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    ensure_user_credit(uid)
+    if not has_credit(uid, username):
+        return JSONResponse({"error": "no_credits"}, status_code=402)
+    data = await request.json()
+    prompt = str(data.get("prompt") or "").strip()
+    image_b64 = str(data.get("image_b64") or "").strip()
+    if not prompt or not image_b64:
+        return JSONResponse({"error": "prompt and image_b64 are required"}, status_code=400)
+    try:
+        if image_b64.startswith("data:") and "," in image_b64:
+            image_b64 = image_b64.split(",", 1)[1]
+        image_bytes = base64.b64decode(image_b64)
+    except Exception:
+        return JSONResponse({"error": "invalid image"}, status_code=400)
+    ok, reason = assess_selfie_quality(image_bytes)
+    if not ok:
+        return JSONResponse({"error": "selfie_quality", "reason": reason}, status_code=400)
+    job = record_job(
+        kind="webapp_generation",
+        status="queued",
+        chat_id=uid,
+        username=username,
+        prompt=prompt,
+        model=NANOBANANA_MODEL,
+        image_bytes=image_bytes,
+        lang=str(data.get("lang") or LANG_DEFAULT),
+    )
+    stats_incr("jobs_created", 1)
+    asyncio.create_task(run_webapp_generation_job(str(job["job_id"])))
+    return {"job_id": job["job_id"], "status": "queued"}
+
+@app.get("/api/v1/generations/{job_id}")
+async def api_get_generation(job_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if not job:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if int(job.get("chat_id") or 0) != uid and not has_grant(uid, str(user.get("username") or ""), "jobs.view"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    return public_job_snapshot(job)
+
 @app.get("/metrics")
 async def http_metrics(request: Request):
     if not METRICS_SECRET or request.query_params.get("secret") != METRICS_SECRET:
@@ -3167,6 +4040,15 @@ async def http_metrics(request: Request):
     # Persisted users count (survives restarts)
     resp["users"] = len(STATS_USERS_INFO)
     resp["uptime_sec"] = int(time.time() - STATS["start_ts"]) if STATS.get("start_ts") else 0
+    metric_jobs = _db_load_recent_jobs(200) if DB_READY else list(JOBS.values())
+    resp["jobs_in_memory"] = len(JOBS)
+    resp["jobs_window"] = len(metric_jobs)
+    resp["jobs_queued"] = sum(1 for j in metric_jobs if j.get("status") == "queued")
+    resp["jobs_running"] = sum(1 for j in metric_jobs if j.get("status") == "running")
+    resp["jobs_failed_window"] = sum(1 for j in metric_jobs if j.get("status") in {"failed", "delivery_failed"})
+    gen_count = int(STATS.get("generation_latency_count", 0) or 0)
+    resp["generation_latency_avg_ms"] = int(STATS.get("generation_latency_total_ms", 0) / gen_count) if gen_count else 0
+    resp["db_ready"] = DB_READY
     return resp
 
 @app.get("/admin")
@@ -3270,6 +4152,12 @@ async def admin_panel(request: Request):
     for rid, st in REF_STATS.items():
         ref_items.append({"uid": rid, "count": st.get("count", 0), "earned": st.get("earned", 0)})
     top_ref = sorted(ref_items, key=lambda x: x["count"], reverse=True)[:10]
+    recent_jobs = _db_load_recent_jobs(15) if DB_READY else []
+    if not recent_jobs:
+        recent_jobs = sorted(JOBS.values(), key=lambda j: float(j.get("updated_at", 0)), reverse=True)[:15]
+    failed_jobs = [j for j in recent_jobs if str(j.get("status")) in {"failed", "delivery_failed"}]
+    running_jobs = [j for j in recent_jobs if str(j.get("status")) in {"queued", "running"}]
+    h = lambda value: html_lib.escape(str(value or ""))
 
     html = f"""
 <!doctype html>
@@ -3324,6 +4212,13 @@ async def admin_panel(request: Request):
         <div class="card"><div class="muted">Active 30d</div><div class="v">{users_active_30d}</div></div>
       </div>
 
+      <div class="grid kpi" style="grid-template-columns: repeat(4,1fr); margin-top:14px;">
+        <div class="card"><div class="muted">Jobs in memory</div><div class="v">{len(JOBS)}</div><div class="muted">DB: {'on' if DB_READY else 'off'}</div></div>
+        <div class="card"><div class="muted">Queued/running</div><div class="v">{len(running_jobs)}</div><div class="muted">recent window</div></div>
+        <div class="card"><div class="muted">Failed</div><div class="v fail">{len(failed_jobs)}</div><div class="muted">recent window</div></div>
+        <div class="card"><div class="muted">Delivery failures</div><div class="v fail">{STATS.get('delivery_failed',0)}</div><div class="muted">photo ok {STATS.get('delivery_photo_ok',0)}</div></div>
+      </div>
+
       <div class="grid section">
         <div class="card" style="grid-column: span 2;">
           <div class="muted">Top by generations</div>
@@ -3350,6 +4245,25 @@ async def admin_panel(request: Request):
           <div class="muted">Financial</div>
           <div>Payments: <b>{STATS.get('payments',0)}</b> · Promo used: <b>{STATS.get('promo_used',0)}</b></div>
           <div class="muted" style="margin-top:8px;">Published → channel: {STATS.get('published_channel',0)} · group: {STATS.get('published_group',0)} · auto: {STATS.get('auto_post',0)}</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="card">
+          <div class="muted">Recent jobs</div>
+          <table>
+            <tr><th>Status</th><th>Job</th><th>User</th><th>Prompt</th><th>Error</th><th>Updated</th></tr>
+            {''.join(
+              f'<tr>'
+              f'<td><span class="pill">{h(j.get("status"))}</span></td>'
+              f'<td>{h(str(j.get("job_id",""))[:10])}</td>'
+              f'<td>{h(uname_or_id(int(j.get("chat_id") or 0), j.get("username") or None))}</td>'
+              f'<td>{h(str(j.get("prompt") or "")[:90])}</td>'
+              f'<td>{h(str(j.get("error") or "")[:80])}</td>'
+              f'<td>{time_ago(float(j.get("updated_at") or 0))}</td>'
+              f'</tr>' for j in recent_jobs)
+            }
+          </table>
         </div>
       </div>
 
