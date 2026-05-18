@@ -1,6 +1,6 @@
 # iModel — Telegram AI Photo Bot
 
-Пайплайн: запрос → GPT (опционально) → Replicate InstantID → Real-ESRGAN → выгрузка в S3 → ответ пользователю.
+Пайплайн: Telegram фото/промпт → GPT refine (опционально) → Replicate Nano Banana → S3 → ответ пользователю.
 
 ## Запуск
 1) Создать бота в @BotFather → получить BOT_TOKEN.  
