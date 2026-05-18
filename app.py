@@ -3010,13 +3010,17 @@ async def cb_more(c: CallbackQuery):
 
 
 async def ensure_webhook():
-    """Idempotent webhook setup with flood-control handling."""
+    """Ensure Telegram points to this deployment.
+
+    Telegram does not expose the configured secret token in getWebhookInfo, so
+    we refresh the webhook on startup even when the URL already matches. This
+    keeps the header-secret in sync after env changes and repairs deploy races
+    where an old container removed the webhook during shutdown.
+    """
+    current_url = ""
     try:
         info = await bot.get_webhook_info()
-        if info and getattr(info, "url", "") == WEBHOOK_URL:
-            # Already set to the same URL — avoid hitting flood limits
-            print("Webhook already set → skip set_webhook()")
-            return
+        current_url = getattr(info, "url", "") if info else ""
     except Exception as e:
         print("get_webhook_info error:", str(e)[:160])
 
@@ -3030,7 +3034,10 @@ async def ensure_webhook():
                 secret_token=WEBHOOK_SECRET or None,
                 drop_pending_updates=False,
             )
-            print("Webhook set OK")
+            if current_url == WEBHOOK_URL:
+                print("Webhook refreshed OK")
+            else:
+                print(f"Webhook set OK: {current_url!r} → {WEBHOOK_URL!r}")
             return
         except TelegramRetryAfter as e:
             # Respect Telegram flood-control
@@ -3103,20 +3110,7 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     print("🛑 Shutting down...")
-    try:
-        if BOT_TOKEN and WEBHOOK_BASE:
-            try:
-                info = await bot.get_webhook_info()
-                current_url = getattr(info, "url", "") or ""
-                if current_url == WEBHOOK_URL:
-                    await bot.delete_webhook()
-                    print("✅ Webhook removed")
-                else:
-                    print(f"Skipping delete_webhook: current={current_url!r} != mine={WEBHOOK_URL!r}")
-            except Exception as e:
-                print(f"Webhook cleanup skipped: {e}")
-    finally:
-        await bot.session.close()
+    await bot.session.close()
     print("✅ Shutdown complete")
 
 

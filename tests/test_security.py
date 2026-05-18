@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 os.environ.setdefault("BOT_TOKEN", "123456:ABCDEF")
@@ -53,3 +54,27 @@ def test_admin_requires_secret():
     assert forbidden.status_code == 403
     assert accepted.status_code == 200
     assert "iModel" in accepted.text
+
+
+def test_shutdown_does_not_delete_webhook(monkeypatch):
+    calls = {"close": 0, "delete_webhook": 0, "get_webhook_info": 0}
+
+    class FakeSession:
+        async def close(self):
+            calls["close"] += 1
+
+    class FakeBot:
+        session = FakeSession()
+
+        async def delete_webhook(self):
+            calls["delete_webhook"] += 1
+
+        async def get_webhook_info(self):
+            calls["get_webhook_info"] += 1
+            return object()
+
+    monkeypatch.setattr(app, "bot", FakeBot())
+
+    asyncio.run(app.on_shutdown())
+
+    assert calls == {"close": 1, "delete_webhook": 0, "get_webhook_info": 0}
