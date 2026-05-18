@@ -10,7 +10,7 @@ def main() -> int:
     print("=== iModel boot ===", flush=True)
     print(f"PORT={port}", flush=True)
     print(f"BOT_TOKEN configured={bool(os.getenv('BOT_TOKEN'))}", flush=True)
-    print(f"WEBHOOK_BASE configured={bool(os.getenv('WEBHOOK_BASE'))}", flush=True)
+    print(f"WEBHOOK_BASE={os.getenv('WEBHOOK_BASE', '<not set>')}", flush=True)
     try:
         uvicorn.run("app:api", host="0.0.0.0", port=port, log_level=os.getenv("LOG_LEVEL", "info"))
         return 0

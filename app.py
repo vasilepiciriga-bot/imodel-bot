@@ -61,9 +61,12 @@ except TokenValidationError as e:
     print(f"⚠️ Invalid BOT_TOKEN format; Telegram disabled for this boot: {e}")
     BOT_TOKEN = ""
 WEBHOOK_BASE   = os.getenv("WEBHOOK_BASE", "").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret123")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or ""
+if not WEBHOOK_SECRET:
+    print("⚠️ WEBHOOK_SECRET is not set — Telegram webhook will accept any request")
 WEBHOOK_ALLOW_QUERY_SECRET = os.getenv("WEBHOOK_ALLOW_QUERY_SECRET", "0") == "1"
 WEBHOOK_URL = f"{WEBHOOK_BASE}/" if WEBHOOK_BASE else ""
+BOT_MODE = os.getenv("BOT_MODE", "webhook")  # "webhook" | "disabled"
 PUBLIC_API_SECRET = os.getenv("PUBLIC_API_SECRET", "")
 REPLICATE_WEBHOOK_SECRET = os.getenv("REPLICATE_WEBHOOK_SECRET", "")
 
@@ -3432,11 +3435,20 @@ async def on_startup():
 async def on_shutdown():
     print("🛑 Shutting down...")
     try:
-        if BOT_TOKEN:
-            await bot.delete_webhook()
+        if BOT_TOKEN and WEBHOOK_BASE:
+            try:
+                info = await bot.get_webhook_info()
+                current_url = getattr(info, "url", "") or ""
+                if current_url == WEBHOOK_URL:
+                    await bot.delete_webhook()
+                    print("✅ Webhook removed")
+                else:
+                    print(f"Skipping delete_webhook: current={current_url!r} != mine={WEBHOOK_URL!r}")
+            except Exception as e:
+                print(f"Webhook cleanup skipped: {e}")
     finally:
         await bot.session.close()
-    print("✅ Webhook removed")
+    print("✅ Shutdown complete")
 
 
 def _telegram_webhook_authorized(request: Request) -> bool:
@@ -3543,6 +3555,10 @@ async def root_health():
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+@app.get("/webapp")
+async def webapp_index():
+    return {"status": "ok", "version": APP_VERSION, "mini_app": "coming_soon"}
 
 
 @app.post("/replicate/webhook/{secret}")

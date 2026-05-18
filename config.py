@@ -13,5 +13,5 @@ if not BOT_TOKEN or not REPLICATE_API_TOKEN:
 
 # Настройка webhook совпадает с app.py: один POST "/" и секрет в Telegram header.
 WEBHOOK_BASE = (os.getenv("WEBHOOK_BASE") or "").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret123")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or ""
 WEBHOOK_URL = f"{WEBHOOK_BASE}/" if WEBHOOK_BASE else None
