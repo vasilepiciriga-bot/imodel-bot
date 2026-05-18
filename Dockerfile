@@ -13,5 +13,5 @@ RUN pip install -U pip && pip install -r requirements.txt
 
 COPY . .
 
-# boot.py prints startup diagnostics and respects Render/Railway PORT.
-CMD ["python", "boot.py"]
+# FastAPI на 8080 (Railway экспонирует сам)
+CMD ["uvicorn", "app:api", "--host", "0.0.0.0", "--port", "8080"]

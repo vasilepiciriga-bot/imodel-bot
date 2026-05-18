@@ -1,8 +1,10 @@
 # app.py — iModel v2.6.0
 # Copy-mode v2 (Scene Lock) + Identity Lock ++ Negative + Stable Seed
-# Остальное: AutoLang + GPT refine + S3 + Replicate (NanoBanana)
+# Остальное: AutoLang + GPT refine + S3 + Replicate (NanoBanana + RealESRGAN_x4plus)
 # Stars + Whitelist/Admin unlimited + Promo + 3 langs + pricing + gallery + refer
 # Безопасные отправки; Видео/анимация отключены. Доставка — байты.
+
+from __future__ import annotations
 
 import os
 import json
@@ -12,10 +14,9 @@ import uuid
 import base64
 import random
 import hashlib
+import hmac
 import asyncio
-import io
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Set, Any
+from typing import Optional, Dict, List, Set
 
 import requests
 from fastapi import FastAPI, Request
@@ -24,7 +25,6 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.utils.token import validate_token, TokenValidationError
 from aiogram.types import (
     Message, Update, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -35,13 +35,9 @@ from aiogram.types import (
 )
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 
-try:
-    import replicate
-except Exception:
-    replicate = None
+import replicate
 import boto3
 from botocore.config import Config
-from PIL import Image, UnidentifiedImageError
 
 # ---------- OpenAI (GPT + Vision) ----------
 try:
@@ -52,23 +48,13 @@ except Exception:
 APP_VERSION = "iModel 2.6.0"
 
 # ===================== ENV ==========================
-BOT_TOKEN      = os.getenv("BOT_TOKEN", "").strip()
-BOT_TOKEN_RAW  = BOT_TOKEN
-try:
-    if BOT_TOKEN:
-        validate_token(BOT_TOKEN)
-except TokenValidationError as e:
-    print(f"⚠️ Invalid BOT_TOKEN format; Telegram disabled for this boot: {e}")
-    BOT_TOKEN = ""
+BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
 WEBHOOK_BASE   = os.getenv("WEBHOOK_BASE", "").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or ""
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 if not WEBHOOK_SECRET:
-    print("⚠️ WEBHOOK_SECRET is not set — Telegram webhook will accept any request")
+    print("⚠️ WEBHOOK_SECRET is not set — Telegram webhook will reject requests")
 WEBHOOK_ALLOW_QUERY_SECRET = os.getenv("WEBHOOK_ALLOW_QUERY_SECRET", "0") == "1"
 WEBHOOK_URL = f"{WEBHOOK_BASE}/" if WEBHOOK_BASE else ""
-BOT_MODE = os.getenv("BOT_MODE", "webhook")  # "webhook" | "disabled"
-PUBLIC_API_SECRET = os.getenv("PUBLIC_API_SECRET", "")
-REPLICATE_WEBHOOK_SECRET = os.getenv("REPLICATE_WEBHOOK_SECRET", "")
 
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
@@ -126,12 +112,6 @@ STATS = {
     "nudges_sent": 0,
     "nudges_errors": 0,
     "nudges_granted": 0,
-    "delivery_photo_ok": 0,
-    "delivery_document_ok": 0,
-    "delivery_failed": 0,
-    "jobs_created": 0,
-    "jobs_done": 0,
-    "jobs_failed": 0,
 }
 STATS_USERS: Set[int] = set()
 STATS_USERS_INFO: Dict[int, Dict[str, object]] = {}
@@ -344,6 +324,8 @@ def _s3_get_text(key: str) -> Optional[str]:
 
 # Replicate models
 NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
+ESRGAN_MODEL     = os.getenv("ESRGAN_MODEL", "nightmareai/real-esrgan")  # x4plus via params
+ESRGAN_DISABLED  = False  # auto-disable on first 404
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -400,13 +382,7 @@ def is_free_user(uid: int, username: Optional[str] = None) -> bool:
     return is_admin(uid, username)
 
 # ===================== State ========================
-_PLACEHOLDER_TOKEN = "1000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-BOT_RUNTIME_TOKEN = BOT_TOKEN or _PLACEHOLDER_TOKEN
-try:
-    bot = Bot(token=BOT_RUNTIME_TOKEN)
-except Exception as _bot_err:
-    print(f"[WARN] Bot init failed ({_bot_err}), using placeholder — set BOT_TOKEN env var", flush=True)
-    bot = Bot(token=_PLACEHOLDER_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI(title="iModel Bot")
 api = app  # alias
@@ -987,177 +963,6 @@ async def safe_send_text(chat_id: int, text: str, **kwargs):
         print(f"[safe_send_text] bad request: {e}")
     return None
 
-TELEGRAM_PHOTO_MAX_BYTES = int(os.getenv("TELEGRAM_PHOTO_MAX_BYTES", str(9_500_000)))
-TELEGRAM_PHOTO_MAX_DIM_SUM = int(os.getenv("TELEGRAM_PHOTO_MAX_DIM_SUM", "9500"))
-TELEGRAM_PHOTO_MAX_RATIO = float(os.getenv("TELEGRAM_PHOTO_MAX_RATIO", "20"))
-
-
-@dataclass
-class TelegramImage:
-    bytes: bytes
-    width: int
-    height: int
-    source_format: str
-    photo_compatible: bool
-    resized: bool = False
-    compressed: bool = False
-    reason: str = ""
-
-
-@dataclass
-class DeliveryResult:
-    ok: bool
-    method: str = ""
-    error: str = ""
-    original_url: Optional[str] = None
-    telegram_url: Optional[str] = None
-    normalized: Optional[TelegramImage] = None
-
-
-@dataclass
-class ReplicateOutput:
-    url: Optional[str] = None
-    data: Optional[bytes] = None
-
-
-@dataclass
-class ReplicateCallMeta:
-    model: str
-    prediction_id: str = ""
-    status: str = ""
-    error: str = ""
-    duration_sec: float = 0.0
-    output_bytes: int = 0
-    output_url: str = ""
-    created_at: float = field(default_factory=time.time)
-
-
-REPLICATE_LAST_META: Optional[ReplicateCallMeta] = None
-REPLICATE_PREDICTIONS: Dict[str, Dict[str, Any]] = {}
-JOBS: Dict[str, Dict[str, Any]] = {}
-REPLICATE_WEBHOOK_EVENTS: Dict[str, Dict[str, Any]] = {}
-
-
-def normalize_image_for_telegram(img_bytes: bytes) -> TelegramImage:
-    """Return a JPEG copy shaped for Telegram sendPhoto where possible."""
-    try:
-        with Image.open(io.BytesIO(img_bytes)) as im:
-            source_format = (im.format or "unknown").lower()
-            if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
-                bg = Image.new("RGB", im.size, (255, 255, 255))
-                rgba = im.convert("RGBA")
-                bg.paste(rgba, mask=rgba.getchannel("A"))
-                im = bg
-            else:
-                im = im.convert("RGB")
-
-            width, height = im.size
-            ratio = max(width / max(height, 1), height / max(width, 1))
-            photo_compatible = ratio <= TELEGRAM_PHOTO_MAX_RATIO
-            reason = "" if photo_compatible else "aspect_ratio"
-            resized = False
-            compressed = False
-
-            dim_sum = width + height
-            if dim_sum > TELEGRAM_PHOTO_MAX_DIM_SUM:
-                scale = TELEGRAM_PHOTO_MAX_DIM_SUM / dim_sum
-                width = max(1, int(width * scale))
-                height = max(1, int(height * scale))
-                im = im.resize((width, height), Image.Resampling.LANCZOS)
-                resized = True
-
-            def encode(quality: int) -> bytes:
-                out = io.BytesIO()
-                im.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
-                return out.getvalue()
-
-            out_bytes = encode(95)
-            quality = 92
-            while len(out_bytes) > TELEGRAM_PHOTO_MAX_BYTES and quality >= 62:
-                out_bytes = encode(quality)
-                quality -= 6
-                compressed = True
-
-            while len(out_bytes) > TELEGRAM_PHOTO_MAX_BYTES and (width > 512 and height > 512):
-                width = max(1, int(width * 0.9))
-                height = max(1, int(height * 0.9))
-                im = im.resize((width, height), Image.Resampling.LANCZOS)
-                out_bytes = encode(82)
-                resized = True
-                compressed = True
-
-            if len(out_bytes) > TELEGRAM_PHOTO_MAX_BYTES:
-                photo_compatible = False
-                reason = "bytes"
-
-            return TelegramImage(
-                bytes=out_bytes,
-                width=width,
-                height=height,
-                source_format=source_format,
-                photo_compatible=photo_compatible,
-                resized=resized,
-                compressed=compressed,
-                reason=reason,
-            )
-    except (UnidentifiedImageError, OSError, ValueError) as e:
-        return TelegramImage(
-            bytes=img_bytes,
-            width=0,
-            height=0,
-            source_format="unknown",
-            photo_compatible=False,
-            reason=f"decode:{str(e)[:80]}",
-        )
-
-
-async def deliver_result(
-    chat_id: int,
-    image_bytes: bytes,
-    caption: str = "✅",
-    reply_markup: Optional[InlineKeyboardMarkup] = None,
-    job_id: Optional[str] = None,
-) -> DeliveryResult:
-    key_id = job_id or uuid.uuid4().hex
-    original_url = s3_put_and_presign(image_bytes, key_prefix=f"outputs/originals/{key_id}_")
-    normalized = normalize_image_for_telegram(image_bytes)
-    telegram_url = s3_put_and_presign(normalized.bytes, key_prefix=f"outputs/telegram/{key_id}_")
-
-    if normalized.photo_compatible:
-        try:
-            msg = await bot.send_photo(
-                chat_id=chat_id,
-                photo=BufferedInputFile(normalized.bytes, filename="imodel_result.jpg"),
-                caption=caption,
-                reply_markup=reply_markup,
-            )
-            stats_incr("delivery_photo_ok", 1)
-            return DeliveryResult(True, "photo", original_url=original_url, telegram_url=telegram_url, normalized=normalized)
-        except TelegramBadRequest as e:
-            print(f"[deliver_result] send_photo bad request job={key_id}: {e}")
-        except (TelegramForbiddenError, TelegramNotFound) as e:
-            print(f"[deliver_result] send_photo blocked/not found job={key_id}: {e}")
-            stats_incr("delivery_failed", 1)
-            return DeliveryResult(False, "photo", str(e), original_url, telegram_url, normalized)
-        except Exception as e:
-            print(f"[deliver_result] send_photo error job={key_id}: {str(e)[:180]}")
-
-    try:
-        await bot.send_document(
-            chat_id=chat_id,
-            document=BufferedInputFile(normalized.bytes or image_bytes, filename="imodel_result.jpg"),
-            caption=caption,
-            reply_markup=reply_markup,
-        )
-        stats_incr("delivery_document_ok", 1)
-        return DeliveryResult(True, "document", original_url=original_url, telegram_url=telegram_url, normalized=normalized)
-    except Exception as e:
-        err = str(e)[:200]
-        print(f"[deliver_result] send_document failed job={key_id}: {err}")
-        stats_incr("delivery_failed", 1)
-        return DeliveryResult(False, "document", err, original_url, telegram_url, normalized)
-
-
 # One-per-day referral hint
 async def maybe_send_referral_hint(uid: int):
     try:
@@ -1204,28 +1009,11 @@ def s3_put_and_presign(img_bytes: bytes, key_prefix: str = "inputs/") -> Optiona
         return None
 
 # ===================== REPLICATE HELPERS =============
-def _read_file_output(obj) -> Optional[bytes]:
-    reader = getattr(obj, "read", None)
-    if not callable(reader):
-        return None
-    try:
-        data = reader()
-        if isinstance(data, str):
-            data = data.encode("utf-8")
-        return data if isinstance(data, (bytes, bytearray)) and data else None
-    except Exception as e:
-        print("Replicate FileOutput read error:", str(e)[:160])
-        return None
-
-
 def _extract_first_url(output) -> Optional[str]:
     if output is None:
         return None
     if isinstance(output, str):
         return output if output.startswith("http") else None
-    url_attr = getattr(output, "url", None)
-    if isinstance(url_attr, str) and url_attr.startswith("http"):
-        return url_attr
     if isinstance(output, dict):
         if "output" in output:
             return _extract_first_url(output["output"])
@@ -1242,29 +1030,6 @@ def _extract_first_url(output) -> Optional[str]:
         return None
     return None
 
-
-def _extract_replicate_output(output) -> ReplicateOutput:
-    url = _extract_first_url(output)
-    if url:
-        return ReplicateOutput(url=url)
-    data = _read_file_output(output)
-    if data:
-        return ReplicateOutput(data=bytes(data))
-    if isinstance(output, dict):
-        if "output" in output:
-            return _extract_replicate_output(output["output"])
-        for v in output.values():
-            out = _extract_replicate_output(v)
-            if out.url or out.data:
-                return out
-    if isinstance(output, (list, tuple)):
-        for v in output:
-            out = _extract_replicate_output(v)
-            if out.url or out.data:
-                return out
-    return ReplicateOutput()
-
-
 def replicate_wait_prediction(pred_id: str, timeout: float = 180.0, interval: float = 1.5):
     start = time.time()
     while True:
@@ -1279,14 +1044,8 @@ def replicate_wait_prediction(pred_id: str, timeout: float = 180.0, interval: fl
 REPLICATE_LAST_ERROR: str = ""
 
 def replicate_generate(model: str, inputs: dict) -> Optional[str]:
-    global REPLICATE_LAST_ERROR, REPLICATE_LAST_META
+    global REPLICATE_LAST_ERROR
     REPLICATE_LAST_ERROR = ""
-    REPLICATE_LAST_META = ReplicateCallMeta(model=model)
-    if replicate is None:
-        REPLICATE_LAST_ERROR = "replicate package is not installed"
-        REPLICATE_LAST_META.error = REPLICATE_LAST_ERROR
-        print("replicate unavailable:", REPLICATE_LAST_ERROR)
-        return None
     # Allow passing either owner/name or owner/name:version
     model_name = model
     model_version = None
@@ -1298,86 +1057,49 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
             model_version = None
     try:
         # Prefer creating by version if provided
-        create_kwargs = {"input": inputs}
-        if REPLICATE_WEBHOOK_SECRET and WEBHOOK_BASE:
-            create_kwargs["webhook"] = f"{WEBHOOK_BASE}/replicate/webhook/{REPLICATE_WEBHOOK_SECRET}"
-            create_kwargs["webhook_events_filter"] = ["completed"]
         if model_version:
-            pred = replicate.predictions.create(version=model_version, **create_kwargs)
+            pred = replicate.predictions.create(version=model_version, input=inputs)
         else:
-            pred = replicate.predictions.create(model=model_name, **create_kwargs)
+            pred = replicate.predictions.create(model=model_name, input=inputs)
         pid = getattr(pred, "id", None) or (pred.get("id") if isinstance(pred, dict) else None)
         if pid:
-            REPLICATE_LAST_META.prediction_id = pid
-            REPLICATE_PREDICTIONS[pid] = {"model": model, "created_at": time.time()}
-        if pid:
-            t0 = time.time()
             pred = replicate_wait_prediction(pid)
-            REPLICATE_LAST_META.duration_sec = round(time.time() - t0, 3)
             status = getattr(pred, "status", None) or (pred.get("status") if isinstance(pred, dict) else None)
-            REPLICATE_LAST_META.status = status or ""
             if status != "succeeded":
                 err = getattr(pred, "error", None) or (pred.get("error") if isinstance(pred, dict) else None)
                 if err:
                     msg = str(err)
-                    REPLICATE_LAST_META.error = msg[:500]
                     print("Replicate prediction error:", msg[:200])
                     if "sensitive" in msg.lower():
                         return "SENSITIVE"
                 else:
                     print("Replicate prediction not succeeded:", status)
             out = getattr(pred, "output", None) or (pred.get("output") if isinstance(pred, dict) else None)
-            parsed = _extract_replicate_output(out)
-            if parsed.url:
-                REPLICATE_LAST_META.output_url = parsed.url
-                return parsed.url
-            if parsed.data:
-                REPLICATE_LAST_META.output_bytes = len(parsed.data)
-                url = s3_put_and_presign(parsed.data, key_prefix="replicate/outputs/")
-                if url:
-                    REPLICATE_LAST_META.output_url = url
-                    return url
+            url = _extract_first_url(out)
+            if url:
+                return url
             try:
-                parsed = _extract_replicate_output(dict(pred))
-                if parsed.url:
-                    REPLICATE_LAST_META.output_url = parsed.url
-                    return parsed.url
-                if parsed.data:
-                    REPLICATE_LAST_META.output_bytes = len(parsed.data)
-                    url = s3_put_and_presign(parsed.data, key_prefix="replicate/outputs/")
-                    if url:
-                        REPLICATE_LAST_META.output_url = url
-                        return url
+                url = _extract_first_url(dict(pred))
+                if url:
+                    return url
             except Exception:
                 pass
     except Exception as e:
         em = str(e)
         REPLICATE_LAST_ERROR = em
-        REPLICATE_LAST_META.error = em[:500]
         print("replicate.predictions.create error:", em[:200])
         if "sensitive" in em.lower():
             return "SENSITIVE"
 
     try:
         # replicate.run supports owner/name or owner/name:version
-        t0 = time.time()
         out = replicate.run(model if not model_version else f"{model_name}:{model_version}", input=inputs)
-        REPLICATE_LAST_META.duration_sec = round(time.time() - t0, 3)
-        REPLICATE_LAST_META.status = "succeeded"
-        parsed = _extract_replicate_output(out)
-        if parsed.url:
-            REPLICATE_LAST_META.output_url = parsed.url
-            return parsed.url
-        if parsed.data:
-            REPLICATE_LAST_META.output_bytes = len(parsed.data)
-            url = s3_put_and_presign(parsed.data, key_prefix="replicate/outputs/")
-            if url:
-                REPLICATE_LAST_META.output_url = url
-                return url
+        url = _extract_first_url(out)
+        if url:
+            return url
     except Exception as e2:
         em2 = str(e2)
         REPLICATE_LAST_ERROR = em2
-        REPLICATE_LAST_META.error = em2[:500]
         print("replicate.run error:", em2[:200])
         if "sensitive" in em2.lower():
             return "SENSITIVE"
@@ -1540,6 +1262,15 @@ def generate_group_post_image(lang: str) -> Optional[bytes]:
         if url and url.startswith("http"):
             img = _download_with_retries(url)
             if img:
+                # Optional upscale
+                try:
+                    up = replicate_generate(ESRGAN_MODEL, {"image": url, "scale": 2, "face_enhance": False, "model":"RealESRGAN_x4plus"})
+                    if up and up.startswith("http"):
+                        upb = _download_with_retries(up)
+                        if upb:
+                            return upb
+                except Exception as e:
+                    print("group ESRGAN error:", str(e)[:160])
                 return img
     except Exception as e:
         print("group image generate error:", str(e)[:160])
@@ -1900,7 +1631,7 @@ def _create_user_promo(uid: int, add: int = 3, ttl_uses: int = 1) -> str:
     PROMO_CODES[code] = {"add": add, "uses": ttl_uses}
     return code
 
-def craft_gpt_nudge(lang: str, offer: Dict[str, object], promo_code: Optional[str] = None) -> str:
+def craft_gpt_nudge(lang: str, offer: Dict[str, object], promo_code: str | None = None) -> str:
     base_fallbacks = {
         "ru": [
             "Возвращайтесь в iModel — новые стили уже ждут вас!",
@@ -2141,197 +1872,30 @@ def generate_image_from_bytes(
     except Exception:
         pass
 
-    return nano_bytes
-
-
-def _public_job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
-    hidden = {"image_bytes", "style_bytes", "wait_message", "reply_markup"}
-    out: Dict[str, Any] = {}
-    for k, v in job.items():
-        if k in hidden:
-            continue
-        if isinstance(v, (bytes, bytearray)):
-            continue
-        out[k] = v
-    return out
-
-
-async def _delete_wait_message(wait_message: Optional[Message]):
-    if not wait_message:
-        return
+    # Бережный апскейл
     try:
-        await wait_message.delete()
+        global ESRGAN_DISABLED
+        if not ESRGAN_MODEL or ESRGAN_DISABLED:
+            return nano_bytes
+        up_url = replicate_generate(ESRGAN_MODEL, {
+            "image": gen_url,
+            "scale": 4,
+            "face_enhance": False,
+            "model": "RealESRGAN_x4plus"
+        })
+        if up_url and up_url.startswith("http"):
+            up_bytes = _download_with_retries(up_url)
+            if up_bytes:
+                print("→ ESRGAN x4plus OK")
+                return up_bytes
+        return nano_bytes
     except Exception as e:
-        print("[job] wait delete error:", str(e)[:120])
-
-
-def _record_job(job_id: str, **updates):
-    job = JOBS.setdefault(job_id, {"job_id": job_id})
-    job.update(updates)
-    job["updated_at"] = time.time()
-    return job
-
-
-async def enqueue_telegram_generation_job(
-    *,
-    chat_id: int,
-    username: Optional[str],
-    image_bytes: bytes,
-    prompt: str,
-    lang: str,
-    seed: Optional[int],
-    caption: str,
-    success_stat: str,
-    fail_stat: str,
-    wait_message: Optional[Message],
-    strict: bool = False,
-    style_bytes: Optional[bytes] = None,
-    lock_scene: bool = True,
-    clear_copy_mode: bool = False,
-    auto_post: bool = True,
-) -> str:
-    job_id = uuid.uuid4().hex
-    JOBS[job_id] = {
-        "job_id": job_id,
-        "kind": "telegram_generation",
-        "status": "queued",
-        "chat_id": chat_id,
-        "username": username or "",
-        "prompt": prompt,
-        "lang": lang,
-        "seed": seed,
-        "success_stat": success_stat,
-        "fail_stat": fail_stat,
-        "caption": caption,
-        "strict": strict,
-        "lock_scene": lock_scene,
-        "clear_copy_mode": clear_copy_mode,
-        "auto_post": auto_post,
-        "created_at": time.time(),
-        "updated_at": time.time(),
-        "image_bytes": image_bytes,
-        "style_bytes": style_bytes,
-        "wait_message": wait_message,
-    }
-    stats_incr("jobs_created", 1)
-    asyncio.create_task(_run_telegram_generation_job(job_id))
-    return job_id
-
-
-async def _run_telegram_generation_job(job_id: str):
-    job = JOBS.get(job_id)
-    if not job:
-        return
-    chat_id = int(job["chat_id"])
-    username = str(job.get("username") or "")
-    wait_message = job.get("wait_message")
-    _record_job(job_id, status="running", started_at=time.time())
-
-    try:
-        final_bytes = await asyncio.to_thread(
-            generate_image_from_bytes,
-            job["image_bytes"],
-            str(job["prompt"]),
-            str(job.get("lang") or LANG_DEFAULT),
-            job.get("seed"),
-            bool(job.get("strict", False)),
-            job.get("style_bytes"),
-            bool(job.get("lock_scene", True)),
-            chat_id,
-        )
-    except Exception as e:
-        final_bytes = None
-        _record_job(job_id, error=str(e)[:500])
-        print("[job] generation exception:", job_id, str(e)[:200])
-
-    if not final_bytes and bool(job.get("strict")):
-        try:
-            retry_prompt = str(job["prompt"]) + ". Keep face absolutely unchanged, do not beautify, do not reshape."
-            _record_job(job_id, retry="strict_identity")
-            final_bytes = await asyncio.to_thread(
-                generate_image_from_bytes,
-                job["image_bytes"],
-                retry_prompt,
-                str(job.get("lang") or LANG_DEFAULT),
-                job.get("seed"),
-                True,
-                job.get("style_bytes"),
-                bool(job.get("lock_scene", True)),
-                chat_id,
-            )
-        except Exception as e:
-            final_bytes = None
-            _record_job(job_id, error=str(e)[:500])
-            print("[job] strict retry exception:", job_id, str(e)[:200])
-
-    if not final_bytes:
-        fail_stat = str(job.get("fail_stat") or "gens_fail")
-        stats_incr(fail_stat, 1)
-        _uadd(chat_id, fail_stat, 1)
-        stats_incr("jobs_failed", 1)
-        _record_job(job_id, status="failed", failed_at=time.time(), error=job.get("error") or "generation_failed")
-        if wait_message:
-            await safe_edit_text(wait_message, L(chat_id)["fail"])
-        return
-
-    delivery = await deliver_result(
-        chat_id,
-        final_bytes,
-        caption=str(job.get("caption") or "✅"),
-        reply_markup=kb_actions(chat_id),
-        job_id=job_id,
-    )
-    _record_job(
-        job_id,
-        delivery_method=delivery.method,
-        delivery_error=delivery.error,
-        original_url=delivery.original_url,
-        telegram_url=delivery.telegram_url,
-        output_bytes=len(final_bytes),
-        output_width=delivery.normalized.width if delivery.normalized else 0,
-        output_height=delivery.normalized.height if delivery.normalized else 0,
-    )
-
-    if not delivery.ok:
-        stats_incr("jobs_failed", 1)
-        _record_job(job_id, status="delivery_failed", failed_at=time.time())
-        if wait_message:
-            msg = L(chat_id).get("delivery_fail", "Generated, but Telegram rejected the file. Please try again.")
-            await safe_edit_text(wait_message, msg)
-        return
-
-    if not is_free_user(chat_id, username):
-        ensure_user_credit(chat_id)
-        USER_CREDITS[chat_id] = max(0, USER_CREDITS.get(chat_id, FREE_QUOTA) - 1)
-        _credits_save()
-
-    success_stat = str(job.get("success_stat") or "gens_ok")
-    USER_LAST_OUTPUT[chat_id] = final_bytes
-    USER_LAST_PROMPT[chat_id] = str(job.get("prompt") or "")
-    LAST_PHOTO[chat_id] = delivery.normalized.bytes if delivery.normalized else final_bytes
-    stats_incr(success_stat, 1)
-    _uadd(chat_id, success_stat, 1)
-    stats_incr("jobs_done", 1)
-
-    hist = USER_HISTORY.setdefault(chat_id, [])
-    hist.append(LAST_PHOTO[chat_id])
-    if len(hist) > GALLERY_LIMIT:
-        del hist[:-GALLERY_LIMIT]
-
-    await _delete_wait_message(wait_message)
-    await maybe_send_referral_hint(chat_id)
-    if bool(job.get("clear_copy_mode")):
-        USER_COPY_STYLE.pop(chat_id, None)
-        USER_COPY_MODE.discard(chat_id)
-        USER_COPY_PROMPT.pop(chat_id, None)
-
-    if bool(job.get("auto_post")) and AUTO_POST and GALLERY_CHANNEL_ID:
-        try:
-            await post_before_after_to_channel(chat_id)
-        except Exception as e:
-            print("AUTO_POST error:", str(e)[:160])
-    _record_job(job_id, status="delivered", delivered_at=time.time())
-
+        em = str(e)
+        print("ESRGAN error:", em[:200])
+        if "404" in em:
+            ESRGAN_DISABLED = True
+            print("→ Disable upscaler for this runtime (404)")
+        return nano_bytes
 
 # ======= Автопост «до/после» (опционально) ===========
 async def post_before_after_to_channel(user_id: int):
@@ -2594,25 +2158,21 @@ async def cmd_ping(m: Message):
 
 @dp.message(Command("diag"))
 async def cmd_diag(m: Message):
-    if not is_admin(m.chat.id, getattr(m.from_user, "username", None)):
-        return await safe_answer(m, L(m.chat.id)["admin_only"])
     try:
-        langs = ",".join(_GROUP_LANGS) if _GROUP_LANGS else "-"
+        langs = ",".join(_GROUP_LANGS) if ' _GROUP_LANGS' or _GROUP_LANGS else "-"
     except Exception:
         langs = "-"
     last = int(time.time() - GROUP_POST_LAST_AT) if GROUP_POST_LAST_AT else None
     lines = [
         f"App: {APP_VERSION}",
         f"Lang: {USER_LANG.get(m.chat.id, LANG_DEFAULT)}",
-        f"Webhook: {WEBHOOK_BASE or '<unset>'}/",
-        f"Webhook secret header: {'configured' if WEBHOOK_SECRET else 'missing'}",
+        f"Webhook: {WEBHOOK_URL}",
         f"Group posts: enabled={GROUP_POSTS_ENABLED} running={GROUP_POST_LOOP_RUNNING}",
         f"Group id: {PUBLISH_GROUP_ID}",
         f"Langs rotation: {langs}",
         f"Every minutes: {GROUP_POST_EVERY_MINUTES}",
         f"Window: {GROUP_POST_START_HOUR}-{GROUP_POST_END_HOUR}",
         f"Last post: {last if last is not None else 'never'}s ago",
-        f"Jobs: total={len(JOBS)} done={STATS.get('jobs_done',0)} failed={STATS.get('jobs_failed',0)} delivery_failed={STATS.get('delivery_failed',0)}",
     ]
     await safe_answer(m, "\n".join(lines))
 
@@ -2951,23 +2511,37 @@ async def cb_preset_pick(c: CallbackQuery):
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
     seed_int = ((hash(chat_id) % 10_000_000) + idx)
+    result = generate_image_from_bytes(
+        ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
+        seed=seed_int, user_id=chat_id
+    )
+    if not result:
+        stats_incr("gens_fail", 1)
+        _uadd(chat_id, "gens_fail", 1)
+        return await safe_edit_text(msg, L(chat_id)["fail"])
+    if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
+        USER_CREDITS[chat_id] -= 1
+        _credits_save()
+    USER_LAST_OUTPUT[chat_id] = result
+    USER_LAST_PROMPT[chat_id] = preset.prompt
+    LAST_PHOTO[chat_id] = result
+    stats_incr("gens_ok", 1)
+    _uadd(chat_id, "gens_ok", 1)
+    hist = USER_HISTORY.setdefault(chat_id, [])
+    hist.append(result)
+    if len(hist) > GALLERY_LIMIT:
+        del hist[:-GALLERY_LIMIT]
+    await msg.delete()
     cap = {
         "ru": f"✅ {preset.label_ru}",
         "en": f"✅ {preset.label_en}",
         "ro": "✅ Preset",
         "de": "✅ Preset",
     }.get(USER_LANG.get(chat_id, LANG_DEFAULT), "✅ Preset")
-    await enqueue_telegram_generation_job(
-        chat_id=chat_id,
-        username=getattr(c.from_user, "username", None),
-        image_bytes=ref,
-        prompt=preset.prompt,
-        lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int,
+    await c.message.answer_photo(
+        photo=BufferedInputFile(result, filename="imodel_result.jpg"),
         caption=cap,
-        success_stat="gens_ok",
-        fail_stat="gens_fail",
-        wait_message=msg,
+        reply_markup=kb_actions(chat_id),
     )
 
 @dp.callback_query(F.data == "promo_open")
@@ -3173,22 +2747,70 @@ async def on_photo(m: Message):
             seed = (hashlib.md5(style_bytes).hexdigest())
             seed_int = int(seed[:8], 16)
 
-            await enqueue_telegram_generation_job(
-                chat_id=m.chat.id,
-                username=getattr(m.from_user, "username", None),
-                image_bytes=img_bytes,
-                prompt=scene_spec,
+            # строгий режим: жёсткая сцена + identity lock + negative
+            # 2) Генерим по selfie + текстовому промпту (БЕЗ передачи style-image в модель)
+            final_bytes = generate_image_from_bytes(
+                img_bytes,
+                scene_spec,
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                 seed=seed_int,
-                caption=L(m.chat.id)["copy_done"],
-                success_stat="gens_copy_ok",
-                fail_stat="gens_copy_fail",
-                wait_message=wait,
                 strict=True,
                 style_bytes=None,
                 lock_scene=False,
-                clear_copy_mode=True,
+                user_id=m.chat.id,
             )
+            if not final_bytes:
+                # вторая попытка: ещё жёстче
+                final_bytes = generate_image_from_bytes(
+                    img_bytes,
+                    scene_spec + ". Keep face absolutely unchanged, do not beautify, do not reshape.",
+                    lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+                    seed=seed_int,
+                    strict=True,
+                    style_bytes=None,
+                    lock_scene=False,
+                    user_id=m.chat.id,
+                )
+                if not final_bytes:
+                    if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    stats_incr("gens_copy_fail", 1)
+                    _uadd(m.chat.id, "gens_copy_fail", 1)
+                    return
+
+            if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+                USER_CREDITS[m.chat.id] -= 1
+                _credits_save()
+            USER_LAST_OUTPUT[m.chat.id] = final_bytes
+            USER_LAST_PROMPT[m.chat.id] = scene_spec
+            LAST_PHOTO[m.chat.id] = final_bytes
+            stats_incr("gens_copy_ok", 1)
+            _uadd(m.chat.id, "gens_copy_ok", 1)
+
+            # история
+            hist = USER_HISTORY.setdefault(m.chat.id, [])
+            hist.append(final_bytes)
+            if len(hist) > GALLERY_LIMIT:
+                del hist[:-GALLERY_LIMIT]
+
+            if wait: await wait.delete()
+            await safe_answer_photo(
+                m,
+                BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
+                caption=L(m.chat.id)["copy_done"],
+                reply_markup=kb_actions(m.chat.id),
+            )
+            await maybe_send_referral_hint(m.chat.id)
+
+            # выключаем режим
+            USER_COPY_STYLE.pop(m.chat.id, None)
+            USER_COPY_MODE.discard(m.chat.id)
+
+            # авто-пост
+            if AUTO_POST and GALLERY_CHANNEL_ID:
+                try:
+                    await post_before_after_to_channel(m.chat.id)
+                except Exception as e:
+                    print("AUTO_POST error:", str(e)[:160])
             return
 
     # ----- Обычный режим -----
@@ -3207,22 +2829,44 @@ async def on_photo(m: Message):
                     return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
                 seed_int = ((hash(m.chat.id) % 10_000_000) + idx)
+                final_bytes = generate_image_from_bytes(
+                    img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+                    seed=seed_int, user_id=m.chat.id
+                )
+                if not final_bytes:
+                    if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                    stats_incr("gens_fail", 1)
+                    _uadd(m.chat.id, "gens_fail", 1)
+                    return
+                if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+                    USER_CREDITS[m.chat.id] -= 1
+                    _credits_save()
+                USER_LAST_OUTPUT[m.chat.id] = final_bytes
+                USER_LAST_PROMPT[m.chat.id] = preset.prompt
+                LAST_PHOTO[m.chat.id] = final_bytes
+                stats_incr("gens_ok", 1)
+                _uadd(m.chat.id, "gens_ok", 1)
+                hist = USER_HISTORY.setdefault(m.chat.id, [])
+                hist.append(final_bytes)
+                if len(hist) > GALLERY_LIMIT:
+                    del hist[:-GALLERY_LIMIT]
+                if wait: await wait.delete()
                 cap = {
                     "ru": f"✅ {preset.label_ru}",
                     "en": f"✅ {preset.label_en}",
                 }.get(USER_LANG.get(m.chat.id, LANG_DEFAULT), "✅ Preset")
-                await enqueue_telegram_generation_job(
-                    chat_id=m.chat.id,
-                    username=getattr(m.from_user, "username", None),
-                    image_bytes=img_bytes,
-                    prompt=preset.prompt,
-                    lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    seed=seed_int,
+                await safe_answer_photo(
+                    m,
+                    BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
                     caption=cap,
-                    success_stat="gens_ok",
-                    fail_stat="gens_fail",
-                    wait_message=wait,
+                    reply_markup=kb_actions(m.chat.id),
                 )
+                await maybe_send_referral_hint(m.chat.id)
+                if AUTO_POST and GALLERY_CHANNEL_ID:
+                    try:
+                        await post_before_after_to_channel(m.chat.id)
+                    except Exception as e:
+                        print("AUTO_POST error:", str(e)[:160])
                 return
         return await safe_answer(m, L(m.chat.id)["photo_ok"])
     if blocked(caption):
@@ -3235,18 +2879,44 @@ async def on_photo(m: Message):
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     seed_int = (hash(m.chat.id) % 10_000_000)
-    await enqueue_telegram_generation_job(
-        chat_id=m.chat.id,
-        username=getattr(m.from_user, "username", None),
-        image_bytes=img_bytes,
-        prompt=caption,
-        lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int,
-        caption="✅",
-        success_stat="gens_ok",
-        fail_stat="gens_fail",
-        wait_message=wait,
+    final_bytes = generate_image_from_bytes(
+        img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+        seed=seed_int, user_id=m.chat.id
     )
+    if not final_bytes:
+        if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+        stats_incr("gens_fail", 1)
+        _uadd(m.chat.id, "gens_fail", 1)
+        return
+
+    if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+        USER_CREDITS[m.chat.id] -= 1
+        _credits_save()
+    USER_LAST_OUTPUT[m.chat.id] = final_bytes
+    USER_LAST_PROMPT[m.chat.id] = caption
+    LAST_PHOTO[m.chat.id] = final_bytes
+    stats_incr("gens_ok", 1)
+    _uadd(m.chat.id, "gens_ok", 1)
+
+    hist = USER_HISTORY.setdefault(m.chat.id, [])
+    hist.append(final_bytes)
+    if len(hist) > GALLERY_LIMIT:
+        del hist[:-GALLERY_LIMIT]
+
+    if wait: await wait.delete()
+    await safe_answer_photo(
+        m,
+        BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
+        caption="✅",
+        reply_markup=kb_actions(m.chat.id),
+    )
+    await maybe_send_referral_hint(m.chat.id)
+
+    if AUTO_POST and GALLERY_CHANNEL_ID:
+        try:
+            await post_before_after_to_channel(m.chat.id)
+        except Exception as e:
+            print("AUTO_POST error:", str(e)[:160])
 
 # ===================== FLOW: TEXT =====================
 @dp.message(F.text & ~F.text.startswith("/"))
@@ -3283,18 +2953,43 @@ async def on_prompt(m: Message):
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     ref = refs[-1]
     seed_int = (hash(m.chat.id) % 10_000_000)
-    await enqueue_telegram_generation_job(
-        chat_id=m.chat.id,
-        username=getattr(m.from_user, "username", None),
-        image_bytes=ref,
-        prompt=text,
-        lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        seed=seed_int,
-        caption="✅",
-        success_stat="gens_ok",
-        fail_stat="gens_fail",
-        wait_message=wait,
+    final_bytes = generate_image_from_bytes(
+        ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
+        seed=seed_int, user_id=m.chat.id
     )
+    if not final_bytes:
+        if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+        stats_incr("gens_fail", 1)
+        _uadd(m.chat.id, "gens_fail", 1)
+        return
+
+    if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+        USER_CREDITS[m.chat.id] -= 1
+        _credits_save()
+    USER_LAST_OUTPUT[m.chat.id] = final_bytes
+    USER_LAST_PROMPT[m.chat.id] = text
+    LAST_PHOTO[m.chat.id] = final_bytes
+    stats_incr("gens_ok", 1)
+    _uadd(m.chat.id, "gens_ok", 1)
+
+    hist = USER_HISTORY.setdefault(m.chat.id, [])
+    hist.append(final_bytes)
+    if len(hist) > GALLERY_LIMIT:
+        del hist[:-GALLERY_LIMIT]
+
+    if wait: await wait.delete()
+    await safe_answer_photo(
+        m,
+        BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
+        caption="✅",
+        reply_markup=kb_actions(m.chat.id),
+    )
+
+    if AUTO_POST and GALLERY_CHANNEL_ID:
+        try:
+            await post_before_after_to_channel(m.chat.id)
+        except Exception as e:
+            print("AUTO_POST error:", str(e)[:160])
 
 # ===================== INLINE BUTTONS =================
 @dp.callback_query(F.data == "more")
@@ -3316,18 +3011,36 @@ async def cb_more(c: CallbackQuery):
     ref = refs[-1]
     # тот же промпт, seed + 1 (минимальная вариативность, лицо стабильное)
     seed_int = ((hash(chat_id) % 10_000_000) + 1)
-    await enqueue_telegram_generation_job(
-        chat_id=chat_id,
-        username=getattr(c.from_user, "username", None),
-        image_bytes=ref,
-        prompt=base_prompt,
-        lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        seed=seed_int,
-        caption="✅",
-        success_stat="gens_ok",
-        fail_stat="gens_fail",
-        wait_message=msg,
+    result = generate_image_from_bytes(
+        ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
+        seed=seed_int
     )
+    if not result:
+        STATS["gens_fail"] += 1
+        _uadd(chat_id, "gens_fail", 1)
+        return await safe_edit_text(msg, L(chat_id)["fail"])
+
+    if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
+        USER_CREDITS[chat_id] -= 1
+        _credits_save()
+    USER_LAST_OUTPUT[chat_id] = result
+    USER_LAST_PROMPT[chat_id] = base_prompt
+    LAST_PHOTO[chat_id] = result
+    STATS["gens_ok"] += 1
+    _uadd(chat_id, "gens_ok", 1)
+
+    hist = USER_HISTORY.setdefault(chat_id, [])
+    hist.append(result)
+    if len(hist) > GALLERY_LIMIT:
+        del hist[:-GALLERY_LIMIT]
+
+    await msg.delete()
+    await c.message.answer_photo(
+        photo=BufferedInputFile(result, filename="imodel_result.jpg"),
+        caption="✅",
+        reply_markup=kb_actions(chat_id),
+    )
+    await maybe_send_referral_hint(chat_id)
 
 
 async def ensure_webhook():
@@ -3348,7 +3061,7 @@ async def ensure_webhook():
         try:
             await bot.set_webhook(
                 url=WEBHOOK_URL,
-                secret_token=WEBHOOK_SECRET,
+                secret_token=WEBHOOK_SECRET or None,
                 drop_pending_updates=False,
             )
             print("Webhook set OK")
@@ -3379,17 +3092,11 @@ async def on_startup():
         print("Gallery channel:", GALLERY_CHANNEL_ID, "AUTO_POST:", AUTO_POST)
     if PUBLISH_GROUP_ID:
         print("Publish group:", PUBLISH_GROUP_ID)
-    print("Models → main:", NANOBANANA_MODEL or "<unset>")
+    print("Models → main:", NANOBANANA_MODEL or "<unset>", "| upscaler:", ESRGAN_MODEL or "<unset>")
 
+    me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
-    if BOT_TOKEN:
-        try:
-            me = await bot.get_me()
-            BOT_USERNAME_GLOBAL = me.username
-        except Exception as e:
-            print("Telegram get_me error:", str(e)[:200])
-    else:
-        print("⚠️ Нет BOT_TOKEN; Telegram handlers disabled until env is configured")
+    BOT_USERNAME_GLOBAL = me.username
 
     if BOT_TOKEN and WEBHOOK_BASE:
         await ensure_webhook()
@@ -3397,28 +3104,24 @@ async def on_startup():
     else:
         print("⚠️ Нет BOT_TOKEN или WEBHOOK_BASE")
 
-    if BOT_TOKEN:
-        try:
-            await bot.set_my_commands(
-                commands=[
-                    BotCommand(command="start",   description="Начать"),
-                    BotCommand(command="buy",     description="Купить звёздами"),
-                    BotCommand(command="promo",   description="Промокод"),
-                    BotCommand(command="balance", description="Баланс"),
-                    BotCommand(command="presets", description="Идеи описаний"),
-                    BotCommand(command="lang",    description="Сменить язык"),
-                    BotCommand(command="gallery", description="Моя галерея"),
-                    BotCommand(command="refer",   description="Реферальная ссылка"),
-                    BotCommand(command="pricing", description="Тарифы"),
-                    BotCommand(command="copy",    description="Скопировать фото"),
-                    BotCommand(command="help",    description="Помощь"),
-                    BotCommand(command="clear",   description="Очистить память"),
-                    BotCommand(command="version", description="Версия"),
-                ],
-                scope=BotCommandScopeDefault()
-            )
-        except Exception as e:
-            print("set_my_commands error:", str(e)[:200])
+    await bot.set_my_commands(
+        commands=[
+            BotCommand(command="start",   description="Начать"),
+            BotCommand(command="buy",     description="Купить звёздами"),
+            BotCommand(command="promo",   description="Промокод"),
+            BotCommand(command="balance", description="Баланс"),
+            BotCommand(command="presets", description="Идеи описаний"),
+            BotCommand(command="lang",    description="Сменить язык"),
+            BotCommand(command="gallery", description="Моя галерея"),
+            BotCommand(command="refer",   description="Реферальная ссылка"),
+            BotCommand(command="pricing", description="Тарифы"),
+            BotCommand(command="copy",    description="Скопировать фото"),
+            BotCommand(command="help",    description="Помощь"),
+            BotCommand(command="clear",   description="Очистить память"),
+            BotCommand(command="version", description="Версия"),
+        ],
+        scope=BotCommandScopeDefault()
+    )
     # Background nudges
     try:
         if NUDGE_ENABLED:
@@ -3453,72 +3156,12 @@ async def on_shutdown():
 
 def _telegram_webhook_authorized(request: Request) -> bool:
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if WEBHOOK_SECRET and header_secret == WEBHOOK_SECRET:
+    if WEBHOOK_SECRET and hmac.compare_digest(header_secret, WEBHOOK_SECRET):
         return True
-    if WEBHOOK_ALLOW_QUERY_SECRET and request.query_params.get("secret") == WEBHOOK_SECRET:
-        return True
+    if WEBHOOK_ALLOW_QUERY_SECRET:
+        query_secret = request.query_params.get("secret", "")
+        return bool(WEBHOOK_SECRET and hmac.compare_digest(query_secret, WEBHOOK_SECRET))
     return False
-
-
-def _api_authorized(request: Request) -> bool:
-    if not PUBLIC_API_SECRET:
-        return False
-    supplied = request.headers.get("X-API-Key") or request.query_params.get("secret") or ""
-    return supplied == PUBLIC_API_SECRET
-
-
-async def _run_api_generation_job(job_id: str):
-    job = JOBS.get(job_id)
-    if not job:
-        return
-    chat_id = int(job.get("chat_id") or 0)
-    _record_job(job_id, status="running", started_at=time.time())
-    try:
-        final_bytes = await asyncio.to_thread(
-            generate_image_from_bytes,
-            job["image_bytes"],
-            str(job.get("prompt") or ""),
-            str(job.get("lang") or LANG_DEFAULT),
-            job.get("seed"),
-            bool(job.get("strict", False)),
-            job.get("style_bytes"),
-            bool(job.get("lock_scene", True)),
-            chat_id or None,
-        )
-    except Exception as e:
-        final_bytes = None
-        _record_job(job_id, error=str(e)[:500])
-        print("[api-job] generation exception:", job_id, str(e)[:200])
-
-    if not final_bytes:
-        stats_incr("jobs_failed", 1)
-        _record_job(job_id, status="failed", failed_at=time.time(), error=job.get("error") or "generation_failed")
-        return
-
-    original_url = s3_put_and_presign(final_bytes, key_prefix=f"outputs/originals/{job_id}_")
-    normalized = normalize_image_for_telegram(final_bytes)
-    telegram_url = s3_put_and_presign(normalized.bytes, key_prefix=f"outputs/telegram/{job_id}_")
-    _record_job(
-        job_id,
-        status="generated",
-        output_bytes=len(final_bytes),
-        output_width=normalized.width,
-        output_height=normalized.height,
-        original_url=original_url,
-        telegram_url=telegram_url,
-    )
-
-    if chat_id:
-        delivery = await deliver_result(chat_id, final_bytes, caption=str(job.get("caption") or "✅"), job_id=job_id)
-        if delivery.ok:
-            _record_job(job_id, status="delivered", delivery_method=delivery.method, delivered_at=time.time())
-            stats_incr("jobs_done", 1)
-        else:
-            _record_job(job_id, status="delivery_failed", delivery_error=delivery.error, failed_at=time.time())
-            stats_incr("jobs_failed", 1)
-    else:
-        _record_job(job_id, status="ready", completed_at=time.time())
-        stats_incr("jobs_done", 1)
 
 
 @app.post("/")
@@ -3555,99 +3198,6 @@ async def root_health():
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
-
-@app.get("/webapp")
-async def webapp_index():
-    return {"status": "ok", "version": APP_VERSION, "mini_app": "coming_soon"}
-
-
-@app.post("/replicate/webhook/{secret}")
-async def replicate_webhook(secret: str, request: Request):
-    if not REPLICATE_WEBHOOK_SECRET or secret != REPLICATE_WEBHOOK_SECRET:
-        return JSONResponse({"status": "forbidden"}, status_code=403)
-    data = await request.json()
-    pred_id = str(data.get("id") or data.get("prediction_id") or "")
-    if pred_id:
-        REPLICATE_WEBHOOK_EVENTS[pred_id] = data
-        meta = REPLICATE_PREDICTIONS.setdefault(pred_id, {})
-        meta["webhook_at"] = time.time()
-        meta["webhook_status"] = data.get("status", "")
-        meta["webhook_error"] = str(data.get("error") or "")[:500]
-    return {"ok": True}
-
-
-@app.post("/api/v1/generations")
-async def api_create_generation(request: Request):
-    if not _api_authorized(request):
-        return JSONResponse({"status": "forbidden"}, status_code=403)
-    data = await request.json()
-    prompt = str(data.get("prompt") or "").strip()
-    image_b64 = str(data.get("image_b64") or "").strip()
-    image_url = str(data.get("image_url") or "").strip()
-    if not prompt or not (image_b64 or image_url):
-        return JSONResponse({"error": "prompt and image_b64 or image_url are required"}, status_code=400)
-    try:
-        if image_b64:
-            if "," in image_b64 and image_b64.lower().startswith("data:"):
-                image_b64 = image_b64.split(",", 1)[1]
-            image_bytes = base64.b64decode(image_b64)
-        else:
-            image_bytes = _download_with_retries(image_url) or b""
-    except Exception as e:
-        return JSONResponse({"error": f"invalid image: {str(e)[:120]}"}, status_code=400)
-    if not image_bytes:
-        return JSONResponse({"error": "image could not be loaded"}, status_code=400)
-
-    job_id = uuid.uuid4().hex
-    chat_id = int(data.get("chat_id") or 0)
-    JOBS[job_id] = {
-        "job_id": job_id,
-        "kind": "api_generation",
-        "status": "queued",
-        "chat_id": chat_id,
-        "prompt": prompt,
-        "lang": str(data.get("lang") or LANG_DEFAULT),
-        "seed": data.get("seed"),
-        "caption": str(data.get("caption") or "✅"),
-        "strict": bool(data.get("strict", False)),
-        "lock_scene": bool(data.get("lock_scene", True)),
-        "created_at": time.time(),
-        "updated_at": time.time(),
-        "image_bytes": image_bytes,
-    }
-    stats_incr("jobs_created", 1)
-    asyncio.create_task(_run_api_generation_job(job_id))
-    return {"job_id": job_id, "status": "queued"}
-
-
-@app.get("/api/v1/generations/{job_id}")
-async def api_get_generation(job_id: str, request: Request):
-    if not _api_authorized(request):
-        return JSONResponse({"status": "forbidden"}, status_code=403)
-    job = JOBS.get(job_id)
-    if not job:
-        return JSONResponse({"error": "not_found"}, status_code=404)
-    return _public_job_snapshot(job)
-
-
-@app.get("/api/v1/me/credits")
-async def api_get_credits(request: Request):
-    if not _api_authorized(request):
-        return JSONResponse({"status": "forbidden"}, status_code=403)
-    try:
-        chat_id = int(request.query_params.get("chat_id") or "0")
-    except Exception:
-        chat_id = 0
-    if not chat_id:
-        return JSONResponse({"error": "chat_id is required"}, status_code=400)
-    username = request.query_params.get("username")
-    ensure_user_credit(chat_id)
-    return {
-        "chat_id": chat_id,
-        "credits": USER_CREDITS.get(chat_id, FREE_QUOTA),
-        "unlimited": is_free_user(chat_id, username),
-    }
-
 
 @app.get("/metrics")
 async def http_metrics(request: Request):
@@ -3888,5 +3438,3 @@ async def admin_panel(request: Request):
   </html>
     """
     return HTMLResponse(content=html)
-
-
