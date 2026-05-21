@@ -6,11 +6,11 @@ import os
 import time
 from urllib.parse import urlencode
 
-os.environ.setdefault("BOT_TOKEN", "123456:ABCDEF")
-os.environ.setdefault("REPLICATE_API_TOKEN", "dummy")
-os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")
-os.environ.setdefault("METRICS_SECRET", "test-metrics-secret")
-os.environ.setdefault("ADMIN_PANEL_SECRET", "test-admin-secret")
+os.environ["BOT_TOKEN"] = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+os.environ["REPLICATE_API_TOKEN"] = "dummy"
+os.environ["WEBHOOK_SECRET"] = "test-webhook-secret"
+os.environ["METRICS_SECRET"] = "test-metrics-secret"
+os.environ["ADMIN_PANEL_SECRET"] = "test-admin-secret"
 
 from fastapi.testclient import TestClient
 

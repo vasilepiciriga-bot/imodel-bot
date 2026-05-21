@@ -23,7 +23,8 @@ from typing import Optional, Dict, List, Set, Any, Tuple
 
 import requests
 from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -60,7 +61,25 @@ try:
 except Exception:
     OpenAI = None
 
-APP_VERSION = "iModel 2.7.0"
+APP_VERSION = "iModel 3.0.0"
+
+# ===================== iModel package ==================
+try:
+    from imodel.config.settings import get_settings as imodel_settings
+    from imodel.db import connection as imodel_db_conn
+    from imodel.db.migrations import run_migrations as imodel_run_migrations
+    from imodel.db.migrations import seed_styles_if_empty, seed_packs_if_empty
+    from imodel.webapp_api import handlers as webapp_handlers
+    from imodel.config.packages import list_packages as imodel_list_packages
+    from imodel.config.packages import credits_for_payload as imodel_credits_for_payload
+    from imodel.db.payments import process_payment_idempotent, record_credit_transaction
+    from imodel.db import gallery as imodel_gallery_db
+    from imodel.db import referrals as imodel_referrals_db
+    from imodel.admin.metrics import admin_extra_metrics
+    IMODEL_PKG_OK = True
+except Exception as _imodel_import_err:
+    print("[imodel] package import warning:", str(_imodel_import_err)[:200])
+    IMODEL_PKG_OK = False
 
 # ===================== ENV ==========================
 BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
@@ -273,6 +292,16 @@ def db_init():
                 """)
         DB_READY = True
         log_event("db_ready", backend="postgres")
+        if IMODEL_PKG_OK:
+            try:
+                imodel_db_conn.configure(_db_execute, _db_fetchall, DB_READY)
+                imodel_run_migrations()
+                seeded = seed_styles_if_empty()
+                seed_packs_if_empty()
+                if seeded:
+                    log_event("imodel_styles_seeded", count=seeded)
+            except Exception as ie:
+                log_event("imodel_db_setup_error", error=str(ie)[:240])
     except Exception as e:
         DB_READY = False
         log_event("db_init_error", error=str(e)[:240])
@@ -818,6 +847,11 @@ dp = Dispatcher()
 app = FastAPI(title="iModel Bot")
 api = app  # alias
 
+_WEBAPP_V2_DIST = os.path.join(os.path.dirname(__file__), "webapp", "dist")
+_webapp_assets_dir = os.path.join(_WEBAPP_V2_DIST, "assets")
+if os.path.isdir(_webapp_assets_dir):
+    app.mount("/webapp/assets", StaticFiles(directory=_webapp_assets_dir), name="webapp_assets")
+
 USER_REFS: Dict[int, List[bytes]]  = {}   # 1–4 селфи (последние)
 USER_LAST_OUTPUT: Dict[int, bytes] = {}   # последний результат
 USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt (ввод пользователя/сцена)
@@ -913,7 +947,7 @@ PROMO_CODES: Dict[str, Dict[str, int]] = {
 
 # История /gallery
 USER_HISTORY: Dict[int, List[bytes]] = {}
-GALLERY_LIMIT = 5
+GALLERY_LIMIT = int(os.getenv("GALLERY_LIMIT", "5"))
 
 # Рефералка
 REF_BONUS_NEW  = int(os.getenv("REF_BONUS_NEW", "3"))
@@ -2543,18 +2577,48 @@ async def send_stars_invoice(chat_id: int, title: str, desc: str, payload: str, 
 @dp.message(Command("buy"))
 async def cmd_buy(m: Message):
     lang = L(m.chat.id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [InlineKeyboardButton(text=lang["buy_btn_10"],  callback_data="buy_stars_10")],
         [InlineKeyboardButton(text=lang["buy_btn_30"],  callback_data="buy_stars_30")],
         [InlineKeyboardButton(text=lang["buy_btn_100"], callback_data="buy_stars_100")],
-        [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
-    ])
+    ]
+    if IMODEL_PKG_OK and imodel_settings().new_star_packages:
+        try:
+            for p in imodel_list_packages(include_premium=True):
+                if p.get("legacy"):
+                    continue
+                rows.insert(0, [InlineKeyboardButton(
+                    text=f"⭐ {p.get('title')} — {p['stars']}★",
+                    callback_data=f"buy_payload_{p['payload']}",
+                )])
+        except Exception:
+            pass
+    rows.append([InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await safe_answer(m, lang["buy_title"], reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("buy_payload_"))
+async def cb_buy_payload(c: CallbackQuery):
+    payload = c.data.replace("buy_payload_", "", 1)
+    txt = L(c.message.chat.id).get("hint_refer_pay", "Invite a friend for free credits").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
+    if IMODEL_PKG_OK:
+        for p in imodel_list_packages(include_premium=True):
+            if p["payload"] == payload:
+                await send_stars_invoice(
+                    c.message.chat.id,
+                    p.get("title", payload),
+                    p.get("description", p.get("title", "")),
+                    payload,
+                    int(p["stars"]),
+                )
+                await safe_cb_answer(c, txt)
+                return
+    await safe_cb_answer(c, "Package unavailable")
+
 
 @dp.callback_query(F.data.startswith("buy_stars_"))
 async def cb_buy_stars(c: CallbackQuery):
-    pack = c.data.split("_")[-1]
-    # subtle referral tooltip
+    pack = c.data.replace("buy_stars_", "", 1)
     txt = L(c.message.chat.id).get("hint_refer_pay", "Invite a friend for free credits").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
     if pack == "10":
         await send_stars_invoice(c.message.chat.id, "iModel — 10 генераций", "Пакет 10 генераций", "pack_10", 200)
@@ -2572,14 +2636,43 @@ async def process_pre_checkout_q(pcq: PreCheckoutQuery):
 async def got_payment(m: Message):
     payload = m.successful_payment.invoice_payload
     add = 0
-    if payload == "pack_10": add = 10
-    elif payload == "pack_30": add = 30
-    elif payload == "pack_100": add = 100
-    # ensure user is recorded with username for admin visibility
+    duplicate = False
+    if IMODEL_PKG_OK and imodel_settings().payment_ledger_v2:
+        try:
+            xtr = int(getattr(m.successful_payment, "total_amount", 0) or 0)
+            charge_id = getattr(m.successful_payment, "telegram_payment_charge_id", None) or getattr(
+                m.successful_payment, "provider_payment_charge_id", None
+            )
+            proc = process_payment_idempotent(m.chat.id, payload, xtr, charge_id=str(charge_id) if charge_id else None)
+            if proc.get("duplicate"):
+                duplicate = True
+                add = 0
+            else:
+                add = int(proc.get("credits", 0))
+        except Exception as e:
+            print("payment ledger error:", str(e)[:160])
+            add = imodel_credits_for_payload(payload) if IMODEL_PKG_OK else 0
+    if add <= 0 and not duplicate:
+        if payload == "pack_10": add = 10
+        elif payload == "pack_30": add = 30
+        elif payload == "pack_100": add = 100
+        elif IMODEL_PKG_OK:
+            add = imodel_credits_for_payload(payload)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
-    USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
-    _credits_save()
-    await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
+    if add > 0:
+        USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
+        _credits_save()
+        if IMODEL_PKG_OK and imodel_settings().payment_ledger_v2:
+            try:
+                record_credit_transaction(
+                    m.chat.id, add, "purchase", ref_id=payload, balance_after=USER_CREDITS[m.chat.id]
+                )
+            except Exception:
+                pass
+    if duplicate:
+        await safe_answer(m, L(m.chat.id).get("bought", "✅ Credits added: +{add} (total {all})").format(add=0, all=USER_CREDITS[m.chat.id]))
+    else:
+        await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
     stats_incr("payments", 1)
     _uadd(m.chat.id, "payments", 1)
     # Notify admins about the purchase
@@ -2780,6 +2873,11 @@ async def cmd_start(m: Message):
             invited_id = m.chat.id
             if ref_id != invited_id and invited_id not in REF_MAP:
                 REF_MAP[invited_id] = ref_id
+                if IMODEL_PKG_OK:
+                    try:
+                        imodel_referrals_db.save_referral(invited_id, ref_id)
+                    except Exception:
+                        pass
                 ensure_user_credit(invited_id)
                 USER_CREDITS[invited_id] += REF_BONUS_NEW
                 _credits_save()
@@ -2906,6 +3004,28 @@ async def cmd_balance(m: Message):
             [InlineKeyboardButton(text="⭐ " + lang["btn_buy"], callback_data="buy_open")],
         ])
         await safe_answer(m, hint, reply_markup=kb)
+
+@dp.message(Command("forget"))
+async def cmd_forget(m: Message):
+    uid = m.chat.id
+    USER_HISTORY.pop(uid, None)
+    USER_REFS.pop(uid, None)
+    USER_LAST_OUTPUT.pop(uid, None)
+    USER_LAST_PROMPT.pop(uid, None)
+    USER_COPY_STYLE.pop(uid, None)
+    USER_COPY_MODE.discard(uid)
+    USER_PRESET_PENDING.pop(uid, None)
+    if IMODEL_PKG_OK and DB_READY:
+        try:
+            imodel_db_conn.execute(
+                "UPDATE imodel_generation_results SET deleted_at = %s WHERE uid = %s AND deleted_at IS NULL",
+                (time.time(), uid),
+            )
+        except Exception:
+            pass
+    audit_log(uid, "user.forget", uid)
+    await safe_answer(m, L(uid).get("privacy", "Data cleared.") + " /forget complete.")
+
 
 @dp.message(Command("clear"))
 async def cmd_clear(m: Message):
@@ -3244,7 +3364,16 @@ async def on_photo(m: Message):
             # 1) Берём уже подготовленный/отредактированный пользователем промпт, либо пробуем сгенерировать
             scene_spec = USER_COPY_PROMPT.get(m.chat.id)
             if not scene_spec:
-                scene_spec = craft_mj_prompt_from_image(style_bytes)
+                if IMODEL_PKG_OK and imodel_settings().copy_mode_v2:
+                    try:
+                        from prompt_engine import craft_prompt_from_style_image
+                        crafted = craft_prompt_from_style_image(style_bytes)
+                        if crafted and crafted.get("prompt"):
+                            scene_spec = crafted["prompt"]
+                    except Exception:
+                        scene_spec = None
+                if not scene_spec:
+                    scene_spec = craft_mj_prompt_from_image(style_bytes)
             if not scene_spec:
                 scene_spec = craft_scene_spec_from_image(style_bytes) or "person, same scene."
             USER_REFS.setdefault(m.chat.id, [])
@@ -3741,14 +3870,27 @@ async def run_webapp_generation_job(job_id: str):
         return
     uid = int(job.get("chat_id") or 0)
     record_job(job_id, status="running")
+    prompt_text = str(job.get("prompt") or "")
+    style_key = job.get("style_key")
+    credit_cost = int(job.get("credit_cost") or 1)
+    if IMODEL_PKG_OK and imodel_settings().use_prompt_builder and style_key:
+        try:
+            prompt_text, credit_cost = webapp_handlers.resolve_prompt_for_request(
+                prompt_text, style_key, str(job.get("lang") or LANG_DEFAULT)
+            )
+            record_job(job_id, prompt=prompt_text, credit_cost=credit_cost)
+        except Exception:
+            pass
+    style_bytes = job.get("style_bytes")
+    strict = bool(style_bytes) or style_key == "copy_any_style"
     try:
         final_bytes = await asyncio.to_thread(
             generate_image_from_bytes,
             job["image_bytes"],
-            str(job.get("prompt") or ""),
+            prompt_text,
             lang=str(job.get("lang") or LANG_DEFAULT),
-            strict=False,
-            style_bytes=None,
+            strict=strict,
+            style_bytes=style_bytes,
             lock_scene=True,
             user_id=uid,
             job_id=job_id,
@@ -3763,10 +3905,30 @@ async def run_webapp_generation_job(job_id: str):
     output_url = s3_put_and_presign(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
     if uid and not is_free_user(uid, str(job.get("username") or "")):
         ensure_user_credit(uid)
-        USER_CREDITS[uid] = max(0, int(USER_CREDITS.get(uid, FREE_QUOTA)) - 1)
+        USER_CREDITS[uid] = max(0, int(USER_CREDITS.get(uid, FREE_QUOTA)) - credit_cost)
         _credits_save()
+        if IMODEL_PKG_OK and imodel_settings().payment_ledger_v2:
+            try:
+                record_credit_transaction(uid, -credit_cost, "generation", ref_id=job_id, balance_after=USER_CREDITS[uid])
+            except Exception:
+                pass
+    if IMODEL_PKG_OK and imodel_settings().persistent_gallery:
+        try:
+            imodel_gallery_db.save_result(uid, job_id, style_key, None, output_url)
+        except Exception:
+            pass
     stats_incr("jobs_done", 1)
     record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes))
+    if IMODEL_PKG_OK and imodel_settings().notify_chat_on_webapp_job and uid and final_bytes:
+        try:
+            await bot.send_photo(
+                uid,
+                BufferedInputFile(final_bytes, filename="imodel_result.jpg"),
+                caption=L(uid).get("ready", "✅ Your photoshoot is ready"),
+            )
+            stats_incr("delivery_photo_ok", 1)
+        except Exception as e:
+            print("webapp notify chat error:", str(e)[:160])
 
 
 async def _process_telegram_update(data: Dict[str, Any], received_at: float):
@@ -3819,6 +3981,10 @@ async def healthz():
 
 @app.get("/webapp")
 async def webapp_index():
+    if IMODEL_PKG_OK and imodel_settings().webapp_v2_static:
+        index_path = os.path.join(_WEBAPP_V2_DIST, "index.html")
+        if os.path.isfile(index_path):
+            return FileResponse(index_path, media_type="text/html")
     html = """
 <!doctype html>
 <html lang="en">
@@ -3974,12 +4140,14 @@ async def api_gallery(request: Request):
         db_jobs = _db_load_recent_jobs(100)
         if db_jobs:
             source_jobs = db_jobs
-    items = [
+    job_items = [
         public_job_snapshot(j)
         for j in source_jobs
         if int(j.get("chat_id") or 0) == uid and j.get("status") == "ready"
-    ][-20:]
-    return {"items": items}
+    ][-50:]
+    if IMODEL_PKG_OK:
+        return webapp_handlers.handle_gallery(uid, job_items)
+    return {"items": job_items, "source": "jobs"}
 
 @app.post("/api/v1/generations")
 async def api_create_generation(request: Request):
@@ -3989,19 +4157,40 @@ async def api_create_generation(request: Request):
     uid = int(user["uid"])
     username = str(user.get("username") or "")
     ensure_user_credit(uid)
-    if not has_credit(uid, username):
-        return JSONResponse({"error": "no_credits"}, status_code=402)
     data = await request.json()
     prompt = str(data.get("prompt") or "").strip()
+    style_key = str(data.get("style_key") or "").strip() or None
     image_b64 = str(data.get("image_b64") or "").strip()
-    if not prompt or not image_b64:
-        return JSONResponse({"error": "prompt and image_b64 are required"}, status_code=400)
+    reference_b64 = str(data.get("reference_b64") or "").strip()
+    credit_cost = 1
+    if IMODEL_PKG_OK and style_key:
+        try:
+            _, credit_cost = webapp_handlers.resolve_prompt_for_request(
+                prompt, style_key, str(data.get("lang") or LANG_DEFAULT)
+            )
+            webapp_handlers.handle_record_style_event(uid, style_key, "generate")
+        except Exception:
+            pass
+    if not has_credit(uid, username) and USER_CREDITS.get(uid, FREE_QUOTA) < credit_cost:
+        return JSONResponse({"error": "no_credits", "required": credit_cost}, status_code=402)
+    if not image_b64:
+        return JSONResponse({"error": "image_b64 is required"}, status_code=400)
+    if not prompt and not style_key:
+        return JSONResponse({"error": "prompt or style_key is required"}, status_code=400)
     try:
         if image_b64.startswith("data:") and "," in image_b64:
             image_b64 = image_b64.split(",", 1)[1]
         image_bytes = base64.b64decode(image_b64)
     except Exception:
         return JSONResponse({"error": "invalid image"}, status_code=400)
+    style_bytes = None
+    if reference_b64:
+        try:
+            if reference_b64.startswith("data:") and "," in reference_b64:
+                reference_b64 = reference_b64.split(",", 1)[1]
+            style_bytes = base64.b64decode(reference_b64)
+        except Exception:
+            return JSONResponse({"error": "invalid reference image"}, status_code=400)
     ok, reason = assess_selfie_quality(image_bytes)
     if not ok:
         return JSONResponse({"error": "selfie_quality", "reason": reason}, status_code=400)
@@ -4010,14 +4199,17 @@ async def api_create_generation(request: Request):
         status="queued",
         chat_id=uid,
         username=username,
-        prompt=prompt,
+        prompt=prompt or (style_key or ""),
         model=NANOBANANA_MODEL,
         image_bytes=image_bytes,
         lang=str(data.get("lang") or LANG_DEFAULT),
+        style_key=style_key,
+        credit_cost=credit_cost,
+        style_bytes=style_bytes,
     )
     stats_incr("jobs_created", 1)
     asyncio.create_task(run_webapp_generation_job(str(job["job_id"])))
-    return {"job_id": job["job_id"], "status": "queued"}
+    return {"job_id": job["job_id"], "status": "queued", "credit_cost": credit_cost}
 
 @app.get("/api/v1/generations/{job_id}")
 async def api_get_generation(job_id: str, request: Request):
@@ -4031,6 +4223,147 @@ async def api_get_generation(job_id: str, request: Request):
     if int(job.get("chat_id") or 0) != uid and not has_grant(uid, str(user.get("username") or ""), "jobs.view"):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     return public_job_snapshot(job)
+
+
+@app.post("/api/v1/generations/{job_id}/regenerate")
+async def api_regenerate_generation(job_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    parent = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if not parent:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if int(parent.get("chat_id") or 0) != uid:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    reg = webapp_handlers.handle_regenerate(parent, uid) if IMODEL_PKG_OK else {}
+    image_bytes = parent.get("image_bytes")
+    if not image_bytes:
+        return JSONResponse({"error": "parent_missing_image"}, status_code=400)
+    if not has_credit(uid, str(user.get("username") or "")):
+        return JSONResponse({"error": "no_credits"}, status_code=402)
+    job = record_job(
+        kind="webapp_regenerate",
+        status="queued",
+        chat_id=uid,
+        username=str(user.get("username") or ""),
+        prompt=reg.get("prompt") or parent.get("prompt"),
+        model=NANOBANANA_MODEL,
+        image_bytes=image_bytes,
+        lang=reg.get("lang") or parent.get("lang") or LANG_DEFAULT,
+        style_key=reg.get("style_key") or parent.get("style_key"),
+        parent_job_id=job_id,
+    )
+    asyncio.create_task(run_webapp_generation_job(str(job["job_id"])))
+    return {"job_id": job["job_id"], "status": "queued", "parent_job_id": job_id}
+
+
+@app.get("/api/v1/styles")
+async def api_list_styles(request: Request, trending: bool = False, category: str = ""):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    if not IMODEL_PKG_OK:
+        return {"items": [], "enabled": False}
+    return webapp_handlers.handle_list_styles(trending=trending, category=category or None)
+
+
+@app.get("/api/v1/styles/trending")
+async def api_styles_trending(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    if not IMODEL_PKG_OK:
+        return {"items": [], "enabled": False}
+    return webapp_handlers.handle_list_styles(trending=True)
+
+
+@app.get("/api/v1/styles/{style_key}")
+async def api_style_detail(style_key: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    if not IMODEL_PKG_OK:
+        return JSONResponse({"error": "disabled"}, status_code=404)
+    detail = webapp_handlers.handle_style_detail(style_key)
+    if not detail:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return detail
+
+
+@app.get("/api/v1/packs")
+async def api_packs(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    if not IMODEL_PKG_OK:
+        return {"categories": {}, "bundles": []}
+    return webapp_handlers.handle_list_packs()
+
+
+@app.get("/api/v1/packages")
+async def api_packages(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    premium = IMODEL_PKG_OK and imodel_settings().new_star_packages
+    return webapp_handlers.handle_list_packages(include_premium=premium)
+
+
+@app.get("/api/v1/trends")
+async def api_trends(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    if not IMODEL_PKG_OK:
+        return {"trending": [], "categories": []}
+    return webapp_handlers.handle_trends()
+
+
+@app.get("/api/v1/trends/weekly")
+async def api_trends_weekly(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    if not IMODEL_PKG_OK:
+        return {"items": []}
+    return webapp_handlers.handle_weekly_trends()
+
+
+@app.post("/api/v1/events/style")
+async def api_style_event(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    data = await request.json()
+    style_key = str(data.get("style_key") or "")
+    event = str(data.get("event") or "view")
+    if not style_key:
+        return JSONResponse({"error": "style_key required"}, status_code=400)
+    if IMODEL_PKG_OK:
+        webapp_handlers.handle_record_style_event(int(user["uid"]), style_key, event, data.get("meta"))
+    return {"ok": True}
+
+
+@app.post("/api/v1/gallery/{result_id}/delete")
+async def api_gallery_delete(result_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    if IMODEL_PKG_OK and imodel_settings().persistent_gallery:
+        ok = webapp_handlers.handle_gallery_delete(uid, result_id)
+        return {"ok": ok}
+    return {"ok": False, "reason": "not_enabled"}
+
+
+@app.get("/privacy")
+async def privacy_page():
+    path = os.path.join(os.path.dirname(__file__), "privacy.html")
+    if os.path.isfile(path):
+        return FileResponse(path, media_type="text/html")
+    return HTMLResponse("<h1>Privacy</h1>", status_code=404)
+
 
 @app.get("/metrics")
 async def http_metrics(request: Request):
@@ -4049,6 +4382,20 @@ async def http_metrics(request: Request):
     gen_count = int(STATS.get("generation_latency_count", 0) or 0)
     resp["generation_latency_avg_ms"] = int(STATS.get("generation_latency_total_ms", 0) / gen_count) if gen_count else 0
     resp["db_ready"] = DB_READY
+    if IMODEL_PKG_OK:
+        try:
+            resp["imodel"] = {
+                "flags": {
+                    "style_catalog_v2": imodel_settings().style_catalog_v2,
+                    "payment_ledger_v2": imodel_settings().payment_ledger_v2,
+                    "persistent_gallery": imodel_settings().persistent_gallery,
+                    "use_prompt_builder": imodel_settings().use_prompt_builder,
+                    "webapp_v2_static": imodel_settings().webapp_v2_static,
+                },
+                **admin_extra_metrics(),
+            }
+        except Exception:
+            pass
     return resp
 
 @app.get("/admin")
@@ -4158,6 +4505,22 @@ async def admin_panel(request: Request):
     failed_jobs = [j for j in recent_jobs if str(j.get("status")) in {"failed", "delivery_failed"}]
     running_jobs = [j for j in recent_jobs if str(j.get("status")) in {"queued", "running"}]
     h = lambda value: html_lib.escape(str(value or ""))
+    extra_admin = ""
+    if IMODEL_PKG_OK:
+        try:
+            em = admin_extra_metrics()
+            rev = em.get("revenue", {})
+            extra_admin = (
+                f'<div class="card" style="margin-top:14px"><div class="muted">Payment ledger</div>'
+                f'<div>Payments: <b>{rev.get("total_payments", 0)}</b> · Stars: <b>{rev.get("total_stars", 0)}</b></div></div>'
+            )
+            tops = em.get("top_styles_generated") or []
+            if tops:
+                extra_admin += '<div class="card section"><div class="muted">Top styles (gallery)</div><table><tr><th>Style</th><th>Count</th></tr>'
+                extra_admin += "".join(f"<tr><td>{h(t['style_key'])}</td><td>{t['count']}</td></tr>" for t in tops)
+                extra_admin += "</table></div>"
+        except Exception:
+            pass
 
     html = f"""
 <!doctype html>
@@ -4307,6 +4670,7 @@ async def admin_panel(request: Request):
           </table>
         </div>
       </div>
+      {extra_admin}
     </div>
   </body>
   </html>
