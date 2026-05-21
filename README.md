@@ -1,13 +1,32 @@
-# iModel — Telegram AI Photo Bot
+# iModel Studio — Telegram AI Photo Bot
 
-Пайплайн: Telegram фото/промпт → Face Lock v2 → GPT refine (опционально) → Replicate Nano Banana → S3 → ответ пользователю. Дополнительный enhancer в рабочей цепочке не используется.
+Пайплайн: Telegram фото/промпт → Face Lock v2 → GPT refine (опционально) → Replicate Nano Banana → S3 → ответ пользователю.
+
+**v3.0** добавляет премиум-каталог photoshoots (`imodel/`), Mini App v2 (React), payment ledger, persistent gallery и расширенный API — за feature flags в `.env.example`.
 
 ## Что включено
-- Быстрый Telegram webhook: update принимается с `200`, обработка уходит в background task.
-- Durable state: users, credits, stats, jobs и audit log пишутся в Postgres при наличии `DATABASE_URL`; S3/local JSON остаются fallback.
-- Grants: роли `owner`, `admin`, `operator`, `support`, `publisher`, `user`, `banned`; bootstrap owner берётся из `ADMIN_IDS`.
-- Structured logs: ключевые события идут JSON-логами с hash для Telegram IDs.
-- Mini App: `/webapp` и API `/api/v1/webapp/session`, `/api/v1/me`, `/api/v1/generations`, `/api/v1/gallery`.
+- Telegram webhook + Stars (legacy `pack_10` / `pack_30` / `pack_100` сохранены).
+- Copy Mode (scene lock + reference image).
+- Postgres: users, credits, jobs, styles, payments, gallery (при `DATABASE_URL`).
+- Mini App: `/webapp` (embedded HTML или React build при `WEBAPP_V2_STATIC=1`).
+- API: `/api/v1/styles`, `/packs`, `/packages`, `/trends`, `/events/style`, generations, gallery.
+- Admin: `/admin?secret=` + payment/style metrics при ledger.
+
+## Feature flags (включайте по одному)
+| Переменная | Эффект |
+|------------|--------|
+| `STYLE_CATALOG_V2=1` | API каталога 30+ commercial photoshoots |
+| `USE_PROMPT_BUILDER=1` | Промпты из каталога при генерации |
+| `WEBAPP_V2_STATIC=1` | React Mini App из `webapp/dist` |
+| `PAYMENT_LEDGER_V2=1` | Idempotent Stars payments в Postgres |
+| `NEW_STAR_PACKAGES=1` | Пакеты Starter/Creator/Pro/Max в /buy |
+| `PERSISTENT_GALLERY=1` | Галерея 50 результатов в БД |
+
+## Mini App build
+```bash
+cd webapp && npm install && npm run build
+```
+Затем `WEBAPP_V2_STATIC=1` на Railway.
 
 ## Запуск
 1) Создать бота в @BotFather → получить BOT_TOKEN.  
