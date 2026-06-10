@@ -1556,12 +1556,16 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
                 err = getattr(pred, "error", None) or (pred.get("error") if isinstance(pred, dict) else None)
                 if err:
                     msg = str(err)
-                    print("Replicate prediction error:", msg[:200])
+                    REPLICATE_LAST_ERROR = f"[{model_name}] {msg}"
+                    print("Replicate prediction error:", msg[:300])
+                    log_event("replicate_error", model=model, error=msg[:240], status=status)
                     if "sensitive" in msg.lower():
                         return "SENSITIVE"
                 else:
-                    print("Replicate prediction not succeeded:", status)
+                    REPLICATE_LAST_ERROR = f"[{model_name}] status={status}"
+                    print("Replicate prediction not succeeded:", status, "model:", model_name)
             out = getattr(pred, "output", None) or (pred.get("output") if isinstance(pred, dict) else None)
+            print(f"Replicate raw output type={type(out).__name__} val={str(out)[:200]}")
             url = _extract_first_url(out)
             if url:
                 log_event("replicate_done", model=model, prediction_id=pid, latency_ms=int((time.time() - t0) * 1000))
@@ -1584,14 +1588,16 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
     try:
         # replicate.run supports owner/name or owner/name:version
         out = replicate.run(model if not model_version else f"{model_name}:{model_version}", input=inputs)
+        print(f"replicate.run output type={type(out).__name__} val={str(out)[:200]}")
         url = _extract_first_url(out)
         if url:
             log_event("replicate_done", model=model, latency_ms=int((time.time() - t0) * 1000), path="run")
             return url
+        REPLICATE_LAST_ERROR = f"[{model_name}] run returned no URL, output={str(out)[:120]}"
     except Exception as e2:
         em2 = str(e2)
-        REPLICATE_LAST_ERROR = em2
-        print("replicate.run error:", em2[:200])
+        REPLICATE_LAST_ERROR = f"[{model_name}] run error: {em2}"
+        print("replicate.run error:", em2[:300])
         log_event("replicate_error", model=model, error=em2[:240], path="run")
         if "sensitive" in em2.lower():
             return "SENSITIVE"
@@ -2687,7 +2693,8 @@ async def cmd_diag(m: Message):
         f"InstantID: {INSTANTID_MODEL}",
         f"PhotoMaker: {PHOTOMAKER_MODEL}",
         f"NanoBanana: {NANOBANANA_MODEL or '<disabled>'}",
-        f"Last Replicate error: {REPLICATE_LAST_ERROR[:200] if REPLICATE_LAST_ERROR else 'none'}",
+        f"S3: bucket={S3_BUCKET or '<empty>'} ep={S3_ENDPOINT[:30] if S3_ENDPOINT else '<empty>'}",
+        f"Last Replicate error: {REPLICATE_LAST_ERROR[:300] if REPLICATE_LAST_ERROR else 'none'}",
         f"--- Posts ---",
         f"Group posts: enabled={GROUP_POSTS_ENABLED} running={GROUP_POST_LOOP_RUNNING}",
         f"Group id: {PUBLISH_GROUP_ID}",
