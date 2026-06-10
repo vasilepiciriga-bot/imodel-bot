@@ -641,6 +641,7 @@ def _s3_get_text(key: str) -> Optional[str]:
 NANOBANANA_MODEL  = os.getenv("NANOBANANA_MODEL", "google/nano-banana")  # fallback legacy
 INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL",  "zsxkib/instant-id")
 PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "lucataco/photomaker-sdxl")
+GFPGAN_MODEL      = os.getenv("GFPGAN_MODEL",     "tencentarc/gfpgan")
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -1604,6 +1605,29 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
 
     return None
 
+def enhance_face_gfpgan(image_bytes: bytes) -> bytes:
+    """GFPGAN face restoration — returns enhanced bytes or original on failure."""
+    if not GFPGAN_MODEL or not image_bytes:
+        return image_bytes
+    try:
+        out = replicate.run(
+            GFPGAN_MODEL,
+            input={
+                "img": io.BytesIO(image_bytes),
+                "scale": 2,
+                "version": "v1.4",
+            }
+        )
+        url = _extract_first_url(out)
+        if url and url.startswith("http"):
+            enhanced = _download_with_retries(url)
+            if enhanced and len(enhanced) > 1000:
+                print(f"GFPGAN OK: {len(image_bytes)} → {len(enhanced)} bytes")
+                return enhanced
+    except Exception as e:
+        print(f"GFPGAN error (using original): {str(e)[:200]}")
+    return image_bytes
+
 # ===================== HTTP DOWNLOAD ==================
 def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) -> Optional[bytes]:
     for i in range(max(1, tries)):
@@ -2289,6 +2313,13 @@ def generate_image_from_bytes(
     if strict and lock_scene:
         refined = f"{refined}. {SCENE_LOCK}. Exact same background, composition, lighting, color grading; only replace the face."
 
+    # Quality suffix — helps InstantID produce sharper, more beautiful results
+    QUALITY_SUFFIX = (
+        "sharp focus, detailed skin texture, professional photography, "
+        "8k resolution, award-winning photograph, beautiful lighting"
+    )
+    refined = f"{refined}. {QUALITY_SUFFIX}"
+
     print(f"→ Генерация: {refined[:180]}...")
     job_event(job_id, "prompt_refined", prompt=refined[:500])
 
@@ -2377,7 +2408,7 @@ def generate_image_from_bytes(
                 nano_inputs: Dict[str, Any] = {
                     "prompt": p,
                     "output_format": "jpg",
-                    "image_input": [style_url, src_url] if style_url else [src_url],
+                    "image_input": [src_url],
                 }
                 job_event(job_id, "replicate_request", model="nanobanana")
                 url = replicate_generate(NANOBANANA_MODEL, nano_inputs)
@@ -2413,9 +2444,15 @@ def generate_image_from_bytes(
         job_event(job_id, "generation_failed", error="download_failed")
         return None
 
-    # If model just echoed the same selfie (no change), treat as failure
+    # WOW quality: face restoration post-processing
+    nano_bytes = enhance_face_gfpgan(nano_bytes)
+
+    # If model just echoed the same selfie or style reference, treat as failure
     try:
-        if hashlib.md5(nano_bytes).hexdigest() == hashlib.md5(img_bytes).hexdigest():
+        output_md5 = hashlib.md5(nano_bytes).hexdigest()
+        selfie_md5 = hashlib.md5(img_bytes).hexdigest()
+        style_md5  = hashlib.md5(style_bytes).hexdigest() if style_bytes else None
+        if output_md5 == selfie_md5 or (style_md5 and output_md5 == style_md5):
             print("→ output equals input (likely echo) — treating as failure")
             record_job(job_id, status="failed", error="output_equals_input")
             job_event(job_id, "generation_failed", error="output_equals_input")
