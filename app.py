@@ -1454,6 +1454,29 @@ async def safe_edit_text(msg: Message, text: str):
         print(f"[safe_edit_text] bad request: {e}")
     return None
 
+async def _progress_loop(msg: Message, lang: str = "ru"):
+    """Animate the wait message every 8 seconds while generation runs."""
+    _stages = [
+        (0,  {"ru": "⏳ Генерирую...",         "en": "⏳ Generating...",    "ro": "⏳ Generez...",   "de": "⏳ Erzeuge..."}),
+        (16, {"ru": "🎨 Обрабатываю лицо...",  "en": "🎨 Processing face...","ro": "🎨 Procesez...", "de": "🎨 Verarbeite..."}),
+        (35, {"ru": "✨ Улучшаю качество...",   "en": "✨ Enhancing...",      "ro": "✨ Îmbunătățesc...","de": "✨ Verbessere..."}),
+        (55, {"ru": "🔄 Финальные штрихи...",  "en": "🔄 Final touches...", "ro": "🔄 Finalizez...", "de": "🔄 Letzte Schritte..."}),
+    ]
+    start = time.time()
+    last_text = ""
+    while True:
+        await asyncio.sleep(8)
+        elapsed = int(time.time() - start)
+        label = _stages[0][1].get(lang, _stages[0][1]["en"])
+        for threshold, texts in reversed(_stages):
+            if elapsed >= threshold:
+                label = texts.get(lang, texts["en"])
+                break
+        text = f"{label} ({elapsed}с)" if lang == "ru" else f"{label} ({elapsed}s)"
+        if text != last_text:
+            await safe_edit_text(msg, text)
+            last_text = text
+
 async def safe_cb_answer(c: CallbackQuery, *args, **kwargs):
     try:
         return await c.answer(*args, **kwargs)
@@ -2376,6 +2399,37 @@ def assess_selfie_quality(img_bytes: bytes) -> Tuple[bool, str]:
     except Exception:
         return True, "unreadable_skip"
 
+def preprocess_selfie(img_bytes: bytes, max_side: int = 1024) -> bytes:
+    """Normalize selfie before InstantID: square-center-crop + resize + JPEG.
+
+    InstantID extracts face embeddings more accurately from a tightly framed,
+    square portrait than from a wide landscape or full-body photo.
+    Falls back to original bytes on any error.
+    """
+    if Image is None:
+        return img_bytes
+    try:
+        im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        w, h = im.size
+
+        # Center-crop to square (removes edges, keeps face area)
+        side = min(w, h)
+        left  = (w - side) // 2
+        top   = max(0, (h - side) // 3)   # bias toward top third — faces are rarely at bottom
+        top   = min(top, h - side)
+        im = im.crop((left, top, left + side, top + side))
+
+        # Downscale if larger than max_side (no upscaling)
+        if side > max_side:
+            im = im.resize((max_side, max_side), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=92)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"preprocess_selfie error (using original): {e}")
+        return img_bytes
+
 def selfie_quality_text(chat_id: int, reason: str) -> str:
     lang = USER_LANG.get(chat_id, LANG_DEFAULT)
     if lang == "ru":
@@ -2474,6 +2528,9 @@ def generate_image_from_bytes(
                 print(f"FaceSwap post-processing error: {_fs_err}")
         print("FaceSwap failed — falling back to InstantID")
 
+    # Preprocess selfie for better InstantID face embedding extraction
+    _selfie_for_iid = preprocess_selfie(img_bytes)
+
     def try_instantid(p: str) -> Optional[str]:
         global REPLICATE_LAST_ERROR
         neg = f"{INSTANTID_NEGATIVE}"
@@ -2485,7 +2542,7 @@ def generate_image_from_bytes(
         if INSTANTID_MODEL:
             try:
                 iid_inputs: Dict[str, Any] = {
-                    "image": io.BytesIO(img_bytes),
+                    "image": io.BytesIO(_selfie_for_iid),
                     "prompt": p,
                     "negative_prompt": neg,
                     "ip_adapter_scale": 0.85 if strict else 0.80,
@@ -3274,11 +3331,15 @@ async def cb_preset_pick(c: CallbackQuery):
         return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    result = await asyncio.to_thread(
-        generate_image_from_bytes,
-        ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        user_id=chat_id
-    )
+    _lang = USER_LANG.get(chat_id, LANG_DEFAULT)
+    _prog = asyncio.create_task(_progress_loop(msg, _lang))
+    try:
+        result = await asyncio.to_thread(
+            generate_image_from_bytes,
+            ref, preset.prompt, lang=_lang, user_id=chat_id
+        )
+    finally:
+        _prog.cancel()
     if not result:
         await _refund_credit(chat_id, _uname)
         stats_incr("gens_fail", 1)
@@ -3517,34 +3578,31 @@ async def _on_photo_inner(m: Message):
                 return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
             wait = await safe_answer(m, L(m.chat.id)["gen"])
-            final_bytes = await asyncio.to_thread(
-                generate_image_from_bytes,
-                img_bytes,
-                scene_spec,
-                lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                strict=True,
-                style_bytes=style_bytes,
-                lock_scene=True,
-                user_id=m.chat.id,
-            )
-            if not final_bytes:
-                # вторая попытка: ещё жёстче
+            _lang_copy = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+            _prog = asyncio.create_task(_progress_loop(wait, _lang_copy))
+            try:
                 final_bytes = await asyncio.to_thread(
                     generate_image_from_bytes,
-                    img_bytes,
-                    scene_spec + ". Keep face absolutely unchanged, do not beautify, do not reshape.",
-                    lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    strict=True,
-                    style_bytes=style_bytes,
-                    lock_scene=True,
-                    user_id=m.chat.id,
+                    img_bytes, scene_spec,
+                    lang=_lang_copy, strict=True,
+                    style_bytes=style_bytes, lock_scene=True, user_id=m.chat.id,
                 )
                 if not final_bytes:
-                    await _refund_credit(m.chat.id, _uname_copy)
-                    if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
-                    stats_incr("gens_copy_fail", 1)
-                    _uadd(m.chat.id, "gens_copy_fail", 1)
-                    return
+                    final_bytes = await asyncio.to_thread(
+                        generate_image_from_bytes,
+                        img_bytes,
+                        scene_spec + ". Keep face absolutely unchanged, do not beautify, do not reshape.",
+                        lang=_lang_copy, strict=True,
+                        style_bytes=style_bytes, lock_scene=True, user_id=m.chat.id,
+                    )
+            finally:
+                _prog.cancel()
+            if not final_bytes:
+                await _refund_credit(m.chat.id, _uname_copy)
+                if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
+                stats_incr("gens_copy_fail", 1)
+                _uadd(m.chat.id, "gens_copy_fail", 1)
+                return
 
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
@@ -3600,11 +3658,15 @@ async def _on_photo_inner(m: Message):
                 if not await _try_use_credit(m.chat.id, _uname_preset):
                     return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
-                final_bytes = await asyncio.to_thread(
-                    generate_image_from_bytes,
-                    img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-                    user_id=m.chat.id
-                )
+                _lang_p = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+                _prog = asyncio.create_task(_progress_loop(wait, _lang_p))
+                try:
+                    final_bytes = await asyncio.to_thread(
+                        generate_image_from_bytes,
+                        img_bytes, preset.prompt, lang=_lang_p, user_id=m.chat.id
+                    )
+                finally:
+                    _prog.cancel()
                 if not final_bytes:
                     await _refund_credit(m.chat.id, _uname_preset)
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -3648,11 +3710,15 @@ async def _on_photo_inner(m: Message):
         return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
-    final_bytes = await asyncio.to_thread(
-        generate_image_from_bytes,
-        img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        user_id=m.chat.id
-    )
+    _lang_ph = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+    _prog = asyncio.create_task(_progress_loop(wait, _lang_ph))
+    try:
+        final_bytes = await asyncio.to_thread(
+            generate_image_from_bytes,
+            img_bytes, caption, lang=_lang_ph, user_id=m.chat.id
+        )
+    finally:
+        _prog.cancel()
     if not final_bytes:
         await _refund_credit(m.chat.id, _uname_photo)
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -3727,11 +3793,15 @@ async def _on_prompt_inner(m: Message):
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     ref = refs[-1]
-    final_bytes = await asyncio.to_thread(
-        generate_image_from_bytes,
-        ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
-        user_id=m.chat.id
-    )
+    _lang_txt = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+    _prog = asyncio.create_task(_progress_loop(wait, _lang_txt))
+    try:
+        final_bytes = await asyncio.to_thread(
+            generate_image_from_bytes,
+            ref, text, lang=_lang_txt, user_id=m.chat.id
+        )
+    finally:
+        _prog.cancel()
     if not final_bytes:
         await _refund_credit(m.chat.id, _uname_text)
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
@@ -3782,11 +3852,15 @@ async def cb_more(c: CallbackQuery):
     await safe_cb_answer(c)
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    result = await asyncio.to_thread(
-        generate_image_from_bytes,
-        ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
-        user_id=chat_id
-    )
+    _lang_regen = USER_LANG.get(chat_id, LANG_DEFAULT)
+    _prog = asyncio.create_task(_progress_loop(msg, _lang_regen))
+    try:
+        result = await asyncio.to_thread(
+            generate_image_from_bytes,
+            ref, base_prompt, lang=_lang_regen, user_id=chat_id
+        )
+    finally:
+        _prog.cancel()
     if not result:
         await _refund_credit(chat_id, _uname_regen)
         STATS["gens_fail"] += 1
