@@ -649,6 +649,9 @@ FACESWAP_MODEL    = os.getenv("FACESWAP_MODEL",   "omniedgeai/face-swap")
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
 FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "3"))
 
+# Onboarding demo photo (Telegram file_id or public HTTPS URL; leave empty to skip)
+DEMO_PHOTO = os.getenv("DEMO_PHOTO", "")
+
 # Channel & autopost
 GALLERY_CHANNEL_ID = os.getenv("GALLERY_CHANNEL_ID", "")
 try:
@@ -1051,9 +1054,10 @@ def kb_presets_grid(chat_id: int) -> InlineKeyboardMarkup:
 T = {
     "ru": {
         "menu_lang": "🌐 Язык",
-        "onboard_welcome": "Добро пожаловать в iModel. Нажмите «Старт», чтобы начать.",
-        "onboard_btn": "🚀 Старт",
-        "start": "✨ Добро пожаловать в iModel — AI фотостудию.\nВаши фотографии могут выглядеть так, словно их сделал профессиональный фотограф.\n\n🔹 Загрузите 1 селфи — хороший свет поможет.\n🔹 Опишите сцену или атмосферу, которую хотите.\n🔹 Или используйте функцию «Скопировать»: загрузите понравившееся фото из интернета, добавьте своё селфи — и получите стильный результат в том же духе.\n\n📌 Меню:\n⭐ Купить — пополните баланс и откройте новые возможности.\n💰 Баланс — всегда знайте, сколько генераций у вас доступно.\n📸 Пресеты — готовые стили фотосессий.\n📋 Скопировать — повторите понравившийся стиль с вашим фото.\n🆘 Помощь — ответы на все вопросы.\n🌐 Язык — переключение интерфейса.\n\n🎁 Бесплатные генерации — пригласите друзей: /refer\n\n📷 Ваши фото — ваша история. Мы сделаем её безупречной.",
+        "onboard_welcome": "📸 *iModel* — профессиональные фото из вашего селфи.\n\nОдин снимок. Тридцать секунд. Результат как у фотографа.\n\n✨ {quota} генерации бесплатно — без регистрации.",
+        "onboard_btn": "🚀 Попробовать бесплатно",
+        "onboard_send_selfie": "📷 Отправьте своё селфи — сделаю первое фото прямо сейчас.\n\n*Совет:* хорошее освещение + лицо крупным планом = лучший результат.",
+        "start": "С возвращением ✨\n\nОтправьте селфи — и я создам новое фото.",
         "help": "🆘 Помощь\n\nКак получить лучший результат:\n• Пришлите 1 селфи при ровном свете, без сильных фильтров\n• В описании укажите место, свет, стиль, кадрирование, настроение\n• Быстрый старт: откройте Пресеты и выберите стиль\n• Скопировать сцену: режим ‘Скопировать’ — сначала образец, затем селфи\n\nОплата и баланс:\n• Покупка — раздел ‘Купить’ (Telegram Stars)\n• Списание — только при успешной генерации (кроме whitelist/админ)\n• Промокоды — команда /promo КОД\n\nРеферальная программа:\n• Пригласи друга — ты +{ref_ref}, новый пользователь +{ref_new}\n• Твоя ссылка: /refer\n\nПравила и приватность:\n• Запрещены NSFW/селебы\n• Фото хранятся временно; /clear — очистка, /forget — полное удаление\n\nНужна помощь? Напишите @piciriga — ответим быстро.",
         "need_photo": "Сначала пришли фото лица.",
         "photo_ok": "Фото получено ✅ Теперь опишите сцену или используйте /presets.",
@@ -1130,9 +1134,10 @@ T = {
     },
     "en": {
         "menu_lang": "🌐 Language",
-        "onboard_welcome": "Welcome to iModel. Tap Start to begin.",
-        "onboard_btn": "🚀 Start",
-        "start": "✨ Welcome to iModel — the AI photo studio.\nYour photos can look like they were taken by a professional photographer.\n\n🔹 Upload 1 selfie — good lighting helps.\n🔹 Describe the scene or mood you want.\n🔹 Or use ‘Copy’: upload a photo you like from the internet, add your selfie — and get a stylish result in the same spirit.\n\n📌 Menu:\n⭐ Buy — top up balance and unlock more.\n💰 Balance — always know how many generations you have.\n📸 Presets — ready-made shoot styles.\n📋 Copy — recreate a style with your photo.\n🆘 Help — answers to questions.\n🌐 Language — switch interface.\n\n🎁 Free credits — invite friends: /refer\n\n📷 Your photos — your story. We’ll make it impeccable.",
+        "onboard_welcome": "📸 *iModel* — professional photos from your selfie.\n\nOne photo. Thirty seconds. Studio-quality result.\n\n✨ {quota} free generations — no sign-up needed.",
+        "onboard_btn": "🚀 Try for free",
+        "onboard_send_selfie": "📷 Send your selfie — I’ll create your first photo right now.\n\n*Tip:* good lighting + face in frame = best result.",
+        "start": "Welcome back ✨\n\nSend a selfie and I’ll create a new photo for you.",
         "help": "🆘 Help\n\nBest results:\n• Send 1 selfie in even lighting, minimal filters\n• In your prompt describe location, light, style, framing, mood\n• Quick start: open Presets and pick a style\n• Copy a scene: use ‘Copy’ — first the reference, then your selfie\n\nPayments & balance:\n• Buy in ‘Buy’ (Telegram Stars)\n• Credits are deducted only on successful generation (except whitelist/admin)\n• Promo codes — /promo CODE\n\nReferral program:\n• Invite a friend — you +{ref_ref}, they +{ref_new}\n• Your link: /refer\n\nRules & privacy:\n• NSFW/celebrities are forbidden\n• Photos are stored temporarily; /clear to purge temp, /forget for full delete\n\nNeed help? Message @piciriga — we’ll reply quickly.",
         "need_photo": "Please send a face photo first.",
         "photo_ok": "Photo received ✅ Now describe the scene or use /presets.",
@@ -1209,9 +1214,10 @@ T = {
     },
     "ro": {
         "menu_lang": "🌐 Limba",
-        "onboard_welcome": "Bine ai venit la iModel. Apasă Start pentru a începe.",
-        "onboard_btn": "🚀 Start",
-        "start": "✨ Bine ai venit la iModel — studio foto AI.\nFotografiile tale pot arăta ca făcute de un fotograf profesionist.\n\n🔹 Încarcă 1 selfie — lumina bună ajută.\n🔹 Descrie scena sau atmosfera dorită.\n🔹 Sau folosește ‘Copiază’: încarcă o poză preferată de pe internet, adaugă selfie‑ul tău — și primești un rezultat stilat în același spirit.\n\n📌 Meniu:\n⭐ Cumpără — alimentează soldul și deblochează mai mult.\n💰 Sold — vezi câte generări ai.\n📸 Preseturi — stiluri gata făcute.\n📋 Copiază — recreează un stil cu poza ta.\n🆘 Ajutor — răspunsuri la întrebări.\n🌐 Limbă — schimbă interfața.\n\n🎁 Generații gratuite — invită prieteni: /refer\n\n📷 Pozele tale — povestea ta. Noi o facem impecabilă.",
+        "onboard_welcome": "📸 *iModel* — fotografii profesionale din selfie-ul tău.\n\nO poză. Treizeci de secunde. Rezultat de studio.\n\n✨ {quota} generări gratuite — fără înregistrare.",
+        "onboard_btn": "🚀 Încearcă gratuit",
+        "onboard_send_selfie": "📷 Trimite selfie-ul tău — creez prima fotografie chiar acum.\n\n*Sfat:* lumină bună + față în cadru = cel mai bun rezultat.",
+        "start": "Bun venit înapoi ✨\n\nTrimite un selfie și creez o nouă fotografie pentru tine.",
         "help": "🆘 Ajutor\n\nRezultate mai bune:\n• Trimite 1 selfie cu lumină uniformă, fără filtre puternice\n• În descriere: locație, lumină, stil, încadrare, mood\n• Start rapid: deschide Preseturi și alege un stil\n• Copiere scenă: ‘Copiază’ — mai întâi referința, apoi selfie‑ul\n\nPlăți & sold:\n• Cumpără în ‘Cumpără’ (Stele Telegram)\n• Creditul se scade doar la generare reușită (exceptând whitelist/admin)\n• Cod promo — /promo COD\n\nProgram de recomandări:\n• Invită un prieten — tu +{ref_ref}, el/ea +{ref_new}\n• Linkul tău: /refer\n\nReguli & confidențialitate:\n• NSFW/celebr. interzise\n• Pozele se păstrează temporar; /clear curăță, /forget ștergere totală\n\nAi nevoie de ajutor? Scrie la @piciriga — răspundem rapid.",
         "need_photo": "Trimite o poză cu fața mai întâi.",
         "photo_ok": "Poză primită ✅ Acum descrie scena sau folosește /presets.",
@@ -1290,9 +1296,10 @@ T = {
     ,
     "de": {
         "menu_lang": "🌐 Sprache",
-        "onboard_welcome": "Willkommen bei iModel. Tippe auf Start, um zu beginnen.",
-        "onboard_btn": "🚀 Start",
-        "start": "✨ Willkommen bei iModel — dem KI‑Fotostudio.\nDeine Fotos können aussehen, als wären sie vom Profi gemacht.\n\n🔹 Lade 1 Selfie hoch — gutes Licht hilft.\n🔹 Beschreibe die gewünschte Szene oder Stimmung.\n🔹 Oder nutze ‘Kopieren’: lade ein Lieblingsfoto aus dem Internet hoch, füge dein Selfie hinzu — und erhalte ein stilvolles Ergebnis im selben Geist.\n\n📌 Menü:\n⭐ Kaufen — Guthaben aufladen und mehr freischalten.\n💰 Guthaben — sieh, wie viele Generierungen du hast.\n📸 Presets — fertige Shooting‑Stile.\n📋 Kopieren — Stil mit deinem Foto nachbilden.\n🆘 Hilfe — Antworten auf Fragen.\n🌐 Sprache — Oberfläche umstellen.\n\n🎁 Kostenlose Credits — lade Freunde ein: /refer\n\n📷 Deine Fotos — deine Geschichte. Wir machen sie makellos.",
+        "onboard_welcome": "📸 *iModel* — professionelle Fotos aus deinem Selfie.\n\nEin Foto. Dreißig Sekunden. Studio-Qualität.\n\n✨ {quota} kostenlose Generierungen — ohne Anmeldung.",
+        "onboard_btn": "🚀 Kostenlos testen",
+        "onboard_send_selfie": "📷 Schicke dein Selfie — ich erstelle dein erstes Foto jetzt gleich.\n\n*Tipp:* gutes Licht + Gesicht im Bild = bestes Ergebnis.",
+        "start": "Willkommen zurück ✨\n\nSchicke ein Selfie und ich erstelle ein neues Foto für dich.",
         "help": "🆘 Hilfe\n\nBeste Ergebnisse:\n• 1 Selfie bei gleichmäßiger Beleuchtung, ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt, Stimmung\n• Schnellstart: Presets öffnen und Stil wählen\n• Szene kopieren: ‘Kopieren’ — zuerst Referenz, dann Selfie\n\nZahlung & Guthaben:\n• Kaufen in ‘Kaufen’ (Telegram Stars)\n• Abzug nur bei erfolgreicher Generierung (außer Whitelist/Admin)\n• Promo‑Code — /promo CODE\n\nEmpfehlungsprogramm:\n• Freund einladen — du +{ref_ref}, er/sie +{ref_new}\n• Dein Link: /refer\n\nRegeln & Datenschutz:\n• NSFW/Promis verboten\n• Fotos werden temporär gespeichert; /clear löscht temporär, /forget vollständig\n\nBrauchen Sie Hilfe? Schreiben Sie @piciriga — wir antworten schnell.",
         "need_photo": "Bitte zuerst ein Gesichts‑Foto senden.",
         "photo_ok": "Foto empfangen ✅ Beschreibe jetzt die Szene oder nutze /presets.",
@@ -3146,12 +3153,40 @@ async def cmd_start(m: Message):
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
     if m.chat.id not in USER_ONBOARDED:
-        # Show minimal welcome with a single Start button
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=L(m.chat.id)["onboard_btn"], callback_data="onboard_go")]])
-        await safe_answer(m, L(m.chat.id)["onboard_welcome"], reply_markup=kb)
+        lang = L(m.chat.id)
+        welcome_text = lang["onboard_welcome"].format(quota=FREE_QUOTA)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=lang["onboard_btn"], callback_data="onboard_go")],
+            [
+                InlineKeyboardButton(text="🇷🇺", callback_data="set_lang_ru"),
+                InlineKeyboardButton(text="🇬🇧", callback_data="set_lang_en"),
+                InlineKeyboardButton(text="🇷🇴", callback_data="set_lang_ro"),
+                InlineKeyboardButton(text="🇩🇪", callback_data="set_lang_de"),
+            ],
+        ])
+        if DEMO_PHOTO:
+            try:
+                await bot.send_photo(m.chat.id, photo=DEMO_PHOTO, caption=welcome_text, reply_markup=kb, parse_mode="Markdown")
+            except Exception:
+                await safe_answer(m, welcome_text, reply_markup=kb, parse_mode="Markdown")
+        else:
+            await safe_answer(m, welcome_text, reply_markup=kb, parse_mode="Markdown")
         return
-    await safe_answer(m, L(m.chat.id)["start"], reply_markup=main_menu_inline(m.chat.id))
+    # Returning user: short greeting, push to action
     STATS_USERS.add(m.chat.id)
+    if USER_LAST_OUTPUT.get(m.chat.id):
+        # Show their last result with action keyboard as reminder
+        try:
+            await bot.send_photo(
+                m.chat.id,
+                photo=BufferedInputFile(USER_LAST_OUTPUT[m.chat.id], filename="last.jpg"),
+                caption=L(m.chat.id)["start"],
+                reply_markup=kb_actions(m.chat.id),
+            )
+            return
+        except Exception:
+            pass
+    await safe_answer(m, L(m.chat.id)["start"], reply_markup=main_menu_inline(m.chat.id))
 
 @dp.message(Command("help"))
 async def cmd_help(m: Message):
@@ -3189,16 +3224,27 @@ async def cb_set_lang(c: CallbackQuery):
     if code not in ("ru","en","ro","de"):
         await safe_cb_answer(c)
         return
-    USER_LANG[c.message.chat.id] = code
-    USER_SEEN_TEXT.add(c.message.chat.id)
-    key = {
-        "ru": "lang_ru",
-        "en": "lang_en",
-        "ro": "lang_ro",
-        "de": "lang_de",
-    }[code]
+    chat_id = c.message.chat.id
+    USER_LANG[chat_id] = code
+    USER_SEEN_TEXT.add(chat_id)
     await safe_cb_answer(c)
-    await c.message.answer(L(c.message.chat.id)[key], reply_markup=main_menu_inline(c.message.chat.id))
+    lang = L(chat_id)
+    # If user hasn't onboarded yet, show updated welcome instead of main menu
+    if chat_id not in USER_ONBOARDED:
+        welcome_text = lang["onboard_welcome"].format(quota=FREE_QUOTA)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=lang["onboard_btn"], callback_data="onboard_go")],
+            [
+                InlineKeyboardButton(text="🇷🇺", callback_data="set_lang_ru"),
+                InlineKeyboardButton(text="🇬🇧", callback_data="set_lang_en"),
+                InlineKeyboardButton(text="🇷🇴", callback_data="set_lang_ro"),
+                InlineKeyboardButton(text="🇩🇪", callback_data="set_lang_de"),
+            ],
+        ])
+        await c.message.answer(welcome_text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        key = {"ru": "lang_ru", "en": "lang_en", "ro": "lang_ro", "de": "lang_de"}[code]
+        await c.message.answer(lang[key], reply_markup=main_menu_inline(chat_id))
 
 @dp.message(Command("presets"))
 async def cmd_presets(m: Message):
@@ -3417,7 +3463,9 @@ async def cb_onboard_go(c: CallbackQuery):
     chat_id = c.message.chat.id
     USER_ONBOARDED.add(chat_id)
     await safe_cb_answer(c)
-    await c.message.answer(L(chat_id)["start"], reply_markup=main_menu_inline(chat_id))
+    lang = L(chat_id)
+    selfie_prompt = lang.get("onboard_send_selfie", "📷 Send your selfie — I'll create your first photo right now.")
+    await c.message.answer(selfie_prompt, parse_mode="Markdown")
 
 
 @dp.callback_query(F.data == "balance")
