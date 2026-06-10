@@ -2309,53 +2309,67 @@ def generate_image_from_bytes(
             job_event(job_id, "s3_style_ready")
 
     def try_instantid(p: str) -> Optional[str]:
+        global REPLICATE_LAST_ERROR
         neg = f"{INSTANTID_NEGATIVE}"
         if strict:
             neg = f"{STRICT_NEGATIVE}, {neg}"
 
-        inputs: Dict[str, Any] = {
-            "image": src_url,
-            "prompt": p,
-            "negative_prompt": neg,
-            "ip_adapter_scale": 0.85 if strict else 0.80,
-            "num_inference_steps": 30,
-            "guidance_scale": 5.0,
-            "width": 1024,
-            "height": 1024,
-        }
-        if style_url:
-            inputs["pose_image"] = style_url
-            inputs["controlnet_conditioning_scale"] = 0.6
+        # InstantID — передаём изображение напрямую как bytes, не через S3 URL
+        # (Backblaze B2 presigned URLs могут быть недоступны из Replicate)
+        if INSTANTID_MODEL:
+            try:
+                iid_inputs: Dict[str, Any] = {
+                    "image": io.BytesIO(img_bytes),
+                    "prompt": p,
+                    "negative_prompt": neg,
+                    "ip_adapter_scale": 0.85 if strict else 0.80,
+                    "num_inference_steps": 30,
+                    "guidance_scale": 5.0,
+                    "width": 1024,
+                    "height": 1024,
+                }
+                if style_bytes and strict:
+                    iid_inputs["pose_image"] = io.BytesIO(style_bytes)
+                    iid_inputs["controlnet_conditioning_scale"] = 0.6
+                job_event(job_id, "replicate_request", model="instantid")
+                t0_iid = time.time()
+                out = replicate.run(INSTANTID_MODEL, input=iid_inputs)
+                print(f"InstantID output type={type(out).__name__} val={str(out)[:200]}")
+                url = _extract_first_url(out)
+                if url == "SENSITIVE":
+                    return "SENSITIVE"
+                if url:
+                    print(f"InstantID OK ({int((time.time()-t0_iid)*1000)}ms)")
+                    return url
+                REPLICATE_LAST_ERROR = f"[InstantID] no url in output: {str(out)[:120]}"
+            except Exception as e:
+                REPLICATE_LAST_ERROR = f"[InstantID] {str(e)[:200]}"
+                print("InstantID error:", str(e)[:300])
 
-        try:
-            job_event(job_id, "replicate_request", model="instantid")
-            url = replicate_generate(INSTANTID_MODEL, inputs)
-            if url == "SENSITIVE":
-                return "SENSITIVE"
-            if url:
-                print("InstantID OK")
-                return url
-        except Exception as e:
-            print("InstantID exception:", str(e)[:200])
-
-        # Fallback: PhotoMaker (requires "img" trigger token)
-        try:
-            pm_inputs: Dict[str, Any] = {
-                "input_image": src_url,
-                "prompt": f"img, {p}",
-                "negative_prompt": neg,
-                "num_steps": 30,
-                "style_strength_ratio": 20,
-            }
-            job_event(job_id, "replicate_request", model="photomaker")
-            url = replicate_generate(PHOTOMAKER_MODEL, pm_inputs)
-            if url == "SENSITIVE":
-                return "SENSITIVE"
-            if url:
-                print("PhotoMaker OK (fallback)")
-                return url
-        except Exception as e:
-            print("PhotoMaker exception:", str(e)[:200])
+        # PhotoMaker — тоже с прямой загрузкой bytes
+        if PHOTOMAKER_MODEL:
+            try:
+                pm_inputs: Dict[str, Any] = {
+                    "input_image": io.BytesIO(img_bytes),
+                    "prompt": f"img, {p}",
+                    "negative_prompt": neg,
+                    "num_steps": 30,
+                    "style_strength_ratio": 20,
+                }
+                job_event(job_id, "replicate_request", model="photomaker")
+                t0_pm = time.time()
+                out = replicate.run(PHOTOMAKER_MODEL, input=pm_inputs)
+                print(f"PhotoMaker output type={type(out).__name__} val={str(out)[:200]}")
+                url = _extract_first_url(out)
+                if url == "SENSITIVE":
+                    return "SENSITIVE"
+                if url:
+                    print(f"PhotoMaker OK ({int((time.time()-t0_pm)*1000)}ms)")
+                    return url
+                REPLICATE_LAST_ERROR = f"[PhotoMaker] no url in output: {str(out)[:120]}"
+            except Exception as e:
+                REPLICATE_LAST_ERROR = f"[PhotoMaker] {str(e)[:200]}"
+                print("PhotoMaker error:", str(e)[:300])
 
         # Legacy fallback: NanoBanana (only if env var is set)
         if NANOBANANA_MODEL:
