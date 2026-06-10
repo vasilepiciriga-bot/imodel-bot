@@ -637,8 +637,8 @@ def _s3_get_text(key: str) -> Optional[str]:
         # Not found or access issues → ignore
         return None
 
-# Replicate models
-NANOBANANA_MODEL  = os.getenv("NANOBANANA_MODEL", "")           # legacy, kept for backward compat
+# Replicate models — primary chain: InstantID → PhotoMaker → NanoBanana (fallback)
+NANOBANANA_MODEL  = os.getenv("NANOBANANA_MODEL", "google/nano-banana")  # fallback legacy
 INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL",  "zsxkib/instant-id")
 PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "lucataco/photomaker-sdxl")
 
@@ -1494,6 +1494,11 @@ def _extract_first_url(output) -> Optional[str]:
         return None
     if isinstance(output, str):
         return output if output.startswith("http") else None
+    # Replicate SDK >= 0.22 returns FileOutput objects with .url attribute
+    if hasattr(output, "url"):
+        u = getattr(output, "url", None)
+        if isinstance(u, str) and u.startswith("http"):
+            return u
     if isinstance(output, dict):
         if "output" in output:
             return _extract_first_url(output["output"])
@@ -2678,6 +2683,12 @@ async def cmd_diag(m: Message):
         f"App: {APP_VERSION}",
         f"Lang: {USER_LANG.get(m.chat.id, LANG_DEFAULT)}",
         f"Webhook: {WEBHOOK_URL}",
+        f"--- Models ---",
+        f"InstantID: {INSTANTID_MODEL}",
+        f"PhotoMaker: {PHOTOMAKER_MODEL}",
+        f"NanoBanana: {NANOBANANA_MODEL or '<disabled>'}",
+        f"Last Replicate error: {REPLICATE_LAST_ERROR[:200] if REPLICATE_LAST_ERROR else 'none'}",
+        f"--- Posts ---",
         f"Group posts: enabled={GROUP_POSTS_ENABLED} running={GROUP_POST_LOOP_RUNNING}",
         f"Group id: {PUBLISH_GROUP_ID}",
         f"Langs rotation: {langs}",
