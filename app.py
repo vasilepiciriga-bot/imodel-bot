@@ -643,6 +643,7 @@ INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL",  "zsxkib/instant-id")
 PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "lucataco/photomaker-sdxl")
 GFPGAN_MODEL      = os.getenv("GFPGAN_MODEL",     "tencentarc/gfpgan")
 CODEFORMER_MODEL  = os.getenv("CODEFORMER_MODEL", "sczhou/codeformer")
+FACESWAP_MODEL    = os.getenv("FACESWAP_MODEL",   "omniedgeai/face-swap")
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -1660,6 +1661,34 @@ def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8) -> bytes:
         print(f"CodeFormer error, trying GFPGAN: {str(e)[:200]}")
     return enhance_face_gfpgan(image_bytes)
 
+def face_swap(source_bytes: bytes, target_bytes: bytes) -> Optional[bytes]:
+    """Swap face from source (selfie) into target (reference photo).
+
+    target stays 100% intact — clothes, background, pose unchanged.
+    Only the face region is replaced with the identity from source.
+    Returns result bytes or None on failure.
+    """
+    if not FACESWAP_MODEL or not source_bytes or not target_bytes:
+        return None
+    try:
+        out = replicate.run(
+            FACESWAP_MODEL,
+            input={
+                "source_image": io.BytesIO(source_bytes),
+                "target_image": io.BytesIO(target_bytes),
+            }
+        )
+        url = _extract_first_url(out)
+        if url and url.startswith("http"):
+            result = _download_with_retries(url)
+            if result and len(result) > 1000:
+                print(f"FaceSwap OK: {len(target_bytes)} → {len(result)} bytes")
+                return result
+        print(f"FaceSwap: no valid URL in output: {str(out)[:120]}")
+    except Exception as e:
+        print(f"FaceSwap error: {str(e)[:200]}")
+    return None
+
 # ===================== HTTP DOWNLOAD ==================
 def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) -> Optional[bytes]:
     for i in range(max(1, tries)):
@@ -2371,6 +2400,27 @@ def generate_image_from_bytes(
             print("→ Не удалось получить S3 URL для style-ref (продолжаем без него)")
         else:
             job_event(job_id, "s3_style_ready")
+
+    # Copy mode: face swap first — reference stays intact, only face changes
+    if strict and style_bytes:
+        job_event(job_id, "replicate_request", model="faceswap")
+        swapped = face_swap(img_bytes, style_bytes)
+        if swapped:
+            try:
+                sw_md5  = hashlib.md5(swapped).hexdigest()
+                ref_md5 = hashlib.md5(style_bytes).hexdigest()
+                if sw_md5 != ref_md5:  # sanity: not an echo of the reference
+                    final = enhance_face_codeformer(swapped, fidelity=0.85)
+                    latency_ms = int((time.time() - t0) * 1000)
+                    stats_incr("generation_latency_total_ms", latency_ms)
+                    stats_incr("generation_latency_count", 1)
+                    record_job(job_id, status="generated")
+                    job_event(job_id, "generation_done", latency_ms=latency_ms, output_bytes=len(final))
+                    return final
+                print("FaceSwap echoed reference — falling back to InstantID")
+            except Exception as _fs_err:
+                print(f"FaceSwap post-processing error: {_fs_err}")
+        print("FaceSwap failed — falling back to InstantID")
 
     def try_instantid(p: str) -> Optional[str]:
         global REPLICATE_LAST_ERROR
