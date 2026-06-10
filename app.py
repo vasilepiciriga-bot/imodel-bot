@@ -2359,9 +2359,6 @@ def generate_image_from_bytes(
                     "width": 1024,
                     "height": 1024,
                 }
-                if style_bytes and strict:
-                    iid_inputs["pose_image"] = io.BytesIO(style_bytes)
-                    iid_inputs["controlnet_conditioning_scale"] = 0.6
                 job_event(job_id, "replicate_request", model="instantid")
                 t0_iid = time.time()
                 out = replicate.run(INSTANTID_MODEL, input=iid_inputs)
@@ -2370,7 +2367,7 @@ def generate_image_from_bytes(
                 if url == "SENSITIVE":
                     return "SENSITIVE"
                 if url:
-                    print(f"InstantID OK ({int((time.time()-t0_iid)*1000)}ms)")
+                    print(f"InstantID OK ({int((time.time()-t0_iid)*1000)}ms) url={url[:60]}")
                     return url
                 REPLICATE_LAST_ERROR = f"[InstantID] no url in output: {str(out)[:120]}"
             except Exception as e:
@@ -2444,10 +2441,7 @@ def generate_image_from_bytes(
         job_event(job_id, "generation_failed", error="download_failed")
         return None
 
-    # WOW quality: face restoration post-processing
-    nano_bytes = enhance_face_gfpgan(nano_bytes)
-
-    # If model just echoed the same selfie or style reference, treat as failure
+    # Echo check BEFORE GFPGAN so re-encoding doesn't mask the comparison
     try:
         output_md5 = hashlib.md5(nano_bytes).hexdigest()
         selfie_md5 = hashlib.md5(img_bytes).hexdigest()
@@ -2459,6 +2453,9 @@ def generate_image_from_bytes(
             return None
     except Exception:
         pass
+
+    # WOW quality: face restoration post-processing
+    nano_bytes = enhance_face_gfpgan(nano_bytes)
 
     latency_ms = int((time.time() - t0) * 1000)
     stats_incr("generation_latency_total_ms", latency_ms)
