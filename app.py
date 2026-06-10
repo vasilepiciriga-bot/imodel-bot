@@ -1578,6 +1578,11 @@ def _extract_first_url(output) -> Optional[str]:
     # Replicate SDK >= 0.22 returns FileOutput objects with .url attribute
     if hasattr(output, "url"):
         u = getattr(output, "url", None)
+        if callable(u):
+            try:
+                u = u()
+            except Exception:
+                u = None
         if isinstance(u, str) and u.startswith("http"):
             return u
     if isinstance(output, dict):
@@ -1594,6 +1599,17 @@ def _extract_first_url(output) -> Optional[str]:
             if u:
                 return u
         return None
+    # Handle generators/iterators (Replicate SDK sometimes returns these)
+    import types
+    if isinstance(output, (types.GeneratorType,)) or hasattr(output, "__next__"):
+        try:
+            first = next(output)
+            return _extract_first_url(first)
+        except StopIteration:
+            return None
+        except Exception as e:
+            print(f"_extract_first_url iterator error: {e}")
+            return None
     return None
 
 def replicate_wait_prediction(pred_id: str, timeout: float = 180.0, interval: float = 1.5):
@@ -1685,27 +1701,51 @@ def replicate_generate(model: str, inputs: dict) -> Optional[str]:
 
     return None
 
+def _normalize_to_jpeg(image_bytes: bytes, max_side: int = 1024) -> bytes:
+    """Resize + convert to JPEG. Keeps size safe for Replicate uploads."""
+    if Image is None:
+        return image_bytes
+    try:
+        im = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        w, h = im.size
+        if max(w, h) > max_side:
+            ratio = max_side / max(w, h)
+            im = im.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=90)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"_normalize_to_jpeg error: {e}")
+        return image_bytes
+
 def enhance_face_gfpgan(image_bytes: bytes) -> bytes:
     """GFPGAN face restoration — returns enhanced bytes or original on failure."""
     if not GFPGAN_MODEL or not image_bytes:
         return image_bytes
     try:
+        # Normalize input: JPEG ≤ 1024px so Replicate upload doesn't fail on large images
+        input_bytes = _normalize_to_jpeg(image_bytes, max_side=1024)
         out = replicate.run(
             GFPGAN_MODEL,
             input={
-                "img": io.BytesIO(image_bytes),
+                "img": io.BytesIO(input_bytes),
                 "scale": 2,
                 "version": "v1.4",
             }
         )
+        print(f"GFPGAN raw output: type={type(out).__name__} val={str(out)[:300]}")
         url = _extract_first_url(out)
+        print(f"GFPGAN extracted url: {url!r}")
         if url and url.startswith("http"):
             enhanced = _download_with_retries(url)
             if enhanced and len(enhanced) > 1000:
                 print(f"GFPGAN OK: {len(image_bytes)} → {len(enhanced)} bytes")
                 return enhanced
+            print(f"GFPGAN download failed or too small: {len(enhanced) if enhanced else 0} bytes")
+        else:
+            print(f"GFPGAN: no valid URL extracted, output was: {str(out)[:300]}")
     except Exception as e:
-        print(f"GFPGAN error (using original): {str(e)[:200]}")
+        print(f"GFPGAN error (using original): {type(e).__name__}: {e}")
     return image_bytes
 
 def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8) -> bytes:
@@ -1729,14 +1769,18 @@ def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8) -> bytes:
                 "upscale": 2,
             }
         )
+        print(f"CodeFormer raw output: type={type(out).__name__} val={str(out)[:300]}")
         url = _extract_first_url(out)
         if url and url.startswith("http"):
             enhanced = _download_with_retries(url)
             if enhanced and len(enhanced) > 1000:
                 print(f"CodeFormer OK (fidelity={fidelity}): {len(image_bytes)} → {len(enhanced)} bytes")
                 return enhanced
+            print(f"CodeFormer download failed or too small: {len(enhanced) if enhanced else 0} bytes")
+        else:
+            print(f"CodeFormer: no valid URL. output={str(out)[:300]}")
     except Exception as e:
-        print(f"CodeFormer error, trying GFPGAN: {str(e)[:200]}")
+        print(f"CodeFormer error (type={type(e).__name__}): {e} — trying GFPGAN")
     return enhance_face_gfpgan(image_bytes)
 
 def face_swap(source_bytes: bytes, target_bytes: bytes) -> Optional[bytes]:
