@@ -929,6 +929,9 @@ USER_COPY_MODE: Set[int]         = set()
 USER_COPY_STYLE: Dict[int, bytes]= {}
 USER_COPY_PROMPT: Dict[int, str] = {}
 
+# Swap Mode (face swap into arbitrary target photo)
+USER_SWAP_MODE: Set[int]         = set()
+
 # Retouch Mode
  
 
@@ -1119,6 +1122,11 @@ T = {
         "before_after": "До / После ✨",
         "before": "До",
         "copy_prompt_updated": "Промпт обновлён. Теперь пришлите селфи.",
+        "menu_swap": "💎 Точный swap",
+        "swap_intro": "💎 Точный swap\nПришлите любое фото — вставлю ваше лицо в него.",
+        "swap_no_selfie": "Сначала отправьте своё селфи в обычном режиме.",
+        "swap_done": "Готово ✅",
+        "swap_fail": "Swap не удался. Попробуйте другое фото.",
     },
     "en": {
         "menu_lang": "🌐 Language",
@@ -1193,6 +1201,11 @@ T = {
         "before_after": "Before / After ✨",
         "before": "Before",
         "copy_prompt_updated": "Prompt updated. Now send a selfie.",
+        "menu_swap": "💎 Exact swap",
+        "swap_intro": "💎 Exact Swap\nSend any photo — I'll place your face into it.",
+        "swap_no_selfie": "Send a selfie in normal mode first.",
+        "swap_done": "Done ✅",
+        "swap_fail": "Swap failed. Try a different photo.",
     },
     "ro": {
         "menu_lang": "🌐 Limba",
@@ -1265,6 +1278,11 @@ T = {
         "before_after": "Înainte / După ✨",
         "before": "Înainte",
         "copy_prompt_updated": "Prompt actualizat. Trimite selfie-ul.",
+        "menu_swap": "💎 Swap exact",
+        "swap_intro": "💎 Swap exact\nTrimite orice foto — îți pun fața în el.",
+        "swap_no_selfie": "Trimite mai întâi un selfie în modul normal.",
+        "swap_done": "Gata ✅",
+        "swap_fail": "Swap eșuat. Încearcă altă fotografie.",
         "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
         "style_share_btn": "✨ În acest stil",
         "style_share_intro": "Stil încărcat ✅ Trimite un selfie — generez un rezultat similar.",
@@ -1343,6 +1361,11 @@ T = {
         "before_after": "Vorher / Nachher ✨",
         "before": "Vorher",
         "copy_prompt_updated": "Prompt aktualisiert. Bitte sende ein Selfie.",
+        "menu_swap": "💎 Exakter Swap",
+        "swap_intro": "💎 Exakter Swap\nSende ein beliebiges Foto — ich füge dein Gesicht ein.",
+        "swap_no_selfie": "Sende zuerst ein Selfie im normalen Modus.",
+        "swap_done": "Fertig ✅",
+        "swap_fail": "Swap fehlgeschlagen. Versuche ein anderes Foto.",
     }
 }
 
@@ -2541,13 +2564,14 @@ def generate_image_from_bytes(
         # (Backblaze B2 presigned URLs могут быть недоступны из Replicate)
         if INSTANTID_MODEL:
             try:
+                _premium = user_id is not None and not is_free_user(int(user_id))
                 iid_inputs: Dict[str, Any] = {
                     "image": io.BytesIO(_selfie_for_iid),
                     "prompt": p,
                     "negative_prompt": neg,
                     "ip_adapter_scale": 0.85 if strict else 0.80,
-                    "num_inference_steps": 30,
-                    "guidance_scale": 5.0,
+                    "num_inference_steps": 50 if _premium else 30,
+                    "guidance_scale": 5.5 if _premium else 5.0,
                     "width": 1024,
                     "height": 1024,
                 }
@@ -2716,7 +2740,7 @@ def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
-            InlineKeyboardButton(text=lang.get("menu_presets", "🎛 /presets"), callback_data="presets_open"),
+            InlineKeyboardButton(text=lang.get("menu_swap", "💎 Swap"), callback_data="swap_open"),
             InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
         ],
     ]
@@ -3416,6 +3440,17 @@ async def cb_copy_open(c: CallbackQuery):
     await safe_cb_answer(c)
     await c.message.answer(L(c.message.chat.id)["copy_intro"])
 
+@dp.callback_query(F.data == "swap_open")
+async def cb_swap_open(c: CallbackQuery):
+    uid = c.message.chat.id
+    lang = L(uid)
+    await safe_cb_answer(c)
+    if not USER_REFS.get(uid):
+        return await c.message.answer(lang.get("swap_no_selfie", "Send a selfie first."))
+    USER_SWAP_MODE.add(uid)
+    USER_COPY_MODE.discard(uid)
+    await c.message.answer(lang.get("swap_intro", "💎 Exact Swap\nSend any photo — I'll place your face into it."))
+
 @dp.callback_query(F.data == "pub_yes")
 async def cb_pub_yes(c: CallbackQuery):
     if not GALLERY_CHANNEL_ID:
@@ -3544,6 +3579,50 @@ async def _on_photo_inner(m: Message):
     STATS_USERS.add(m.chat.id)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     _uadd(m.chat.id, "photos", 1)
+
+    # ----- Swap Mode (face swap selfie into target photo) -----
+    if m.chat.id in USER_SWAP_MODE:
+        uid = m.chat.id
+        lang = L(uid)
+        USER_SWAP_MODE.discard(uid)
+        selfie_bytes = (USER_REFS.get(uid) or [None])[-1]
+        if not selfie_bytes:
+            return await safe_answer(m, lang.get("swap_no_selfie", "Send a selfie first."))
+        _uname_sw = getattr(m.from_user, "username", None)
+        if not await _try_use_credit(uid, _uname_sw):
+            return await safe_answer(m, lang["credits_none"], reply_markup=kb_invite_buy(uid))
+        wait = await safe_answer(m, lang["gen"])
+        _lang_sw = USER_LANG.get(uid, LANG_DEFAULT)
+        _prog = asyncio.create_task(_progress_loop(wait, _lang_sw))
+        try:
+            result_bytes = await asyncio.to_thread(face_swap, selfie_bytes, img_bytes)
+            if result_bytes:
+                result_bytes = await asyncio.to_thread(enhance_face_codeformer, result_bytes, 0.85)
+        except Exception as _sw_err:
+            print(f"Swap mode error: {_sw_err}")
+            result_bytes = None
+        finally:
+            _prog.cancel()
+        if not result_bytes:
+            await _refund_credit(uid, _uname_sw)
+            if wait: await safe_edit_text(wait, lang.get("swap_fail", "Swap failed. Try a different photo."))
+            return
+        USER_LAST_OUTPUT[uid] = result_bytes
+        LAST_PHOTO[uid] = result_bytes
+        stats_incr("gens_swap_ok", 1)
+        _uadd(uid, "gens_swap_ok", 1)
+        hist = USER_HISTORY.setdefault(uid, [])
+        hist.append(result_bytes)
+        if len(hist) > GALLERY_LIMIT:
+            del hist[:-GALLERY_LIMIT]
+        if wait: await wait.delete()
+        await safe_answer_photo(
+            m,
+            BufferedInputFile(result_bytes, filename="imodel_swap.jpg"),
+            caption=lang.get("swap_done", "Done ✅"),
+            reply_markup=kb_actions(uid),
+        )
+        return
 
     # ----- Copy Mode -----
     if m.chat.id in USER_COPY_MODE:
