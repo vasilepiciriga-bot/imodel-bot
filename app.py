@@ -638,12 +638,13 @@ def _s3_get_text(key: str) -> Optional[str]:
         return None
 
 # Replicate models — primary chain: InstantID → PhotoMaker → NanoBanana (fallback)
-NANOBANANA_MODEL  = os.getenv("NANOBANANA_MODEL", "google/nano-banana")  # fallback legacy
-INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL",  "zsxkib/instant-id")
-PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "lucataco/photomaker-sdxl")
-GFPGAN_MODEL      = os.getenv("GFPGAN_MODEL",     "tencentarc/gfpgan")
-CODEFORMER_MODEL  = os.getenv("CODEFORMER_MODEL", "sczhou/codeformer")
-FACESWAP_MODEL    = os.getenv("FACESWAP_MODEL",   "omniedgeai/face-swap")
+# Version hashes pinned to avoid 404 on "latest" lookups
+NANOBANANA_MODEL  = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
+INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL",  "zsxkib/instant-id:2e4785a4d80dadf580077b2244c8d7c05d8e3faac04a04c02d8e099dd2876789")
+PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "tencentarc/photomaker:ddfc2b08d209f9fa8c1eca692712918bd449f695dabb4a958da31802a9570fe4")
+GFPGAN_MODEL      = os.getenv("GFPGAN_MODEL",     "tencentarc/gfpgan:0fbacf7afc6c144e5be9767cff80f25aff23e52b0708f17e20f9879b2f21516c")
+CODEFORMER_MODEL  = os.getenv("CODEFORMER_MODEL", "sczhou/codeformer:cc4956dd26fa5a7185d5660cc9100fab1b8070a1d1654a8bb5eb6d443b020bb2")
+FACESWAP_MODEL    = os.getenv("FACESWAP_MODEL",   "codeplugtech/face-swap:278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34")
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -1796,7 +1797,7 @@ def face_swap(source_bytes: bytes, target_bytes: bytes) -> Optional[bytes]:
         out = replicate.run(
             FACESWAP_MODEL,
             input={
-                "source_image": io.BytesIO(source_bytes),
+                "swap_image":   io.BytesIO(source_bytes),
                 "target_image": io.BytesIO(target_bytes),
             }
         )
