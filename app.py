@@ -637,8 +637,10 @@ def _s3_get_text(key: str) -> Optional[str]:
         # Not found or access issues → ignore
         return None
 
-# Replicate model
-NANOBANANA_MODEL = os.getenv("NANOBANANA_MODEL", "google/nano-banana")
+# Replicate models
+NANOBANANA_MODEL  = os.getenv("NANOBANANA_MODEL", "")           # legacy, kept for backward compat
+INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL",  "zsxkib/instant-id")
+PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "lucataco/photomaker-sdxl")
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -937,30 +939,54 @@ class Preset:
     prompt: str
 
 PRESETS: List[Preset] = [
-    Preset("studio_soft", "📸 Студия", "📸 Studio", "📸 Studiou", "📸 Studio", "studio portrait photo of a person, soft beauty light, dark seamless backdrop, 85mm lens, f/1.8, crisp details, natural skin, editorial look, award‑winning photograph"),
-    Preset("cinematic", "🎬 Кинематик", "🎬 Cinematic", "🎬 Cinematic", "🎬 Cinematisch", "cinematic portrait, teal & orange color grade, rim light, shallow depth, dramatic mood, 50mm anamorphic look, high dynamic range"),
-    Preset("golden_hour", "🌅 Голден-ауэр", "🌅 Golden Hour", "🌅 Ora de aur", "🌅 Goldene Stunde", "outdoor portrait at golden hour, warm backlight, sun flare, soft haze, dreamy bokeh, natural colors, filmic rendering"),
-    Preset("editorial_highkey", "🧴 Эдиториал", "🧴 Editorial", "🧴 Editorial", "🧴 Editorial High‑Key", "high‑key studio fashion portrait, clean white backdrop, softboxes, glossy highlights, magazine editorial style, minimal shadows"),
-    Preset("bw_film", "⚫️ Ч/Б Плёнка", "⚫️ B/W Film", "⚫️ Film B/N", "⚫️ S/W Film", "black and white portrait, rich contrast, soft film grain, timeless classic look, ilford hp5 vibe, elegant"),
-    Preset("kodak_portra", "🎞 Portra", "🎞 Portra", "🎞 Portra", "🎞 Portra", "portrait in kodak portra 400 film style, warm skin tones, gentle contrast, natural colors, subtle grain"),
-    Preset("beauty_dish", "💄 Бьюти", "💄 Beauty", "💄 Beauty", "💄 Beauty", "beauty portrait, beauty dish, soft ring catchlights, flawless yet natural skin, glossy lips, editorial makeup, close‑up"),
-    Preset("headshot", "👔 Хэдшот", "👔 Headshot", "👔 Portret CV", "👔 Headshot", "corporate headshot, neutral gray background, flattering key light, 85mm, professional linkedin style, crisp focus"),
-    Preset("neon_night", "🌃 Неон", "🌃 Neon Night", "🌃 Noapte Neon", "🌃 Neon Nacht", "city night portrait, neon lights, cyberpunk colors, wet streets reflections, cinematic bokeh, moody atmosphere"),
-    Preset("cafe", "☕️ Кафе", "☕️ Cafe", "☕️ Cafenea", "☕️ Café", "cozy cafe portrait, warm tungsten lights, string lights bokeh, candid mood, shallow depth, lifestyle"),
-    Preset("forest", "🌲 Лес", "🌲 Forest", "🌲 Pădure", "🌲 Wald", "forest portrait, diffused light under trees, green tones, soft atmosphere, misty background"),
-    Preset("beach", "🏖 Пляж", "🏖 Beach", "🏖 Plajă", "🏖 Strand", "sunrise beach portrait, pastel colors, gentle breeze, fresh tones, soft backlight, cinematic"),
-    Preset("architecture", "🏛 Архитектура", "🏛 Architecture", "🏛 Arhitectură", "🏛 Architektur", "minimalist architecture backdrop, concrete and glass, symmetry, modern editorial street portrait"),
-    Preset("luxury_interior", "🏨 Интерьер", "🏨 Interior", "🏨 Interior", "🏨 Interieur", "luxury hotel lobby portrait, marble, warm ambient lights, elegant depth, upscale vibe"),
-    Preset("rain_window", "🌧 Дождь", "🌧 Rain", "🌧 Ploaie", "🌧 Regen", "portrait through rainy window, droplets bokeh, moody reflections, intimate cinematic feel"),
-    Preset("snow", "❄️ Снег", "❄️ Snow", "❄️ Zăpadă", "❄️ Schnee", "snow portrait, soft falling snowflakes, cool tones, cozy winter look, scarf, gentle light"),
-    Preset("rembrandt", "🕯 Рембрандт", "🕯 Rembrandt", "🕯 Rembrandt", "🕯 Rembrandt", "classic Rembrandt lighting portrait, chiaroscuro, painterly, timeless, museum quality"),
-    Preset("soft_glam", "✨ Глам", "✨ Soft Glam", "✨ Soft Glam", "✨ Soft Glam", "soft glam portrait, delicate highlights, pearly skin, subtle retouch, editorial beauty, cinematic glow"),
-    Preset("vintage70", "📼 70‑е", "📼 70s", "📼 Ani 70", "📼 70er", "vintage 1970s film look, muted colors, halation glow, analog feel, flare"),
-    Preset("mono_hicon", "⬛️ Моно Контраст", "⬛️ Mono High‑Contrast", "⬛️ Mono Contrast", "⬛️ Mono Kontrast", "high‑contrast monochrome portrait, deep blacks, punchy highlights, gallery style"),
-    Preset("park", "🌿 Парк", "🌿 Park", "🌿 Parc", "🌿 Park", "outdoor park portrait, gentle green bokeh, 85mm, soft light, lifestyle"),
-    Preset("fitness", "💪 Фитнес", "💪 Fitness", "💪 Fitness", "💪 Fitness", "dramatic gym portrait, hard light, textured muscles, moody shadows, grit"),
-    Preset("garage", "🚗 Гараж", "🚗 Garage", "🚗 Garaj", "🚗 Garage", "portrait in garage, glossy reflections, metallic textures, cinematic teal accents"),
-    Preset("bookstore", "📚 Книги", "📚 Bookstore", "📚 Librărie", "📚 Buchladen", "bookstore portrait, warm ambient tungsten, shelves bokeh, intellectual cozy vibe"),
+    Preset("studio_soft", "📸 Студия", "📸 Studio", "📸 Studiou", "📸 Studio",
+           "professional studio portrait, softbox key light at 45 degrees, white seamless backdrop, 85mm f/1.8, crisp skin detail, catchlight in eyes, editorial magazine quality, sharp focus"),
+    Preset("cinematic", "🎬 Кинематик", "🎬 Cinematic", "🎬 Cinematic", "🎬 Cinematisch",
+           "cinematic film portrait, teal and orange color grade, strong rim light, shallow depth of field, anamorphic lens flare, dramatic moody atmosphere, 35mm film"),
+    Preset("golden_hour", "🌅 Голден-ауэр", "🌅 Golden Hour", "🌅 Ora de aur", "🌅 Goldene Stunde",
+           "outdoor portrait at golden hour sunset, warm orange backlight, sun halo, soft bokeh background, dreamy pastel sky, natural skin tones, filmic"),
+    Preset("editorial_highkey", "🧴 Эдиториал", "🧴 Editorial", "🧴 Editorial", "🧴 Editorial High‑Key",
+           "high-key editorial fashion portrait, clean white studio backdrop, dual softbox fill, glossy highlights, minimal shadows, Vogue magazine style, precise focus"),
+    Preset("bw_film", "⚫️ Ч/Б Плёнка", "⚫️ B/W Film", "⚫️ Film B/N", "⚫️ S/W Film",
+           "black and white analog film portrait, Ilford HP5 grain, rich mid-tone contrast, luminous highlights, deep shadows, timeless classic, dramatic mood"),
+    Preset("kodak_portra", "🎞 Portra", "🎞 Portra", "🎞 Portra", "🎞 Portra",
+           "Kodak Portra 400 film portrait, warm creamy skin tones, gentle saturation, soft halation, authentic grain texture, natural light, 50mm lens"),
+    Preset("beauty_dish", "💄 Бьюти", "💄 Beauty", "💄 Beauty", "💄 Beauty",
+           "beauty close-up portrait, large beauty dish overhead, soft ring catchlights, flawless luminous skin, glossy lips, precise editorial makeup, sharp focus on eyes"),
+    Preset("headshot", "👔 Хэдшот", "👔 Headshot", "👔 Portret CV", "👔 Headshot",
+           "professional corporate headshot, neutral mid-gray backdrop, flattering 45-degree key light, 85mm f/2.8, crisp focus, confident expression, LinkedIn-ready"),
+    Preset("neon_night", "🌃 Неон", "🌃 Neon Night", "🌃 Noapte Neon", "🌃 Neon Nacht",
+           "night city portrait, vibrant neon signs, cyan and magenta light spill, wet pavement reflections, shallow cinematic bokeh, cyberpunk atmosphere"),
+    Preset("cafe", "☕️ Кафе", "☕️ Cafe", "☕️ Cafenea", "☕️ Café",
+           "cozy cafe lifestyle portrait, warm tungsten ambient light, string lights bokeh, wooden interior, candid relaxed mood, 35mm f/2, muted warm tones"),
+    Preset("forest", "🌲 Лес", "🌲 Forest", "🌲 Pădure", "🌲 Wald",
+           "forest portrait, dappled natural light through canopy, soft green ambient, morning mist, 85mm, shallow depth, peaceful serene mood"),
+    Preset("beach", "🏖 Пляж", "🏖 Beach", "🏖 Plajă", "🏖 Strand",
+           "golden beach portrait, early morning backlight, ocean haze, pastel sunrise sky, soft rim light on hair, clean fresh tones, cinematic"),
+    Preset("architecture", "🏛 Архитектура", "🏛 Architecture", "🏛 Arhitectură", "🏛 Architektur",
+           "urban architectural portrait, concrete and steel backdrop, geometric symmetry, overcast diffused light, modern editorial street style, 24mm wide"),
+    Preset("luxury_interior", "🏨 Интерьер", "🏨 Interior", "🏨 Interior", "🏨 Interieur",
+           "luxury hotel lobby portrait, Italian marble columns, warm chandelier ambient, elegant depth, velvet and gold accents, upscale editorial"),
+    Preset("rain_window", "🌧 Дождь", "🌧 Rain", "🌧 Ploaie", "🌧 Regen",
+           "rainy window portrait, water droplets bokeh on glass, cold blue city lights reflected, intimate moody mood, 50mm f/1.4, cinematic low key"),
+    Preset("snow", "❄️ Снег", "❄️ Snow", "❄️ Zăpadă", "❄️ Schnee",
+           "winter snow portrait, soft falling snowflakes, cool blue-white palette, cozy wool scarf, diffused overcast light, fresh clean look"),
+    Preset("rembrandt", "🕯 Рембрандт", "🕯 Rembrandt", "🕯 Rembrandt", "🕯 Rembrandt",
+           "Rembrandt lighting portrait, single candle key light, deep chiaroscuro shadows, warm amber tone, painterly old masters style, museum quality"),
+    Preset("soft_glam", "✨ Глам", "✨ Soft Glam", "✨ Soft Glam", "✨ Soft Glam",
+           "soft glam beauty portrait, pearlescent skin glow, delicate highlight on cheekbones, neutral smoky eye, cinematic lens flare, editorial luxury"),
+    Preset("vintage70", "📼 70‑е", "📼 70s", "📼 Ani 70", "📼 70er",
+           "1970s vintage film portrait, Kodachrome color palette, halation lens glow, warm muted tones, analog film grain, retro fashion, nostalgic mood"),
+    Preset("mono_hicon", "⬛️ Моно Контраст", "⬛️ Mono High‑Contrast", "⬛️ Mono Contrast", "⬛️ Mono Kontrast",
+           "high-contrast black and white portrait, crushed blacks, blown highlights, bold graphic shadows, fine art gallery quality, dramatic presence"),
+    Preset("park", "🌿 Парк", "🌿 Park", "🌿 Parc", "🌿 Park",
+           "outdoor park portrait, soft natural diffused light, lush green bokeh background, 85mm f/2, lifestyle candid mood, warm skin tones"),
+    Preset("fitness", "💪 Фитнес", "💪 Fitness", "💪 Fitness", "💪 Fitness",
+           "fitness portrait in gym, hard directional key light, dramatic shadows on muscles, moody dark background, gritty raw energy, sports magazine"),
+    Preset("garage", "🚗 Гараж", "🚗 Garage", "🚗 Garaj", "🚗 Garage",
+           "portrait in automotive garage, industrial overhead lights, chrome and metal reflections, teal color accent, cinematic car culture aesthetic"),
+    Preset("bookstore", "📚 Книги", "📚 Bookstore", "📚 Librărie", "📚 Buchladen",
+           "bookstore portrait, warm tungsten ambient, rows of books shallow bokeh, intellectual cozy mood, 35mm, golden hour window light"),
 ]
 
 USER_PRESET_PENDING: Dict[int, int] = {}
@@ -1716,11 +1742,11 @@ def craft_group_post_image_prompt(lang: str) -> str:
 def generate_group_post_image(lang: str) -> Optional[bytes]:
     if GROUP_POST_TEXT_ONLY:
         return None
-    if not REPLICATE_API_TOKEN or not NANOBANANA_MODEL:
+    if not REPLICATE_API_TOKEN or not INSTANTID_MODEL:
         return None
     prompt = craft_group_post_image_prompt(lang)
     try:
-        url = replicate_generate(NANOBANANA_MODEL, {"prompt": prompt})
+        url = replicate_generate(INSTANTID_MODEL, {"prompt": prompt})
         if url and url.startswith("http"):
             img = _download_with_retries(url)
             if img:
@@ -1839,6 +1865,12 @@ SCENE_LOCK = (
 
 STRICT_NEGATIVE = (
     "beautify filter, airbrushed skin, over-retouched skin, body reshaped, face reshaped"
+)
+
+# Negative prompt for InstantID/PhotoMaker — concise, model-appropriate
+INSTANTID_NEGATIVE = (
+    "deformed, ugly, bad anatomy, disfigured, mutation, extra limbs, extra fingers, "
+    "blurry, low quality, lowres, watermark, text, logo, cartoon, anime, painting"
 )
 
 def enforce_safe_prompt(user_text: str) -> str:
@@ -2225,11 +2257,11 @@ def generate_image_from_bytes(
             status="running",
             chat_id=user_id,
             prompt=user_prompt,
-            model=NANOBANANA_MODEL,
+            model=INSTANTID_MODEL,
         )
         job_id = str(job["job_id"])
     else:
-        record_job(job_id, status="running", chat_id=user_id, prompt=user_prompt, model=NANOBANANA_MODEL)
+        record_job(job_id, status="running", chat_id=user_id, prompt=user_prompt, model=INSTANTID_MODEL)
     if user_id is not None:
         USER_LAST_JOB[int(user_id)] = str(job_id)
     job_event(job_id, "generation_started", strict=strict, lock_scene=lock_scene)
@@ -2265,64 +2297,83 @@ def generate_image_from_bytes(
         else:
             job_event(job_id, "s3_style_ready")
 
-    def try_nano(p: str) -> Optional[str]:
-        if strict and lock_scene:
-            guard = f"{SCENE_LOCK}. Preserve the exact same person and facial identity. Avoid: {STRICT_NEGATIVE}, {SCENE_CHANGE_BAN}."
-        elif strict:
-            guard = f"Preserve the exact same person and facial identity. Avoid: {STRICT_NEGATIVE}."
-        else:
-            guard = f"Keep the same person from the selfie. Avoid: {NEGATIVE_LOCK}."
-        inputs_common = {
-            "prompt": f"{p}. {guard}",
-            "output_format": "jpg",
+    def try_instantid(p: str) -> Optional[str]:
+        neg = f"{INSTANTID_NEGATIVE}"
+        if strict:
+            neg = f"{STRICT_NEGATIVE}, {neg}"
+
+        inputs: Dict[str, Any] = {
+            "image": src_url,
+            "prompt": p,
+            "negative_prompt": neg,
+            "ip_adapter_scale": 0.85 if strict else 0.80,
+            "num_inference_steps": 30,
+            "guidance_scale": 5.0,
+            "width": 1024,
+            "height": 1024,
         }
-
-        # If we have a style reference, try two-image conditions first
         if style_url:
-            candidates: List[Dict[str, object]] = []
-            # Official Nano Banana multi-image contract.
-            candidates.append({"image_input": [style_url, src_url]})
-            candidates.append({"image_input": [src_url, style_url]})
+            inputs["pose_image"] = style_url
+            inputs["controlnet_conditioning_scale"] = 0.6
 
-            for variant in candidates:
-                try:
-                    inp = dict(inputs_common)
-                    inp.update(variant)
-                    job_event(job_id, "replicate_request", variant=list(variant.keys()))
-                    url = replicate_generate(NANOBANANA_MODEL, inp)
-                    if url == "SENSITIVE":
-                        return "SENSITIVE"
-                    if url:
-                        print("NanoBanana OK (style+selfie variant)", variant.keys())
-                        return url
-                except Exception as e:
-                    print("NanoBanana variant exception:", str(e)[:200])
-
-        # 1) image_input (список) — только selfie
         try:
-            inp = dict(inputs_common)
-            inp["image_input"] = [src_url]
-            job_event(job_id, "replicate_request", variant=["image_input"])
-            url = replicate_generate(NANOBANANA_MODEL, inp)
+            job_event(job_id, "replicate_request", model="instantid")
+            url = replicate_generate(INSTANTID_MODEL, inputs)
             if url == "SENSITIVE":
                 return "SENSITIVE"
             if url:
-                print("NanoBanana OK (image_input)")
+                print("InstantID OK")
                 return url
         except Exception as e:
-            print("NanoBanana image_input exception:", str(e)[:200])
+            print("InstantID exception:", str(e)[:200])
+
+        # Fallback: PhotoMaker (requires "img" trigger token)
+        try:
+            pm_inputs: Dict[str, Any] = {
+                "input_image": src_url,
+                "prompt": f"img, {p}",
+                "negative_prompt": neg,
+                "num_steps": 30,
+                "style_strength_ratio": 20,
+            }
+            job_event(job_id, "replicate_request", model="photomaker")
+            url = replicate_generate(PHOTOMAKER_MODEL, pm_inputs)
+            if url == "SENSITIVE":
+                return "SENSITIVE"
+            if url:
+                print("PhotoMaker OK (fallback)")
+                return url
+        except Exception as e:
+            print("PhotoMaker exception:", str(e)[:200])
+
+        # Legacy fallback: NanoBanana (only if env var is set)
+        if NANOBANANA_MODEL:
+            try:
+                nano_inputs: Dict[str, Any] = {
+                    "prompt": p,
+                    "output_format": "jpg",
+                    "image_input": [style_url, src_url] if style_url else [src_url],
+                }
+                job_event(job_id, "replicate_request", model="nanobanana")
+                url = replicate_generate(NANOBANANA_MODEL, nano_inputs)
+                if url == "SENSITIVE":
+                    return "SENSITIVE"
+                if url:
+                    print("NanoBanana OK (legacy fallback)")
+                    return url
+            except Exception as e:
+                print("NanoBanana exception:", str(e)[:200])
 
         return None
 
-    gen_url = try_nano(refined)
+    gen_url = try_instantid(refined)
     if gen_url == "SENSITIVE":
         print("→ Sensitive → safer variant")
-        gen_url = try_nano(safer_variant(refined))
+        gen_url = try_instantid(safer_variant(refined))
 
-    # Если «уплыло лицо» — усилить замки и повторить 1 раз
+    # Если не получилось — повторить с упрощённым промптом
     if (not gen_url or not str(gen_url).startswith("http")) and not strict:
-        hard_lock = f"{refined}. Ultra keep identity. Absolutely same face features. {SCENE_LOCK}"
-        gen_url = try_nano(hard_lock)
+        gen_url = try_instantid(safer_variant(refined))
 
     if not gen_url or gen_url == "SENSITIVE" or not gen_url.startswith("http"):
         print("→ gen_url пустой/sensitive")
@@ -3634,7 +3685,7 @@ async def on_startup():
         print("Gallery channel:", GALLERY_CHANNEL_ID, "AUTO_POST:", AUTO_POST)
     if PUBLISH_GROUP_ID:
         print("Publish group:", PUBLISH_GROUP_ID)
-    print("Model → main:", NANOBANANA_MODEL or "<unset>")
+    print("Model → InstantID:", INSTANTID_MODEL, "| PhotoMaker:", PHOTOMAKER_MODEL, "| Legacy:", NANOBANANA_MODEL or "<disabled>")
 
     me = await bot.get_me()
     global BOT_USERNAME_GLOBAL
@@ -4046,7 +4097,7 @@ async def api_create_generation(request: Request):
         chat_id=uid,
         username=username,
         prompt=prompt,
-        model=NANOBANANA_MODEL,
+        model=INSTANTID_MODEL,
         image_bytes=image_bytes,
         lang=str(data.get("lang") or LANG_DEFAULT),
     )
