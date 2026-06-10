@@ -642,6 +642,7 @@ NANOBANANA_MODEL  = os.getenv("NANOBANANA_MODEL", "google/nano-banana")  # fallb
 INSTANTID_MODEL   = os.getenv("INSTANTID_MODEL",  "zsxkib/instant-id")
 PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "lucataco/photomaker-sdxl")
 GFPGAN_MODEL      = os.getenv("GFPGAN_MODEL",     "tencentarc/gfpgan")
+CODEFORMER_MODEL  = os.getenv("CODEFORMER_MODEL", "sczhou/codeformer")
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -1628,6 +1629,37 @@ def enhance_face_gfpgan(image_bytes: bytes) -> bytes:
         print(f"GFPGAN error (using original): {str(e)[:200]}")
     return image_bytes
 
+def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8) -> bytes:
+    """CodeFormer face enhancement — subtle professional retouch, high identity fidelity.
+
+    fidelity=1.0 → max identity preservation, no enhancement
+    fidelity=0.0 → max enhancement, less identity
+    0.8 is the sweet spot: professional polish, face stays exact.
+    Falls back to GFPGAN, then original on failure.
+    """
+    if not CODEFORMER_MODEL or not image_bytes:
+        return enhance_face_gfpgan(image_bytes)
+    try:
+        out = replicate.run(
+            CODEFORMER_MODEL,
+            input={
+                "image": io.BytesIO(image_bytes),
+                "codeformer_fidelity": fidelity,
+                "background_enhance": False,
+                "face_upsample": True,
+                "upscale": 2,
+            }
+        )
+        url = _extract_first_url(out)
+        if url and url.startswith("http"):
+            enhanced = _download_with_retries(url)
+            if enhanced and len(enhanced) > 1000:
+                print(f"CodeFormer OK (fidelity={fidelity}): {len(image_bytes)} → {len(enhanced)} bytes")
+                return enhanced
+    except Exception as e:
+        print(f"CodeFormer error, trying GFPGAN: {str(e)[:200]}")
+    return enhance_face_gfpgan(image_bytes)
+
 # ===================== HTTP DOWNLOAD ==================
 def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) -> Optional[bytes]:
     for i in range(max(1, tries)):
@@ -2313,10 +2345,11 @@ def generate_image_from_bytes(
     if strict and lock_scene:
         refined = f"{refined}. {SCENE_LOCK}. Exact same background, composition, lighting, color grading; only replace the face."
 
-    # Quality suffix — helps InstantID produce sharper, more beautiful results
+    # Beauty + quality suffix fed to InstantID for naturally beautiful skin/lighting
     QUALITY_SUFFIX = (
-        "sharp focus, detailed skin texture, professional photography, "
-        "8k resolution, award-winning photograph, beautiful lighting"
+        "sharp focus, flawless complexion, professional skin retouching, "
+        "perfect skin, bright eyes, beautiful lighting, "
+        "professional photography, 8k resolution, award-winning photograph"
     )
     refined = f"{refined}. {QUALITY_SUFFIX}"
 
@@ -2454,8 +2487,9 @@ def generate_image_from_bytes(
     except Exception:
         pass
 
-    # WOW quality: face restoration post-processing
-    nano_bytes = enhance_face_gfpgan(nano_bytes)
+    # Professional face retouch: CodeFormer (fidelity=0.8 → subtle, identity-preserving)
+    # falls back to GFPGAN, then original on any error
+    nano_bytes = enhance_face_codeformer(nano_bytes, fidelity=0.8)
 
     latency_ms = int((time.time() - t0) * 1000)
     stats_incr("generation_latency_total_ms", latency_ms)
