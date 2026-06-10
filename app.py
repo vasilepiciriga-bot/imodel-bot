@@ -832,6 +832,7 @@ USER_CREDITS: Dict[int, int]       = {}   # баланс
 USER_SEEN_TEXT: Set[int]           = set()
 USER_ONBOARDED: Set[int]           = set()
 USER_LAST_JOB: Dict[int, str]      = {}
+USER_LAST_ACTIVE: Dict[int, float] = {}   # timestamp последней активности — для TTL cleanup
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -887,6 +888,30 @@ def ensure_user_credit(uid: int):
         _credits_save()
 
 _credits_load()
+
+# Thread-safe credit operations (prevents double-spend on concurrent requests)
+_credits_lock = asyncio.Lock()
+
+async def _try_use_credit(uid: int, username: Optional[str] = None) -> bool:
+    """Atomically check and pre-consume one credit. Returns False if balance is 0."""
+    async with _credits_lock:
+        if is_free_user(uid, username):
+            return True
+        if uid not in USER_CREDITS:
+            USER_CREDITS[uid] = FREE_QUOTA
+        if USER_CREDITS[uid] <= 0:
+            return False
+        USER_CREDITS[uid] -= 1
+    _credits_save()  # outside lock — disk/network I/O
+    return True
+
+async def _refund_credit(uid: int, username: Optional[str] = None):
+    """Refund one credit when generation fails after pre-consume."""
+    if is_free_user(uid, username):
+        return
+    async with _credits_lock:
+        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + 1
+    _credits_save()
 
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
@@ -1809,6 +1834,7 @@ def craft_group_post_text(lang: str, bot_username: Optional[str]) -> str:
                 messages=[{"role":"system","content":sys},{"role":"user","content":user}],
                 temperature=0.9,
                 max_tokens=80,
+                timeout=60,
             )
             out = (r.choices[0].message.content or "").strip()
             if out:
@@ -2002,6 +2028,7 @@ def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = Tru
                           {"role": "user", "content": user}],
                 temperature=0.5,
                 max_tokens=160,
+                timeout=60,
             )
             refined = (resp.choices[0].message.content or "").strip()
             base = enforce_safe_prompt(refined or safe_raw)
@@ -2039,6 +2066,7 @@ def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
             messages=msg,
             temperature=0.2,
             max_tokens=260,
+            timeout=60,
         )
         line = (r.choices[0].message.content or "").strip()
         if not line:
@@ -2079,6 +2107,7 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
             messages=msg,
             temperature=0.2,
             max_tokens=380,
+            timeout=60,
         )
         line = (r.choices[0].message.content or "").strip()
         if not line:
@@ -2251,6 +2280,7 @@ def craft_gpt_nudge(lang: str, offer: Dict[str, object], promo_code: str | None 
             messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.8,
             max_tokens=80,
+            timeout=60,
         )
         msg = (r.choices[0].message.content or "").strip()
         if not msg:
@@ -2285,6 +2315,26 @@ async def _send_nudge(uid: int, lang: str):
             stats_incr("nudges_granted", 1)
     else:
         stats_incr("nudges_errors", 1)
+
+INACTIVE_TTL = int(os.getenv("INACTIVE_TTL_HOURS", "24")) * 3600  # bytes freed after N hours of inactivity
+
+async def memory_cleanup_loop():
+    """Hourly: drop image bytes for users inactive > INACTIVE_TTL seconds."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            now = time.time()
+            stale = [uid for uid, ts in USER_LAST_ACTIVE.items() if now - ts > INACTIVE_TTL]
+            for uid in stale:
+                USER_REFS.pop(uid, None)
+                USER_LAST_OUTPUT.pop(uid, None)
+                USER_LAST_ACTIVE.pop(uid, None)
+                # USER_HISTORY kept (small, text-like in RAM; clear only refs/output bytes)
+            if stale:
+                print(f"[cleanup] freed image bytes for {len(stale)} inactive users")
+        except Exception as e:
+            print("[cleanup] error:", str(e)[:160])
+        await asyncio.sleep(3600)
 
 async def nudge_loop():
     # Run hourly; send up to NUDGE_BATCH_LIMIT eligible nudges
@@ -2347,6 +2397,8 @@ def generate_image_from_bytes(
     job_id: Optional[str] = None,
 ) -> Optional[bytes]:
     t0 = time.time()
+    if user_id is not None:
+        USER_LAST_ACTIVE[int(user_id)] = t0
     if job_id is None:
         job = record_job(
             kind="generation",
@@ -3217,7 +3269,8 @@ async def cb_preset_pick(c: CallbackQuery):
         await c.message.answer(txt)
         return
     # Have a reference → generate now
-    if not has_credit(chat_id, getattr(c.from_user, "username", None)):
+    _uname = getattr(c.from_user, "username", None)
+    if not await _try_use_credit(chat_id, _uname):
         return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
@@ -3227,12 +3280,10 @@ async def cb_preset_pick(c: CallbackQuery):
         user_id=chat_id
     )
     if not result:
+        await _refund_credit(chat_id, _uname)
         stats_incr("gens_fail", 1)
         _uadd(chat_id, "gens_fail", 1)
         return await safe_edit_text(msg, L(chat_id)["fail"])
-    if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
-        USER_CREDITS[chat_id] -= 1
-        _credits_save()
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = preset.prompt
     LAST_PHOTO[chat_id] = result
@@ -3461,13 +3512,11 @@ async def _on_photo_inner(m: Message):
             USER_REFS[m.chat.id] = (USER_REFS[m.chat.id] + [img_bytes])[-4:]
             LAST_REF[m.chat.id] = img_bytes  # «до»
 
-            ensure_user_credit(m.chat.id)
-            if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+            _uname_copy = getattr(m.from_user, "username", None)
+            if not await _try_use_credit(m.chat.id, _uname_copy):
                 return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
             wait = await safe_answer(m, L(m.chat.id)["gen"])
-            # строгий режим: жёсткая сцена + identity lock + negative
-            # 2) Генерим по official multi-image contract: [scene, selfie]
             final_bytes = await asyncio.to_thread(
                 generate_image_from_bytes,
                 img_bytes,
@@ -3491,14 +3540,12 @@ async def _on_photo_inner(m: Message):
                     user_id=m.chat.id,
                 )
                 if not final_bytes:
+                    await _refund_credit(m.chat.id, _uname_copy)
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
                     stats_incr("gens_copy_fail", 1)
                     _uadd(m.chat.id, "gens_copy_fail", 1)
                     return
 
-            if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
-                USER_CREDITS[m.chat.id] -= 1
-                _credits_save()
             USER_LAST_OUTPUT[m.chat.id] = final_bytes
             USER_LAST_PROMPT[m.chat.id] = scene_spec
             LAST_PHOTO[m.chat.id] = final_bytes
@@ -3549,7 +3596,8 @@ async def _on_photo_inner(m: Message):
             idx = USER_PRESET_PENDING.pop(m.chat.id)
             if 0 <= idx < len(PRESETS):
                 preset = PRESETS[idx]
-                if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+                _uname_preset = getattr(m.from_user, "username", None)
+                if not await _try_use_credit(m.chat.id, _uname_preset):
                     return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
                 final_bytes = await asyncio.to_thread(
@@ -3558,13 +3606,11 @@ async def _on_photo_inner(m: Message):
                     user_id=m.chat.id
                 )
                 if not final_bytes:
+                    await _refund_credit(m.chat.id, _uname_preset)
                     if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
                     stats_incr("gens_fail", 1)
                     _uadd(m.chat.id, "gens_fail", 1)
                     return
-                if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
-                    USER_CREDITS[m.chat.id] -= 1
-                    _credits_save()
                 USER_LAST_OUTPUT[m.chat.id] = final_bytes
                 USER_LAST_PROMPT[m.chat.id] = preset.prompt
                 LAST_PHOTO[m.chat.id] = final_bytes
@@ -3597,8 +3643,8 @@ async def _on_photo_inner(m: Message):
         stats_incr("blocked", 1)
         return await safe_answer(m, L(m.chat.id)["blocked"])
 
-    ensure_user_credit(m.chat.id)
-    if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+    _uname_photo = getattr(m.from_user, "username", None)
+    if not await _try_use_credit(m.chat.id, _uname_photo):
         return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
@@ -3608,14 +3654,12 @@ async def _on_photo_inner(m: Message):
         user_id=m.chat.id
     )
     if not final_bytes:
+        await _refund_credit(m.chat.id, _uname_photo)
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
         stats_incr("gens_fail", 1)
         _uadd(m.chat.id, "gens_fail", 1)
         return
 
-    if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
-        USER_CREDITS[m.chat.id] -= 1
-        _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
     LAST_PHOTO[m.chat.id] = final_bytes
@@ -3677,8 +3721,8 @@ async def _on_prompt_inner(m: Message):
     if not refs:
         return await safe_answer(m, L(m.chat.id)["need_photo"])
 
-    ensure_user_credit(m.chat.id)
-    if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
+    _uname_text = getattr(m.from_user, "username", None)
+    if not await _try_use_credit(m.chat.id, _uname_text):
         return await safe_answer(m, L(m.chat.id)["credits_none"])
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
@@ -3689,14 +3733,12 @@ async def _on_prompt_inner(m: Message):
         user_id=m.chat.id
     )
     if not final_bytes:
+        await _refund_credit(m.chat.id, _uname_text)
         if wait: await safe_edit_text(wait, L(m.chat.id)["fail"])
         stats_incr("gens_fail", 1)
         _uadd(m.chat.id, "gens_fail", 1)
         return
 
-    if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
-        USER_CREDITS[m.chat.id] -= 1
-        _credits_save()
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = text
     LAST_PHOTO[m.chat.id] = final_bytes
@@ -3732,8 +3774,8 @@ async def cb_more(c: CallbackQuery):
         await safe_cb_answer(c)
         return await c.message.answer(L(chat_id)["need_photo"])
 
-    ensure_user_credit(chat_id)
-    if not has_credit(chat_id, getattr(c.from_user, "username", None)):
+    _uname_regen = getattr(c.from_user, "username", None)
+    if not await _try_use_credit(chat_id, _uname_regen):
         await safe_cb_answer(c)
         return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
 
@@ -3746,13 +3788,11 @@ async def cb_more(c: CallbackQuery):
         user_id=chat_id
     )
     if not result:
+        await _refund_credit(chat_id, _uname_regen)
         STATS["gens_fail"] += 1
         _uadd(chat_id, "gens_fail", 1)
         return await safe_edit_text(msg, L(chat_id)["fail"])
 
-    if not is_free_user(chat_id, getattr(c.from_user, "username", None)):
-        USER_CREDITS[chat_id] -= 1
-        _credits_save()
     USER_LAST_OUTPUT[chat_id] = result
     USER_LAST_PROMPT[chat_id] = base_prompt
     LAST_PHOTO[chat_id] = result
@@ -3820,9 +3860,18 @@ async def on_startup():
     missing_vars = [v for v in ["BOT_TOKEN", "REPLICATE_API_TOKEN"] if not os.getenv(v)]
     if missing_vars:
         raise SystemExit(f"❌ Missing required env vars: {missing_vars}")
+    # DB init with retry (transient network failures on Railway cold-start)
+    for _db_attempt in range(3):
+        try:
+            db_init()
+            if DB_READY:
+                break
+        except Exception as _db_err:
+            print(f"DB init attempt {_db_attempt+1}/3 failed: {str(_db_err)[:120]}")
+        if _db_attempt < 2:
+            await asyncio.sleep(2)
     # Load persisted stats/users
     try:
-        db_init()
         stats_load()
         _credits_load()
         load_recent_jobs_from_db()
@@ -3874,6 +3923,8 @@ async def on_startup():
                 log_event("background_task_error", task=task.get_name(), error=str(exc)[:240])
 
     try:
+        t = asyncio.create_task(memory_cleanup_loop(), name="memory_cleanup")
+        t.add_done_callback(_bg_task_error_handler)
         if NUDGE_ENABLED:
             t = asyncio.create_task(nudge_loop(), name="nudge_loop")
             t.add_done_callback(_bg_task_error_handler)
