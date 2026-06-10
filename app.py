@@ -1574,8 +1574,9 @@ def _download_with_retries(url: str, tries: int = 4, base_sleep: float = 0.6) ->
             r = requests.get(url, timeout=180)
             if r.ok and r.content:
                 return r.content
-        except Exception:
-            pass
+            log_event("download_retry_http_error", attempt=i + 1, status=getattr(r, "status_code", None), url=url[:120])
+        except Exception as exc:
+            log_event("download_retry_error", attempt=i + 1, error=str(exc)[:120], url=url[:120])
         time.sleep(base_sleep * (i + 1))
     return None
 
@@ -3019,7 +3020,8 @@ async def cb_preset_pick(c: CallbackQuery):
         return await c.message.answer(L(chat_id)["credits_none"], reply_markup=kb_invite_buy(chat_id))
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    result = generate_image_from_bytes(
+    result = await asyncio.to_thread(
+        generate_image_from_bytes,
         ref, preset.prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
         user_id=chat_id
     )
@@ -3212,6 +3214,13 @@ async def cb_pub_group(c: CallbackQuery):
 # ===================== FLOW: PHOTO ====================
 @dp.message(F.photo)
 async def on_photo(m: Message):
+    try:
+        await _on_photo_inner(m)
+    except Exception as e:
+        log_event("on_photo_error", chat_id=m.chat.id, error=str(e)[:240])
+        await safe_answer(m, L(m.chat.id).get("error_try_again", "❌ Что-то пошло не так. Попробуйте ещё раз."))
+
+async def _on_photo_inner(m: Message):
     if m.chat.id not in USER_LANG:
         USER_LANG[m.chat.id] = locale_to_lang(getattr(m.from_user, "language_code", None))
 
@@ -3258,7 +3267,8 @@ async def on_photo(m: Message):
             wait = await safe_answer(m, L(m.chat.id)["gen"])
             # строгий режим: жёсткая сцена + identity lock + negative
             # 2) Генерим по official multi-image contract: [scene, selfie]
-            final_bytes = generate_image_from_bytes(
+            final_bytes = await asyncio.to_thread(
+                generate_image_from_bytes,
                 img_bytes,
                 scene_spec,
                 lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
@@ -3269,7 +3279,8 @@ async def on_photo(m: Message):
             )
             if not final_bytes:
                 # вторая попытка: ещё жёстче
-                final_bytes = generate_image_from_bytes(
+                final_bytes = await asyncio.to_thread(
+                    generate_image_from_bytes,
                     img_bytes,
                     scene_spec + ". Keep face absolutely unchanged, do not beautify, do not reshape.",
                     lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
@@ -3340,7 +3351,8 @@ async def on_photo(m: Message):
                 if not has_credit(m.chat.id, getattr(m.from_user, "username", None)):
                     return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
                 wait = await safe_answer(m, L(m.chat.id)["gen"])
-                final_bytes = generate_image_from_bytes(
+                final_bytes = await asyncio.to_thread(
+                    generate_image_from_bytes,
                     img_bytes, preset.prompt, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
                     user_id=m.chat.id
                 )
@@ -3389,7 +3401,8 @@ async def on_photo(m: Message):
         return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
-    final_bytes = generate_image_from_bytes(
+    final_bytes = await asyncio.to_thread(
+        generate_image_from_bytes,
         img_bytes, caption, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
         user_id=m.chat.id
     )
@@ -3431,6 +3444,13 @@ async def on_photo(m: Message):
 # ===================== FLOW: TEXT =====================
 @dp.message(F.text & ~F.text.startswith("/"))
 async def on_prompt(m: Message):
+    try:
+        await _on_prompt_inner(m)
+    except Exception as e:
+        log_event("on_prompt_error", chat_id=m.chat.id, error=str(e)[:240])
+        await safe_answer(m, L(m.chat.id).get("error_try_again", "❌ Что-то пошло не так. Попробуйте ещё раз."))
+
+async def _on_prompt_inner(m: Message):
     # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
     if m.chat.id in USER_COPY_MODE:
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
@@ -3462,7 +3482,8 @@ async def on_prompt(m: Message):
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     ref = refs[-1]
-    final_bytes = generate_image_from_bytes(
+    final_bytes = await asyncio.to_thread(
+        generate_image_from_bytes,
         ref, text, lang=USER_LANG.get(m.chat.id, LANG_DEFAULT),
         user_id=m.chat.id
     )
@@ -3518,7 +3539,8 @@ async def cb_more(c: CallbackQuery):
     await safe_cb_answer(c)
     msg = await c.message.answer(L(chat_id)["gen"])
     ref = refs[-1]
-    result = generate_image_from_bytes(
+    result = await asyncio.to_thread(
+        generate_image_from_bytes,
         ref, base_prompt, lang=USER_LANG.get(chat_id, LANG_DEFAULT),
         user_id=chat_id
     )
@@ -3594,6 +3616,9 @@ async def ensure_webhook():
 @app.on_event("startup")
 async def on_startup():
     print(f"=== {APP_VERSION} ===")
+    missing_vars = [v for v in ["BOT_TOKEN", "REPLICATE_API_TOKEN"] if not os.getenv(v)]
+    if missing_vars:
+        raise SystemExit(f"❌ Missing required env vars: {missing_vars}")
     # Load persisted stats/users
     try:
         db_init()
@@ -3641,12 +3666,20 @@ async def on_startup():
         scope=BotCommandScopeDefault()
     )
     # Background nudges
+    def _bg_task_error_handler(task: asyncio.Task):
+        if not task.cancelled():
+            exc = task.exception()
+            if exc:
+                log_event("background_task_error", task=task.get_name(), error=str(exc)[:240])
+
     try:
         if NUDGE_ENABLED:
-            asyncio.create_task(nudge_loop())
+            t = asyncio.create_task(nudge_loop(), name="nudge_loop")
+            t.add_done_callback(_bg_task_error_handler)
             print("Nudge loop started")
         if GROUP_POSTS_ENABLED:
-            asyncio.create_task(group_posts_loop())
+            t = asyncio.create_task(group_posts_loop(), name="group_posts_loop")
+            t.add_done_callback(_bg_task_error_handler)
             global GROUP_POST_LOOP_RUNNING
             GROUP_POST_LOOP_RUNNING = True
             print("Group posts loop started")
@@ -3660,12 +3693,14 @@ async def on_shutdown():
 
 
 def _telegram_webhook_authorized(request: Request) -> bool:
+    if not WEBHOOK_SECRET:
+        return True  # секрет не настроен — принимаем все запросы
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if WEBHOOK_SECRET and hmac.compare_digest(header_secret, WEBHOOK_SECRET):
+    if hmac.compare_digest(header_secret, WEBHOOK_SECRET):
         return True
     if WEBHOOK_ALLOW_QUERY_SECRET:
         query_secret = request.query_params.get("secret", "")
-        return bool(WEBHOOK_SECRET and hmac.compare_digest(query_secret, WEBHOOK_SECRET))
+        return bool(hmac.compare_digest(query_secret, WEBHOOK_SECRET))
     return False
 
 def validate_webapp_init_data(init_data: str) -> Optional[Dict[str, Any]]:
