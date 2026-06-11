@@ -2745,10 +2745,41 @@ NUDGE_ENABLED = os.getenv("NUDGE_ENABLED", "0") == "1"
 NUDGE_INTERVAL_HOURS = int(os.getenv("NUDGE_INTERVAL_HOURS", "24"))
 NUDGE_MIN_GAP_HOURS = int(os.getenv("NUDGE_MIN_GAP_HOURS", "24"))
 NUDGE_BATCH_LIMIT = int(os.getenv("NUDGE_BATCH_LIMIT", "25"))
-NUDGE_DAY_START_HOUR = int(os.getenv("NUDGE_DAY_START_HOUR", "10"))  # 10:00
-NUDGE_DAY_END_HOUR = int(os.getenv("NUDGE_DAY_END_HOUR", "20"))      # 20:00
+NUDGE_DAY_START_HOUR = int(os.getenv("NUDGE_DAY_START_HOUR", "10"))
+NUDGE_DAY_END_HOUR = int(os.getenv("NUDGE_DAY_END_HOUR", "20"))
 NUDGE_TZ_DEFAULT = os.getenv("NUDGE_TZ_DEFAULT", "UTC")
 NUDGE_INFO: Dict[int, Dict[str, object]] = {}
+NUDGE_FILE = os.getenv("NUDGE_FILE", os.path.join(DATA_DIR, "nudges.json"))
+
+def _nudge_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = NUDGE_FILE + ".tmp"
+        payload = json.dumps({str(k): v for k, v in NUDGE_INFO.items()}, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, NUDGE_FILE)
+        _s3_put_text(STATE_PREFIX + "nudges.json", payload)
+    except Exception as e:
+        print("[nudge] save error:", str(e)[:160])
+
+def _nudge_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "nudges.json")
+        if not txt and os.path.exists(NUDGE_FILE):
+            with open(NUDGE_FILE, "r", encoding="utf-8") as f:
+                txt = f.read()
+        if not txt:
+            return
+        for k, v in json.loads(txt).items():
+            try:
+                NUDGE_INFO[int(k)] = v
+            except Exception:
+                continue
+    except Exception as e:
+        print("[nudge] load error:", str(e)[:160])
+
+_nudge_load()
 
 def _nudge_eligible(uid: int) -> bool:
     now = time.time()
@@ -2764,13 +2795,41 @@ def _nudge_eligible(uid: int) -> bool:
         return False
     return True
 
-def _nudge_pick_offer(uid: int) -> Dict[str, object]:
-    # Profile-based: paid users → PROMO3, others → FREE1
+def _nudge_pick_segment(uid: int) -> str:
+    """
+    Segment users into 5 nudge types based on behavior:
+      LAPSE_CREDITS    — has credits, been away 24-72h
+      PREMIUM_UPSELL   — generated with everyday only, never tried a paid mode
+      RETURNING_PAID   — previous payer, came back
+      LAPSE_NOCREDITS  — 0 credits, inactive (give free credit)
+      VIRAL_SHARE      — generated but probably never shared (no share event)
+    """
     ui = STATS_USERS_INFO.get(uid) or {}
+    now = time.time()
+    last_seen = float(ui.get("last_seen", 0))
+    hours_away = (now - last_seen) / 3600 if last_seen else 9999
+    gens_ok = int(ui.get("gens_ok", 0))
     paid = int(ui.get("payments", 0)) > 0
-    if paid:
-        return {"kind": "PROMO3"}
-    return {"kind": "FREE1"}
+    credits_left = USER_CREDITS.get(uid, 0)
+    ni = NUDGE_INFO.get(uid) or {}
+    nudge_count = int(ni.get("count", 0))
+
+    if paid and hours_away > 48:
+        return "RETURNING_PAID"
+    if gens_ok >= 2 and credits_left >= 3 and hours_away < 72:
+        # Has tried the bot, has credits, just drifted away — upsell premium mode
+        return "PREMIUM_UPSELL"
+    if credits_left > 0 and hours_away >= 24:
+        return "LAPSE_CREDITS"
+    if gens_ok >= 1 and nudge_count == 0:
+        # Generated before, never nudged → viral share
+        return "VIRAL_SHARE"
+    return "LAPSE_NOCREDITS"
+
+def _nudge_pick_offer(uid: int) -> Dict[str, object]:
+    segment = _nudge_pick_segment(uid)
+    credits_left = USER_CREDITS.get(uid, 0)
+    return {"kind": segment, "credits_left": credits_left}
 
 # ===================== ADMIN NOTIFY ==================
 async def notify_admins_payment(
@@ -2847,76 +2906,119 @@ def _create_user_promo(uid: int, add: int = 3, ttl_uses: int = 1) -> str:
     PROMO_CODES[code] = {"add": add, "uses": ttl_uses}
     return code
 
-def craft_gpt_nudge(lang: str, offer: Dict[str, object], promo_code: str | None = None) -> str:
-    base_fallbacks = {
+_NUDGE_COPY: Dict[str, Dict[str, list]] = {
+    "LAPSE_CREDITS": {
         "ru": [
-            "Возвращайтесь в iModel — новые стили уже ждут вас!",
-            "Пора обновить аватарку? Загружайте селфи и получайте результат за секунды.",
-            "Дарим бонусную генерацию — попробуйте новый образ прямо сейчас!",
+            "У вас ещё {n} генераций в запасе ✨ Пора создать новый образ!",
+            "Ваши {n} генераций ждут — отправьте селфи и посмотрите результат.",
+            "Не дайте кредитам пропасть! {n} генераций уже на балансе — попробуйте Vogue Mode 👑",
         ],
         "en": [
-            "Come back to iModel — fresh styles are waiting!",
-            "Time to refresh your avatar? Drop a selfie and get magic.",
-            "Claim your bonus generation and try a new look now!",
+            "You still have {n} credits waiting ✨ Time to create a new look!",
+            "Your {n} generations are sitting unused — drop a selfie and see the magic.",
+            "Don't waste your credits! {n} left — try Vogue Mode for a stunning result 👑",
         ],
-        "ro": [
-            "Revino în iModel — stiluri noi te așteaptă!",
-            "E timpul pentru un avatar nou? Încarcă un selfie și vezi magia.",
-            "Primește o generație bonus — încearcă acum!",
+        "ro": ["Mai ai {n} credite disponibile ✨ E timpul pentru un nou look!", "Creditele tale ({n}) te așteaptă — trimite un selfie acum."],
+        "de": ["Du hast noch {n} Credits ✨ Zeit für einen neuen Look!", "Deine {n} Generierungen warten — schick ein Selfie!"],
+    },
+    "PREMIUM_UPSELL": {
+        "ru": [
+            "👑 Vogue Mode: 8 AI-генераций, лучшие 3 + 4× апскейл. Результат как с обложки журнала. Попробуйте прямо сейчас!",
+            "🤵 CEO Mode даёт 6 генераций + LinkedIn-портрет. Идеально для профиля. Всего 4 кредита.",
+            "✨ Luxury Mode: ultra-luxury editorial, 6 генераций, лучшие 2 с апскейлом. Ваш Instagram оценит.",
         ],
-    }
+        "en": [
+            "👑 Vogue Mode: 8 AI shots, best 3 selected + 4× upscale. Magazine-cover quality. Try it now!",
+            "🤵 CEO Mode: 6 generations → professional LinkedIn portrait. Just 4 credits.",
+            "✨ Luxury Mode: ultra-luxury editorial, 6 shots, best 2 upscaled. Your Instagram will thank you.",
+        ],
+        "ro": ["👑 Modul Vogue: 8 fotografii AI, cele mai bune 3 + upscale 4×. Calitate de copertă!", "🤵 CEO Mode: 6 generații → portret profesional. Doar 4 credite."],
+        "de": ["👑 Vogue Mode: 8 KI-Fotos, beste 3 + 4× Upscale. Magazin-Qualität!", "🤵 CEO Mode: 6 Generierungen → professionelles LinkedIn-Porträt. Nur 4 Credits."],
+    },
+    "RETURNING_PAID": {
+        "ru": ["Соскучились? Держите промокод на +3 генерации: {code} — только для вас 🎁"],
+        "en": ["Missed you! Here's a promo for +3 free generations: {code} — just for you 🎁"],
+        "ro": ["Ne-a fost dor! Cod promo pentru +3 generații: {code} 🎁"],
+        "de": ["Vermisst! Promo-Code für +3 Generierungen: {code} — nur für dich 🎁"],
+    },
+    "VIRAL_SHARE": {
+        "ru": [
+            "Понравился результат? Поделитесь в Историях — друзья точно захотят попробовать 📤",
+            "Ваши AI-фото достойны Stories 🌟 Поделитесь и получите реакции!",
+        ],
+        "en": [
+            "Loved your result? Share it to Stories — your friends will want to try too 📤",
+            "Your AI photos deserve to be seen 🌟 Share and watch the reactions!",
+        ],
+        "ro": ["Ți-a plăcut rezultatul? Distribuie în Stories — prietenii vor vrea și ei 📤"],
+        "de": ["Ergebnis gefallen? Teile es in Stories — deine Freunde werden es auch wollen 📤"],
+    },
+    "LAPSE_NOCREDITS": {
+        "ru": ["Дарим +1 генерацию — возвращайтесь и создайте новый образ прямо сейчас! 🎁"],
+        "en": ["We're giving you +1 free generation — come back and create something amazing! 🎁"],
+        "ro": ["Îți oferim +1 generație gratuită — revino și creează ceva nou! 🎁"],
+        "de": ["Wir schenken dir +1 Generierung — komm zurück und erstelle etwas Tolles! 🎁"],
+    },
+}
+
+def _pick_nudge_text(segment: str, lang: str, **fmt) -> str:
+    pool = _NUDGE_COPY.get(segment, {})
+    msgs = pool.get(lang) or pool.get("en") or ["Come back to iModel ✨"]
+    text = random.choice(msgs)
     try:
-        if not OPENAI_API_KEY or OpenAI is None:
-            raise RuntimeError("no_openai")
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        sys = (
-            "You are a direct-response marketer. Write a short, punchy, 1-2 sentence push message "
-            "to re-engage a user in a photo-generation bot. Use energetic, inviting tone and clear CTA. "
-            "No hashtags, no emojis overuse (max 1)."
-        )
-        offer_line = ""
-        if offer.get("kind") == "FREE1":
-            offer_line = "Offer: 1 free generation today."
-        elif offer.get("kind") == "PROMO3":
-            offer_line = f"Offer: promo code {promo_code} (+3 gens)."
-        lang_hint = {"ru": "Russian", "en": "English", "ro": "Romanian"}.get(lang, "English")
-        user = f"User language: {lang_hint}. {offer_line}\nWrite the push copy."
-        r = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.8,
-            max_tokens=80,
-            timeout=60,
-        )
-        msg = (r.choices[0].message.content or "").strip()
-        if not msg:
-            raise RuntimeError("empty")
-        return msg
-    except Exception:
-        arr = base_fallbacks.get(lang) or base_fallbacks["en"]
-        return random.choice(arr)
+        return text.format(**fmt)
+    except KeyError:
+        return text
+
+def _nudge_keyboard(uid: int) -> Optional[InlineKeyboardMarkup]:
+    rows = []
+    if WEBHOOK_BASE:
+        rows.append([InlineKeyboardButton(
+            text="📸 Open Studio",
+            web_app=WebAppInfo(url=f"{WEBHOOK_BASE}/webapp"),
+        )])
+    elif BOT_USERNAME_GLOBAL:
+        rows.append([InlineKeyboardButton(
+            text="📸 Open Studio",
+            url=f"https://t.me/{BOT_USERNAME_GLOBAL}",
+        )])
+    credits_left = USER_CREDITS.get(uid, 0)
+    if credits_left <= 2:
+        rows.append([InlineKeyboardButton(text="⚡ Buy Credits", callback_data="buy_stars_30")])
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 async def _send_nudge(uid: int, lang: str):
     ni = NUDGE_INFO.setdefault(uid, {})
     offer = _nudge_pick_offer(uid)
+    segment = str(offer["kind"])
+    credits_left = int(offer.get("credits_left", 0))
     promo_code = None
     granted = 0
-    if offer["kind"] == "FREE1":
-        USER_CREDITS[uid] = USER_CREDITS.get(uid, FREE_QUOTA) + 1
+
+    if segment == "LAPSE_NOCREDITS":
+        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + 1
         _credits_save()
         granted = 1
-    elif offer["kind"] == "PROMO3":
+        text = _pick_nudge_text(segment, lang)
+    elif segment == "RETURNING_PAID":
         promo_code = _create_user_promo(uid, add=3, ttl_uses=1)
-    text = craft_gpt_nudge(lang, offer, promo_code)
-    if offer["kind"] == "FREE1":
-        text += ({"ru": "\nБонус: +1 генерация уже на балансе.", "en": "\nBonus: +1 generation added.", "ro": "\nBonus: +1 generație adăugată."}.get(lang, ""))
-    elif offer["kind"] == "PROMO3" and promo_code:
-        k = {"ru": "\nПромокод: ", "en": "\nPromo code: ", "ro": "\nCod promo: "}.get(lang, "\nPromo: ")
-        text += f"{k}{promo_code}"
-    sent = await safe_send_text(uid, text)
+        text = _pick_nudge_text(segment, lang, code=promo_code)
+    elif segment == "LAPSE_CREDITS":
+        text = _pick_nudge_text(segment, lang, n=credits_left)
+    else:
+        text = _pick_nudge_text(segment, lang)
+
+    kb = _nudge_keyboard(uid)
+    sent = await safe_send_text(uid, text, reply_markup=kb)
     if sent:
         ni["last_sent"] = time.time()
+        ni["count"] = int(ni.get("count", 0)) + 1
+        ni["last_segment"] = segment
+        _nudge_save()
         stats_incr("nudges_sent", 1)
+        stats_incr(f"nudge_{segment.lower()}", 1)
         if granted:
             stats_incr("nudges_granted", 1)
     else:
@@ -3418,13 +3520,21 @@ async def _send_credits_hint(m: Message, uid: int, username: Optional[str] = Non
         return  # paywall will trigger on next attempt
     if n == 1:
         txt = lang.get("credits_last", "⚠️ Last generation! Top up → /buy")
-    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=lang.get("buy_btn_10", "✨ 10 gens — 200★"), callback_data="buy_stars_10"),
+             InlineKeyboardButton(text=lang.get("buy_btn_30", "⚡ 30 gens — 500★"), callback_data="buy_stars_30")],
+        ])
+        try:
+            await m.answer(txt, reply_markup=kb)
+        except Exception:
+            pass
+    elif n <= 3:
         gen_word = _pluralize_ru(n, lang)
         txt = lang.get("credits_low", "🔋 Remaining: {n} {gen}").format(n=n, gen=gen_word)
-    try:
-        await m.answer(txt)
-    except Exception:
-        pass
+        try:
+            await m.answer(txt)
+        except Exception:
+            pass
 
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
