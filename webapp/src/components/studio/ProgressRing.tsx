@@ -1,15 +1,59 @@
 import { motion } from 'framer-motion'
 
-const STEPS = ['Uploading photo...', 'Detecting face...', 'Generating...', 'Final touch...']
+const LEGACY_STEPS = ['Uploading photo...', 'Detecting face...', 'Generating...', 'Final touch...']
 
-interface Props {
-  step: number
+const STEP_LABEL_MAP: Record<string, string> = {
+  analyzing:       'Analyzing selfie...',
+  crafting_prompt: 'Building your prompt...',
+  selecting:       'Selecting best shots...',
+  upscaling:       'Enhancing quality...',
+  ready:           'Done!',
 }
 
-export function ProgressRing({ step }: Props) {
+function humanizeStepLabel(stepLabel: string): string {
+  if (stepLabel.startsWith('generating_')) {
+    const parts = stepLabel.split('_')
+    if (parts.length === 4) return `Creating variation ${parts[1]} of ${parts[3]}...`
+    return 'Generating...'
+  }
+  return STEP_LABEL_MAP[stepLabel] ?? 'Processing...'
+}
+
+function stepToProgress(stepLabel: string): number {
+  if (stepLabel === 'analyzing' || stepLabel === 'crafting_prompt') return 0.1
+  if (stepLabel.startsWith('generating_')) {
+    const parts = stepLabel.split('_')
+    if (parts.length === 4) {
+      const cur = parseInt(parts[1], 10)
+      const total = parseInt(parts[3], 10)
+      if (total > 0) return 0.1 + (cur / total) * 0.6
+    }
+    return 0.4
+  }
+  if (stepLabel === 'selecting') return 0.75
+  if (stepLabel === 'upscaling') return 0.9
+  if (stepLabel === 'ready') return 1.0
+  return 0.5
+}
+
+interface Props {
+  step?: number
+  stepLabel?: string
+}
+
+export function ProgressRing({ step = 0, stepLabel }: Props) {
   const r = 32
   const circ = 2 * Math.PI * r
-  const progress = Math.min(step / 3, 1)
+
+  const progress = stepLabel
+    ? stepToProgress(stepLabel)
+    : Math.min(step / 3, 1)
+
+  const displayText = stepLabel
+    ? humanizeStepLabel(stepLabel)
+    : LEGACY_STEPS[Math.min(step, LEGACY_STEPS.length - 1)]
+
+  const animKey = stepLabel ?? step
 
   return (
     <div className="flex flex-col items-center gap-4 py-8">
@@ -40,12 +84,12 @@ export function ProgressRing({ step }: Props) {
         </div>
       </div>
       <motion.p
-        key={step}
+        key={String(animKey)}
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
-        className="text-[14px] text-[#6E6E73] font-medium"
+        className="text-[14px] text-[#6E6E73] font-medium text-center px-4"
       >
-        {STEPS[Math.min(step, STEPS.length - 1)]}
+        {displayText}
       </motion.p>
     </div>
   )

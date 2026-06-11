@@ -33,16 +33,42 @@ export interface Preset {
 
 export interface Generation {
   job_id: string
-  status: 'pending' | 'processing' | 'done' | 'error'
+  status: 'pending' | 'processing' | 'queued' | 'running' | 'done' | 'ready' | 'error' | 'failed'
   output_url?: string
+  output_urls?: string[]
   hd_url?: string
+  hd_job_id?: string
   preset_key?: string
   mode?: string
+  photoshoot_mode?: string
+  step_label?: string
+  credit_cost?: number
   created_at: string
   original_url?: string
 }
 
 export type GenerationMode = 'portrait' | 'copy_scene' | 'face_swap'
+
+export type PhotoshootModeKey =
+  | 'everyday' | 'premium' | 'vogue' | 'ceo' | 'dating' | 'luxury' | 'custom'
+
+export type PhotoshootBadge = 'popular' | 'best_quality' | 'for_business' | 'viral' | null
+
+export interface PhotoshootMode {
+  key: PhotoshootModeKey
+  label: string
+  label_en: string
+  label_ru: string
+  emoji: string
+  credits: number
+  n_generations: number
+  select_best: number
+  upscale: boolean
+  is_premium: boolean
+  requires_custom_prompt: boolean
+  badge: PhotoshootBadge
+  short_desc: string
+}
 
 export interface ShopItem {
   id: string

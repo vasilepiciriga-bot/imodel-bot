@@ -2,16 +2,19 @@ import { api } from './client'
 import type { Generation } from '../types'
 
 interface CreateParams {
-  selfie_b64: string
+  image_b64: string
   prompt?: string
   preset_key?: string
   age_key?: string
   mode?: string
   style_b64?: string
+  photoshoot_mode?: string
+  custom_desc?: string
+  lang?: string
 }
 
 export const createGeneration = (params: CreateParams) =>
-  api.post<{ job_id: string }>('/api/v1/generations', params)
+  api.post<{ job_id: string; credit_cost: number; photoshoot_mode: string }>('/api/v1/generations', params)
 
 export const createBatch = (params: CreateParams) =>
   api.post<{ job_ids: string[] }>('/api/v1/generations/batch', params)

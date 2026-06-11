@@ -60,7 +60,17 @@ try:
 except Exception:
     OpenAI = None
 
-APP_VERSION = "iModel 2.7.0"
+APP_VERSION = "iModel 2.8.0"
+
+from photoshoot_modes import (
+    PHOTOSHOOT_MODES,
+    get_mode_config,
+    get_mode_credit_cost,
+    get_mode_label,
+    apply_prompt_layer,
+    _score_candidate,
+    step_label_text,
+)
 
 # ===================== ENV ==========================
 BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
@@ -780,7 +790,7 @@ def audit_log(actor_uid: Optional[int], action: str, target_uid: Optional[int] =
 
 def _job_result_json(job: Dict[str, Any]) -> str:
     result = {}
-    for key in ("output_url", "output_bytes", "delivery_message_id"):
+    for key in ("output_url", "output_bytes", "delivery_message_id", "output_urls", "step_label"):
         if key in job:
             result[key] = job.get(key)
     return json.dumps(result, ensure_ascii=False)
@@ -1088,6 +1098,29 @@ async def _refund_credit(uid: int, username: Optional[str] = None):
         USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + 1
     _credits_save()
 
+async def _try_use_credits_n(uid: int, n: int, username: Optional[str] = None) -> bool:
+    """Atomically pre-consume n credits. Returns False if balance < n."""
+    if n <= 0:
+        return True
+    async with _credits_lock:
+        if is_free_user(uid, username):
+            return True
+        if uid not in USER_CREDITS:
+            USER_CREDITS[uid] = FREE_QUOTA
+        if USER_CREDITS[uid] < n:
+            return False
+        USER_CREDITS[uid] -= n
+    _credits_save()
+    return True
+
+async def _refund_credits_n(uid: int, n: int, username: Optional[str] = None):
+    """Refund n credits after a failed tournament."""
+    if n <= 0 or is_free_user(uid, username):
+        return
+    async with _credits_lock:
+        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + n
+    _credits_save()
+
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
 LAST_PHOTO: Dict[int, bytes] = {}
@@ -1114,8 +1147,9 @@ USER_SUBSCRIPTION: Dict[int, Dict] = {}
 USER_STYLE_PACKS: Dict[int, Set[str]] = {}
 USER_AGE_PACKS:   Dict[int, bool]     = {}  # uid → True if Age Magic Pack purchased
 
-# Retouch Mode
- 
+# Photoshoot Tournament Mode
+USER_PHOTOSHOOT_MODE: Dict[int, str]        = {}  # uid → mode key (e.g. "premium")
+USER_PHOTOSHOOT_CUSTOM_DESC: Dict[int, str] = {}  # uid → vision text (custom mode)
 
 # Whitelist
 FREE_USERS: set[int] = set()
@@ -3819,6 +3853,67 @@ async def cmd_balance(m: Message):
         ])
         await safe_answer(m, hint, reply_markup=kb)
 
+@dp.message(Command("photo"))
+async def cmd_photo(m: Message):
+    """Show photoshoot mode picker as inline keyboard."""
+    uid = m.chat.id
+    lang_code = USER_LANG.get(uid, LANG_DEFAULT)
+    txt_map = {
+        "ru": "🎬 Выберите режим фотосессии:",
+        "en": "🎬 Choose your photoshoot mode:",
+        "de": "🎬 Wählen Sie Ihren Fotoshoot-Modus:",
+        "ar": "🎬 اختر وضع جلسة التصوير:",
+    }
+    txt = txt_map.get(lang_code, txt_map["en"])
+    kb = _kb_photoshoot_modes(uid)
+    await safe_answer(m, txt, reply_markup=kb)
+
+
+def _kb_photoshoot_modes(chat_id: int) -> InlineKeyboardMarkup:
+    lang_code = USER_LANG.get(chat_id, LANG_DEFAULT)
+    rows = []
+    for key, cfg in PHOTOSHOOT_MODES.items():
+        label = cfg["label"].get(lang_code, cfg["label"].get("en", key))
+        emoji = cfg.get("emoji", "✦")
+        cost = cfg["credits"]
+        badge = cfg.get("badge")
+        badge_str = {"popular": " 🔥", "best_quality": " 👑", "for_business": " 💼", "viral": " ✨"}.get(badge or "", "")
+        rows.append([InlineKeyboardButton(
+            text=f"{emoji} {label}{badge_str} · {cost}⚡",
+            callback_data=f"photoshoot_mode_{key}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data.startswith("photoshoot_mode_"))
+async def cb_photoshoot_mode(c: CallbackQuery):
+    await safe_cb_answer(c)
+    chat_id = c.message.chat.id
+    mode_key = c.data.split("photoshoot_mode_")[-1]
+    if mode_key not in PHOTOSHOOT_MODES:
+        return
+    lang_code = USER_LANG.get(chat_id, LANG_DEFAULT)
+    USER_PHOTOSHOOT_MODE[chat_id] = mode_key
+    cfg = PHOTOSHOOT_MODES[mode_key]
+    label = cfg["label"].get(lang_code, cfg["label"].get("en", mode_key))
+    cost = cfg["credits"]
+    n_gen = cfg["n_generations"]
+    select_k = cfg["select_best"]
+
+    if mode_key == "custom":
+        desc_prompt = {
+            "ru": f"✅ Режим: {label} ({cost}⚡)\n\n✍️ Опишите ваш образ или идею фотосессии:\n(например: «деловой портрет в офисе», «лето в Майами», «модный editorial»)",
+            "en": f"✅ Mode: {label} ({cost}⚡)\n\n✍️ Describe your photoshoot vision:\n(e.g. «business portrait in office», «summer in Miami», «fashion editorial»)",
+        }
+        await c.message.answer(desc_prompt.get(lang_code, desc_prompt["en"]))
+    else:
+        info = {
+            "ru": f"✅ Режим: {label} ({cost}⚡)\n\nВнутри система создаст {n_gen} вариантов и выберет лучшие {select_k}.\nТеперь отправьте своё селфи.",
+            "en": f"✅ Mode: {label} ({cost}⚡)\n\nThe system will create {n_gen} variations internally and select the best {select_k}.\nNow send your selfie.",
+        }
+        await c.message.answer(info.get(lang_code, info["en"]))
+
+
 @dp.message(Command("daily"))
 async def cmd_daily(m: Message):
     import datetime
@@ -4204,6 +4299,40 @@ async def _on_photo_inner(m: Message):
             except Exception:
                 pass
 
+    # ----- Photoshoot Tournament Mode (non-everyday) -----
+    _ps_mode = USER_PHOTOSHOOT_MODE.get(m.chat.id, "everyday")
+    if _ps_mode != "everyday":
+        uid = m.chat.id
+        lang = L(uid)
+        _uname_ps = getattr(m.from_user, "username", None)
+        _lang_ps = USER_LANG.get(uid, LANG_DEFAULT)
+        cost = get_mode_credit_cost(_ps_mode)
+        if not await _try_use_credits_n(uid, cost, _uname_ps):
+            return await safe_answer(m, lang["credits_none"], reply_markup=kb_invite_buy(uid))
+        mode_label = get_mode_label(_ps_mode, _lang_ps)
+        wait_texts = {
+            "ru": f"🎬 Запускаем {mode_label} фотосессию...\nЯ пришлю результаты, когда всё готово.",
+            "en": f"🎬 Starting {mode_label} photoshoot...\nI'll send the results when ready.",
+        }
+        await safe_answer(m, wait_texts.get(_lang_ps, wait_texts["en"]))
+        job = record_job(
+            kind="tg_photoshoot",
+            status="queued",
+            chat_id=uid,
+            username=_uname_ps or "",
+            prompt=USER_LAST_PROMPT.get(uid, ""),
+            model=INSTANTID_MODEL,
+            image_bytes=img_bytes,
+            lang=_lang_ps,
+            photoshoot_mode=_ps_mode,
+            custom_desc=USER_PHOTOSHOOT_CUSTOM_DESC.get(uid, ""),
+        )
+        USER_PHOTOSHOOT_MODE.pop(uid, None)
+        USER_PHOTOSHOOT_CUSTOM_DESC.pop(uid, None)
+        USER_LAST_JOB[uid] = str(job["job_id"])
+        asyncio.create_task(run_photoshoot_tournament_job(str(job["job_id"])))
+        return
+
     # ----- Swap Mode (face swap selfie into target photo) -----
     if m.chat.id in USER_SWAP_MODE:
         uid = m.chat.id
@@ -4469,6 +4598,20 @@ async def on_prompt(m: Message):
         await safe_answer(m, L(m.chat.id).get("error_try_again", "❌ Что-то пошло не так. Попробуйте ещё раз."))
 
 async def _on_prompt_inner(m: Message):
+    # Custom photoshoot mode: first text message = vision description
+    if (USER_PHOTOSHOOT_MODE.get(m.chat.id) == "custom"
+            and not USER_PHOTOSHOOT_CUSTOM_DESC.get(m.chat.id)):
+        USER_PHOTOSHOOT_CUSTOM_DESC[m.chat.id] = m.text.strip()
+        lang_code = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+        ok_text = {
+            "ru": "✅ Образ сохранён. Теперь отправьте своё селфи.",
+            "en": "✅ Vision saved. Now send your selfie.",
+            "de": "✅ Vision gespeichert. Senden Sie jetzt ein Selfie.",
+            "ar": "✅ تم حفظ الفكرة. الآن أرسل صورتك الشخصية.",
+        }
+        await safe_answer(m, ok_text.get(lang_code, ok_text["en"]))
+        return
+
     # Если включён Copy Mode и пришёл текст — трактуем как ручное редактирование промпта для копирования сцены
     if m.chat.id in USER_COPY_MODE:
         USER_COPY_PROMPT[m.chat.id] = m.text.strip()
@@ -4876,6 +5019,145 @@ async def _run_hd_upscale_job(hd_job_id: str, parent_job_id: str):
         record_job(hd_job_id, status="failed", error=str(e)[:400])
 
 
+async def run_photoshoot_tournament_job(job_id: str):
+    """
+    Generation Tournament for multi-level photoshoot modes (premium/vogue/ceo/dating/luxury/custom).
+    Runs N sequential generations, scores candidates, selects best K, optionally upscales.
+    For kind="tg_photoshoot": also delivers results via bot.send_photo.
+    """
+    job = JOBS.get(job_id)
+    if not job:
+        return
+
+    uid = int(job.get("chat_id") or 0)
+    username = str(job.get("username") or "")
+    mode_key = str(job.get("photoshoot_mode") or "everyday")
+    cfg = get_mode_config(mode_key)
+    n_gen: int = int(cfg["n_generations"])
+    select_k: int = int(cfg["select_best"])
+    do_upscale: bool = bool(cfg["upscale"])
+    upscale_factor: int = int(cfg.get("upscale_factor", 2))
+    upscale_fidelity: float = float(cfg.get("upscale_fidelity", 0.8))
+    lang: str = str(job.get("lang") or LANG_DEFAULT)
+
+    img_bytes: Optional[bytes] = job.get("image_bytes")
+    base_prompt: str = str(job.get("prompt") or "")
+    custom_desc: str = str(job.get("custom_desc") or "")
+
+    if not img_bytes:
+        record_job(job_id, status="failed", error="no_image_bytes")
+        return
+
+    record_job(job_id, status="running", step_label="analyzing")
+    job_event(job_id, "tournament_start", mode=mode_key, n_gen=n_gen, select_k=select_k)
+
+    # For custom mode: build GPT prompt from user's vision description
+    if mode_key == "custom" and custom_desc:
+        record_job(job_id, step_label="crafting_prompt")
+        try:
+            base_prompt = await asyncio.to_thread(craft_prompt_gpt, custom_desc, lang, True)
+            job_event(job_id, "custom_prompt_crafted", prompt=base_prompt[:200])
+        except Exception as e:
+            job_event(job_id, "custom_prompt_error", error=str(e)[:120])
+
+    effective_prompt = apply_prompt_layer(base_prompt, mode_key)
+
+    candidates: List[tuple] = []  # List of (score, img_bytes)
+
+    for i in range(n_gen):
+        step = f"generating_{i + 1}_of_{n_gen}"
+        record_job(job_id, step_label=step)
+        job_event(job_id, "tournament_step", step=i + 1, total=n_gen)
+        try:
+            # Pass job_id=None to avoid inner call overwriting tournament job status
+            result_bytes = await asyncio.to_thread(
+                generate_image_from_bytes,
+                img_bytes,
+                effective_prompt,
+                lang,
+                False,   # strict
+                None,    # style_bytes
+                False,   # lock_scene
+                uid,
+                None,    # job_id=None — critical: prevent inner call clobbering outer job
+            )
+            if result_bytes:
+                score = _score_candidate(result_bytes)
+                candidates.append((score, result_bytes))
+                job_event(job_id, "candidate_ok", index=i + 1, score=round(score, 1), size=len(result_bytes))
+            else:
+                job_event(job_id, "candidate_empty", index=i + 1)
+        except Exception as e:
+            job_event(job_id, "candidate_failed", index=i + 1, error=str(e)[:120])
+
+    if not candidates:
+        await _refund_credits_n(uid, get_mode_credit_cost(mode_key), username)
+        record_job(job_id, status="failed", error="all_candidates_failed")
+        stats_incr("tournament_all_failed", 1)
+        return
+
+    record_job(job_id, step_label="selecting")
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    best = candidates[:select_k]
+    job_event(job_id, "selection_done", selected=len(best), from_total=len(candidates))
+
+    output_urls: List[str] = []
+    for idx, (score, img) in enumerate(best):
+        if do_upscale:
+            record_job(job_id, step_label="upscaling")
+            try:
+                img = await asyncio.to_thread(
+                    enhance_face_codeformer, img, upscale_fidelity, upscale_factor
+                )
+            except Exception as e:
+                job_event(job_id, "upscale_failed", idx=idx, error=str(e)[:120])
+
+        url = s3_put_and_presign(img, key_prefix=f"outputs/webapp/{job_id}_result{idx}_")
+        if url:
+            output_urls.append(url)
+            job_event(job_id, "result_uploaded", idx=idx, url=url[:80])
+
+    if not output_urls:
+        await _refund_credits_n(uid, get_mode_credit_cost(mode_key), username)
+        record_job(job_id, status="failed", error="upload_failed")
+        return
+
+    record_job(
+        job_id,
+        status="ready",
+        output_url=output_urls[0],
+        output_urls=output_urls,
+        step_label="ready",
+        output_bytes=len(best[0][1]),
+    )
+    stats_incr("tournament_done", 1)
+    _uadd(uid, "photoshoot_count", 1)
+
+    # Deliver results to Telegram for tg_photoshoot jobs
+    if job.get("kind") == "tg_photoshoot" and uid:
+        try:
+            mode_label = get_mode_label(mode_key, lang)
+            caption_prefix = f"✦ {mode_label} Photoshoot"
+            for i, url in enumerate(output_urls):
+                img_dl = await asyncio.to_thread(_download_with_retries, url)
+                if img_dl:
+                    cap = f"{caption_prefix} · {i + 1}/{len(output_urls)}" if len(output_urls) > 1 else caption_prefix
+                    markup = None
+                    if i == len(output_urls) - 1:
+                        markup = InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(text="🔄 Ещё", callback_data="cb_more"),
+                            InlineKeyboardButton(text="🛍 Купить кредиты", callback_data="sub_open"),
+                        ]])
+                    await bot.send_photo(
+                        uid,
+                        types.BufferedInputFile(img_dl, filename=f"photoshoot_{i}.jpg"),
+                        caption=cap,
+                        reply_markup=markup,
+                    )
+        except Exception as e:
+            log_event("tournament_delivery_error", job_id=job_id, error=str(e)[:200])
+
+
 async def _process_telegram_update(data: Dict[str, Any], received_at: float):
     try:
         update = Update.model_validate(data)
@@ -5116,9 +5398,21 @@ async def api_create_generation(request: Request):
     uid = int(user["uid"])
     username = str(user.get("username") or "")
     ensure_user_credit(uid)
-    if not has_credit(uid, username):
-        return JSONResponse({"error": "no_credits"}, status_code=402)
     data = await request.json()
+
+    photoshoot_mode = str(data.get("photoshoot_mode") or "everyday").strip()
+    if photoshoot_mode not in PHOTOSHOOT_MODES:
+        photoshoot_mode = "everyday"
+    custom_desc = str(data.get("custom_desc") or "").strip()[:1000]
+    credit_cost = get_mode_credit_cost(photoshoot_mode)
+
+    # Check and deduct credits (n credits for photoshoot modes)
+    if not await _try_use_credits_n(uid, credit_cost, username):
+        return JSONResponse(
+            {"error": "no_credits", "required": credit_cost, "available": USER_CREDITS.get(uid, 0)},
+            status_code=402,
+        )
+
     prompt = str(data.get("prompt") or "").strip()
     image_b64 = str(data.get("image_b64") or "").strip()
     mode = str(data.get("mode") or "portrait")
@@ -5130,14 +5424,40 @@ async def api_create_generation(request: Request):
     if preset_key and not prompt:
         prompt = _resolve_preset_prompt(preset_key) or ""
     if not image_b64:
+        await _refund_credits_n(uid, credit_cost, username)
         return JSONResponse({"error": "image_b64 required"}, status_code=400)
     image_bytes = _decode_b64_image(image_b64)
     if not image_bytes:
+        await _refund_credits_n(uid, credit_cost, username)
         return JSONResponse({"error": "invalid image"}, status_code=400)
     ok, reason = assess_selfie_quality(image_bytes)
     if not ok:
+        await _refund_credits_n(uid, credit_cost, username)
         return JSONResponse({"error": "selfie_quality", "reason": reason}, status_code=400)
     style_bytes = _decode_b64_image(style_b64) if style_b64 else None
+
+    if photoshoot_mode != "everyday":
+        # Photoshoot tournament pipeline
+        job = record_job(
+            kind="webapp_photoshoot",
+            status="queued",
+            chat_id=uid,
+            username=username,
+            prompt=prompt,
+            model=INSTANTID_MODEL,
+            image_bytes=image_bytes,
+            mode=mode,
+            age_key=age_key,
+            lang=str(data.get("lang") or LANG_DEFAULT),
+            photoshoot_mode=photoshoot_mode,
+            custom_desc=custom_desc,
+        )
+        stats_incr("jobs_created", 1)
+        asyncio.create_task(run_photoshoot_tournament_job(str(job["job_id"])))
+        return {"job_id": job["job_id"], "status": "queued", "credit_cost": credit_cost,
+                "photoshoot_mode": photoshoot_mode}
+
+    # Everyday mode — existing path unchanged
     job = record_job(
         kind="webapp_generation",
         status="queued",
@@ -5150,10 +5470,11 @@ async def api_create_generation(request: Request):
         mode=mode,
         age_key=age_key,
         lang=str(data.get("lang") or LANG_DEFAULT),
+        photoshoot_mode="everyday",
     )
     stats_incr("jobs_created", 1)
     asyncio.create_task(run_webapp_generation_job(str(job["job_id"])))
-    return {"job_id": job["job_id"], "status": "queued"}
+    return {"job_id": job["job_id"], "status": "queued", "credit_cost": 1, "photoshoot_mode": "everyday"}
 
 @app.post("/api/v1/generations/batch")
 async def api_create_batch(request: Request):
@@ -5277,6 +5598,33 @@ async def api_presets(request: Request):
                         "pack_id": "age_pack", "locked": not age_unlocked})
     trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
     return {"presets": result, "trending": trending_keys}
+
+@app.get("/api/v1/photoshoot-modes")
+async def api_photoshoot_modes(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    lang = USER_LANG.get(uid, LANG_DEFAULT)
+    result = []
+    for key, cfg in PHOTOSHOOT_MODES.items():
+        result.append({
+            "key": key,
+            "label": cfg["label"].get(lang, cfg["label"].get("en", key)),
+            "label_en": cfg["label"].get("en", key),
+            "label_ru": cfg["label"].get("ru", key),
+            "emoji": cfg.get("emoji", "✦"),
+            "credits": cfg["credits"],
+            "n_generations": cfg["n_generations"],
+            "select_best": cfg["select_best"],
+            "upscale": cfg["upscale"],
+            "is_premium": cfg.get("is_premium", False),
+            "requires_custom_prompt": cfg.get("requires_custom_prompt", False),
+            "badge": cfg.get("badge"),
+            "short_desc": cfg.get("short_desc", {}).get(lang, cfg.get("short_desc", {}).get("en", "")),
+        })
+    return {"modes": result}
+
 
 @app.get("/api/v1/shop")
 async def api_shop(request: Request):

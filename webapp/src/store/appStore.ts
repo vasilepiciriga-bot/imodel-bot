@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { UserProfile, Preset, Generation, GenerationMode } from '../types'
+import type { UserProfile, Preset, Generation, GenerationMode, PhotoshootModeKey } from '../types'
 
 type Tab = 'studio' | 'styles' | 'gallery' | 'shop' | 'profile'
 
@@ -21,6 +21,12 @@ interface AppState {
 
   mode: GenerationMode
   setMode: (mode: GenerationMode) => void
+
+  photoshootMode: PhotoshootModeKey
+  setPhotoshootMode: (mode: PhotoshootModeKey) => void
+
+  customDesc: string
+  setCustomDesc: (desc: string) => void
 
   hdEnabled: boolean
   toggleHd: () => void
@@ -56,6 +62,12 @@ export const useAppStore = create<AppState>((set) => ({
 
   mode: 'portrait',
   setMode: (mode) => set({ mode }),
+
+  photoshootMode: 'everyday',
+  setPhotoshootMode: (photoshootMode) => set({ photoshootMode }),
+
+  customDesc: '',
+  setCustomDesc: (customDesc) => set({ customDesc }),
 
   hdEnabled: false,
   toggleHd: () => set((s) => ({ hdEnabled: !s.hdEnabled })),

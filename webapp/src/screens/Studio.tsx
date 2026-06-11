@@ -7,26 +7,31 @@ import { GenerateButton } from '../components/studio/GenerateButton'
 import { ProgressRing } from '../components/studio/ProgressRing'
 import { ResultCard } from '../components/studio/ResultCard'
 import { CreditBadge } from '../components/layout/CreditBadge'
+import { PhotoshootModePicker } from '../components/studio/PhotoshootModePicker'
 import { useAppStore } from '../store/appStore'
 import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
+import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
 import { getChallenge } from '../api/session'
-import type { Challenge } from '../types'
+import type { Challenge, Generation, PhotoshootMode } from '../types'
 
 const tg = window.Telegram?.WebApp
 
 export default function Studio() {
   const { selfieB64, selfiePreview, activePreset, mode, hdEnabled, batchEnabled,
     toggleHd, toggleBatch, currentJob, setCurrentJob, batchJobs, setBatchJobs,
-    updateCredits } = useAppStore()
+    photoshootMode, setPhotoshootMode, customDesc, setCustomDesc } = useAppStore()
 
   const [prompt, setPrompt] = useState('')
   const [loading, setLoading] = useState(false)
+  const [stepLabel, setStepLabel] = useState<string | undefined>(undefined)
   const [progressStep, setProgressStep] = useState(0)
   const [pollingJobId, setPollingJobId] = useState<string | null>(null)
   const [hdLoading, setHdLoading] = useState(false)
   const [challenge, setChallenge] = useState<Challenge | null>(null)
   const [batchIndex, setBatchIndex] = useState(0)
+  const [showModePicker, setShowModePicker] = useState(false)
+  const [photoshootModes, setPhotoshootModes] = useState<PhotoshootMode[]>([])
 
   const user = useAppStore((s) => s.user)
   const streak = user?.streak ?? 0
@@ -36,20 +41,54 @@ export default function Studio() {
   }, [])
 
   useEffect(() => {
+    const cached = getCachedModes()
+    if (cached?.length) { setPhotoshootModes(cached); return }
+    fetchPhotoshootModes()
+      .then(({ modes }) => { setPhotoshootModes(modes); setCachedModes(modes) })
+      .catch(() => null)
+  }, [])
+
+  useEffect(() => {
     if (activePreset) setPrompt('')
   }, [activePreset])
 
-  const cost = batchEnabled ? 3 : hdEnabled ? 3 : 1
+  const modeConfig = photoshootModes.find((m) => m.key === photoshootMode)
+  const baseCost = modeConfig?.credits ?? (photoshootMode === 'everyday' ? 1 : 1)
+  const cost = batchEnabled ? 3 : baseCost
+
+  function isJobDone(job: Generation) {
+    return job.status === 'done' || job.status === 'ready'
+  }
 
   useJobPoller(pollingJobId, (job) => {
     setCurrentJob(job)
-    if (job.status === 'processing') setProgressStep((s) => Math.min(s + 1, 3))
-    if (job.status === 'done' || job.status === 'error') {
+
+    // Update progress label from backend step_label
+    if (job.step_label) setStepLabel(job.step_label)
+    if (job.status === 'processing' || job.status === 'running') {
+      setProgressStep((s) => Math.min(s + 1, 3))
+    }
+
+    if (isJobDone(job) || job.status === 'error' || job.status === 'failed') {
       setLoading(false)
       setPollingJobId(null)
       setProgressStep(0)
-      if (job.status === 'done') {
+
+      if (isJobDone(job)) {
         tg?.HapticFeedback?.notificationOccurred('success')
+
+        // Handle multiple output_urls (tournament results)
+        if (job.output_urls && job.output_urls.length > 1) {
+          const pseudoJobs: Generation[] = job.output_urls.map((url, i) => ({
+            ...job,
+            job_id: `${job.job_id}_r${i}`,
+            output_url: url,
+          }))
+          setBatchJobs(pseudoJobs)
+          setBatchIndex(0)
+          setCurrentJob(pseudoJobs[0])
+        }
+
         if (job.output_url) {
           useAppStore.getState().prependGallery(job)
         }
@@ -63,28 +102,32 @@ export default function Studio() {
     setLoading(true)
     setCurrentJob(null)
     setBatchJobs([])
-    setProgressStep(1)
+    setProgressStep(0)
+    setStepLabel('analyzing')
 
     try {
-      const params = {
-        selfie_b64: selfieB64,
+      const baseParams = {
+        image_b64: selfieB64,
         prompt: activePreset?.prompt ?? prompt,
         preset_key: activePreset?.key,
         mode,
+        photoshoot_mode: photoshootMode,
+        custom_desc: photoshootMode === 'custom' ? customDesc : undefined,
       }
 
       if (batchEnabled) {
-        const { job_ids } = await createBatch(params)
+        const { job_ids } = await createBatch(baseParams)
         const jobs = await Promise.all(job_ids.map((id) => getGeneration(id)))
         setBatchJobs(jobs)
         setPollingJobId(job_ids[0])
       } else {
-        const { job_id } = await createGeneration(params)
+        const { job_id } = await createGeneration(baseParams)
         setPollingJobId(job_id)
       }
     } catch (e: unknown) {
       setLoading(false)
       setProgressStep(0)
+      setStepLabel(undefined)
       const msg = e instanceof Error ? e.message : 'Generation failed'
       tg?.HapticFeedback?.notificationOccurred('error')
       alert(msg)
@@ -116,6 +159,15 @@ export default function Studio() {
               <Flame size={14} fill="currentColor" /> {streak}
             </span>
           )}
+          {/* Mode pill */}
+          <button
+            onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setShowModePicker(true) }}
+            className="flex items-center gap-1 px-2 py-1 rounded-full bg-[#6C47FF]/10 border border-[#6C47FF]/20"
+          >
+            <span className="text-[11px]">{modeConfig?.emoji ?? '📸'}</span>
+            <span className="text-[11px] font-medium text-[#6C47FF]">{modeConfig?.label_en ?? 'Everyday'}</span>
+            <span className="text-[9px] text-[#6C47FF]/60">▾</span>
+          </button>
         </div>
         <CreditBadge />
       </div>
@@ -163,8 +215,21 @@ export default function Studio() {
           </motion.div>
         )}
 
-        {/* Prompt */}
-        {!activePreset && (
+        {/* Custom mode: vision input */}
+        {photoshootMode === 'custom' && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
+            <textarea
+              value={customDesc}
+              onChange={(e) => setCustomDesc(e.target.value)}
+              placeholder="Describe your vision... (e.g. CEO portrait in NYC office, summer beach editorial)"
+              rows={2}
+              className="w-full px-4 py-3 rounded-card bg-[#6C47FF]/5 border border-[#6C47FF]/20 text-[14px] text-[#1D1D1F] placeholder-[#6E6E73] resize-none outline-none"
+            />
+          </motion.div>
+        )}
+
+        {/* Prompt (not for custom mode) */}
+        {!activePreset && photoshootMode !== 'custom' && (
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -174,25 +239,42 @@ export default function Studio() {
           />
         )}
 
-        {/* Feature toggles */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); toggleBatch() }}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-card text-[12px] font-medium border transition-colors ${
-              batchEnabled ? 'bg-[#6C47FF]/10 border-[#6C47FF]/30 text-[#6C47FF]' : 'bg-[#F5F5F7] border-transparent text-[#6E6E73]'
-            }`}
+        {/* Feature toggles (only for everyday) */}
+        {photoshootMode === 'everyday' && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); toggleBatch() }}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-card text-[12px] font-medium border transition-colors ${
+                batchEnabled ? 'bg-[#6C47FF]/10 border-[#6C47FF]/30 text-[#6C47FF]' : 'bg-[#F5F5F7] border-transparent text-[#6E6E73]'
+              }`}
+            >
+              <Grid2X2 size={13} /> Batch ×4 · 3⚡
+            </button>
+            <button
+              onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); toggleHd() }}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-card text-[12px] font-medium border transition-colors ${
+                hdEnabled ? 'bg-[#6C47FF]/10 border-[#6C47FF]/30 text-[#6C47FF]' : 'bg-[#F5F5F7] border-transparent text-[#6E6E73]'
+              }`}
+            >
+              <Diamond size={13} /> HD · +2⚡
+            </button>
+          </div>
+        )}
+
+        {/* Mode info for non-everyday */}
+        {photoshootMode !== 'everyday' && modeConfig && (
+          <motion.div
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-2 px-3 py-2.5 rounded-card bg-[#6C47FF]/5 border border-[#6C47FF]/15"
           >
-            <Grid2X2 size={13} /> Batch ×4 · 3⚡
-          </button>
-          <button
-            onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); toggleHd() }}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-card text-[12px] font-medium border transition-colors ${
-              hdEnabled ? 'bg-[#6C47FF]/10 border-[#6C47FF]/30 text-[#6C47FF]' : 'bg-[#F5F5F7] border-transparent text-[#6E6E73]'
-            }`}
-          >
-            <Diamond size={13} /> HD · +2⚡
-          </button>
-        </div>
+            <span className="text-[18px]">{modeConfig.emoji}</span>
+            <div className="flex-1">
+              <span className="text-[12px] text-[#6C47FF] font-medium">{modeConfig.label_en}</span>
+              <span className="text-[11px] text-[#6E6E73] ml-1.5">{modeConfig.short_desc}</span>
+            </div>
+          </motion.div>
+        )}
 
         <GenerateButton onClick={generate} loading={loading && !currentJob} disabled={!selfieB64} cost={cost} />
 
@@ -200,15 +282,17 @@ export default function Studio() {
         <AnimatePresence>
           {loading && !currentJob && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <ProgressRing step={progressStep} />
+              <ProgressRing step={progressStep} stepLabel={stepLabel} />
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Batch results */}
+        {/* Multi-result grid (tournament results or batch) */}
         {batchJobs.length > 0 && (
           <div className="space-y-2">
-            <p className="text-[12px] text-[#6E6E73] font-medium">Tap to select</p>
+            <p className="text-[12px] text-[#6E6E73] font-medium">
+              {photoshootMode !== 'everyday' ? 'Select the best shot' : 'Tap to select'}
+            </p>
             <div className="grid grid-cols-2 gap-2">
               {batchJobs.map((job, i) => (
                 <motion.button
@@ -218,7 +302,7 @@ export default function Studio() {
                   className={`rounded-card overflow-hidden border-2 ${batchIndex === i ? 'border-[#6C47FF]' : 'border-transparent'}`}
                 >
                   {job.output_url ? (
-                    <img src={job.output_url} alt={`batch ${i + 1}`} className="w-full aspect-square object-cover" />
+                    <img src={job.output_url} alt={`result ${i + 1}`} className="w-full aspect-square object-cover" />
                   ) : (
                     <div className="w-full aspect-square bg-gray-100 flex items-center justify-center">
                       <span className="text-[#6E6E73] text-[11px]">{job.status}</span>
@@ -231,7 +315,7 @@ export default function Studio() {
         )}
 
         {/* Single result */}
-        {currentJob?.status === 'done' && !batchJobs.length && (
+        {currentJob && isJobDone(currentJob) && !batchJobs.length && (
           <ResultCard
             job={currentJob}
             beforeUrl={selfiePreview ?? undefined}
@@ -241,6 +325,20 @@ export default function Studio() {
           />
         )}
       </div>
+
+      {/* Mode picker modal */}
+      <PhotoshootModePicker
+        open={showModePicker}
+        onClose={() => setShowModePicker(false)}
+        onSelect={(newMode, desc) => {
+          setPhotoshootMode(newMode)
+          if (desc) setCustomDesc(desc)
+          setShowModePicker(false)
+        }}
+        currentMode={photoshootMode}
+        userCredits={user?.credits ?? 0}
+        modes={photoshootModes}
+      />
     </div>
   )
 }
