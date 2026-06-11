@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Download, RefreshCw, Star, Images, Trophy, Share2, Pencil, Copy, Check } from 'lucide-react'
+import {
+  X, Download, RefreshCw, Star, Images, Trophy, Share2,
+  Pencil, Copy, Check, ChevronLeft, ChevronRight,
+} from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { getGallery, getCachedGallery, setCachedGallery, requestHD } from '../api/generations'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
@@ -100,11 +103,9 @@ function LeaderboardModal({ data, onClose }: { data: LeaderboardData; onClose: (
         className="mt-auto bg-[#1C1C1E] rounded-t-[24px] pb-safe"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Handle */}
         <div className="flex justify-center pt-3 pb-1">
           <div className="w-8 h-1 bg-white/20 rounded-full" />
         </div>
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
           <div>
             <h2 className="text-[17px] font-bold text-white">🏆 Leaderboard</h2>
@@ -114,7 +115,6 @@ function LeaderboardModal({ data, onClose }: { data: LeaderboardData; onClose: (
             <X size={16} className="text-white/70" />
           </button>
         </div>
-        {/* Entries */}
         <div className="px-4 py-3 space-y-1 max-h-[60vh] overflow-y-auto">
           {data.entries.map((e) => (
             <motion.div
@@ -240,12 +240,53 @@ function CaptionSheet({ captions, onClose, onRegenerate, loading }: {
   )
 }
 
+// ─── Day grouping helpers ──────────────────────────────────────────────────────
+
+function dayLabel(ts: number): string {
+  if (!ts) return 'Earlier'
+  const d = new Date(ts * 1000)
+  const now = new Date()
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === now.toDateString()) return 'Today'
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString('en', { month: 'long', day: 'numeric' })
+}
+
+function groupByDay(items: Generation[]): { label: string; items: Generation[] }[] {
+  const map = new Map<string, Generation[]>()
+  for (const item of items) {
+    const label = dayLabel(Number(item.created_at))
+    if (!map.has(label)) map.set(label, [])
+    map.get(label)!.push(item)
+  }
+  return Array.from(map.entries()).map(([label, items]) => ({ label, items }))
+}
+
+// ─── Slide animation variants ──────────────────────────────────────────────────
+
+const slideVariants = {
+  enter: (d: number) => ({
+    x: d > 0 ? '65%' : d < 0 ? '-65%' : 0,
+    opacity: d !== 0 ? 0.6 : 1,
+  }),
+  center: { x: 0, opacity: 1 },
+  exit: (d: number) => ({
+    x: d > 0 ? '-65%' : d < 0 ? '65%' : 0,
+    opacity: d !== 0 ? 0.6 : 1,
+  }),
+}
+
+// ─── Main Gallery screen ───────────────────────────────────────────────────────
+
 export default function Gallery() {
   const gallery = useAppStore((s) => s.gallery)
   const setGallery = useAppStore((s) => s.setGallery)
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
-  const [lightbox, setLightbox] = useState<Generation | null>(null)
+
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const [swipeDir, setSwipeDir] = useState(0)
   const [hdLoading, setHdLoading] = useState(false)
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [showLeaderboard, setShowLeaderboard] = useState(false)
@@ -255,6 +296,19 @@ export default function Gallery() {
   const [showCaptions, setShowCaptions] = useState(false)
   const [reactions, setReactions] = useState<Record<string, ReactionState>>({})
   const toast = useToast()
+
+  // Sort newest first
+  const sorted = useMemo(
+    () =>
+      [...gallery].sort((a, b) => {
+        const ta = a.created_at ? Number(a.created_at) : 0
+        const tb = b.created_at ? Number(b.created_at) : 0
+        return tb - ta
+      }),
+    [gallery]
+  )
+  const groups = useMemo(() => groupByDay(sorted), [sorted])
+  const lightbox = lightboxIndex !== null ? sorted[lightboxIndex] : null
 
   useEffect(() => {
     const cached = getCachedGallery()
@@ -269,9 +323,24 @@ export default function Gallery() {
     getLeaderboard().then(setLeaderboard).catch(() => null)
   }, [])
 
+  function openLightbox(item: Generation) {
+    tg?.HapticFeedback?.impactOccurred('light')
+    const idx = sorted.findIndex((s) => s.job_id === item.job_id)
+    setSwipeDir(0)
+    setLightboxIndex(idx >= 0 ? idx : null)
+  }
+
+  function navigate(dir: number) {
+    if (lightboxIndex === null) return
+    const next = lightboxIndex + dir
+    if (next < 0 || next >= sorted.length) return
+    setSwipeDir(dir)
+    tg?.HapticFeedback?.impactOccurred('light')
+    setLightboxIndex(next)
+  }
+
   async function handleReact(jobId: string, emoji: string) {
     tg?.HapticFeedback?.impactOccurred('light')
-    // Optimistic update
     setReactions((prev) => {
       const cur = prev[jobId] ?? { counts: {}, mine: null }
       const counts = { ...cur.counts }
@@ -392,7 +461,7 @@ export default function Gallery() {
         </div>
       </div>
 
-      {/* Leaderboard strip — shown when gallery has content */}
+      {/* Leaderboard strip */}
       {leaderboard && top3.length > 0 && gallery.length > 0 && (
         <motion.button
           initial={{ opacity: 0, y: -8 }}
@@ -438,46 +507,53 @@ export default function Gallery() {
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto px-4">
-          <div className="columns-2 gap-2.5 pb-4">
-            {gallery.map((item, i) => (
-              <motion.div
-                key={item.job_id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: Math.min(i * 0.04, 0.4) }}
-                className="break-inside-avoid mb-2.5 relative"
-              >
-                <div
-                  className="relative"
-                  onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setLightbox(item) }}
-                >
-                  <img
-                    src={item.hd_url ?? item.output_url}
-                    alt={item.preset_key ?? 'photo'}
-                    loading="lazy"
-                    className="w-full rounded-t-card object-cover"
-                  />
-                  {item.hd_url && (
-                    <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] rounded-full text-[9px] text-white font-bold">
-                      HD
+          {groups.map(({ label, items: dayItems }) => (
+            <div key={label} className="mb-4">
+              <p className="text-[11px] font-semibold text-[#6E6E73] uppercase tracking-wider py-2 sticky top-0 bg-[#F5F5F7] z-10">
+                {label}
+              </p>
+              <div className="columns-2 gap-2.5">
+                {dayItems.map((item, i) => (
+                  <motion.div
+                    key={item.job_id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: Math.min(i * 0.04, 0.4) }}
+                    className="break-inside-avoid mb-2.5 relative"
+                  >
+                    <div
+                      className="relative"
+                      onClick={() => openLightbox(item)}
+                    >
+                      <img
+                        src={item.hd_url ?? item.output_url}
+                        alt={item.preset_key ?? 'photo'}
+                        loading="lazy"
+                        className="w-full rounded-t-card object-cover"
+                      />
+                      {item.hd_url && (
+                        <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] rounded-full text-[9px] text-white font-bold">
+                          HD
+                        </div>
+                      )}
+                      <div className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 bg-black/50 rounded-full text-[9px] text-white truncate max-w-[80%]">
+                        {item.preset_key ?? item.mode ?? 'portrait'}
+                      </div>
                     </div>
-                  )}
-                  <div className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 bg-black/50 rounded-full text-[9px] text-white truncate max-w-[80%]">
-                    {item.preset_key ?? item.mode ?? 'portrait'}
-                  </div>
-                </div>
-                {/* Reaction strip */}
-                <div className="px-1.5 py-1.5 bg-white rounded-b-card border border-black/[0.05]">
-                  <ReactionRow
-                    jobId={item.job_id}
-                    state={reactions[item.job_id] ?? { counts: {}, mine: null }}
-                    compact
-                    onReact={handleReact}
-                  />
-                </div>
-              </motion.div>
-            ))}
-          </div>
+                    <div className="px-1.5 py-1.5 bg-white rounded-b-card border border-black/[0.05]">
+                      <ReactionRow
+                        jobId={item.job_id}
+                        state={reactions[item.job_id] ?? { counts: {}, mine: null }}
+                        compact
+                        onReact={handleReact}
+                      />
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="pb-4" />
         </div>
       )}
 
@@ -488,28 +564,72 @@ export default function Gallery() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/90 flex flex-col"
-            onClick={() => setLightbox(null)}
+            className="fixed inset-0 z-50 bg-black/92 flex flex-col"
+            onClick={() => setLightboxIndex(null)}
           >
+            {/* Header: counter + close */}
             <div className="flex items-center justify-between p-4">
-              <span className="text-white text-[13px] font-medium">{lightbox.preset_key ?? lightbox.mode}</span>
-              <button onClick={() => setLightbox(null)}>
+              <span className="text-white/55 text-[13px] font-medium tabular-nums">
+                {(lightboxIndex ?? 0) + 1} / {sorted.length}
+              </span>
+              <button onClick={() => setLightboxIndex(null)}>
                 <X size={24} className="text-white" />
               </button>
             </div>
 
-            <motion.div
-              className="flex-1 flex items-center justify-center p-4"
+            {/* Swipeable image area */}
+            <div
+              className="flex-1 relative overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
-              <img
-                src={lightbox.hd_url ?? lightbox.output_url}
-                alt="result"
-                className="max-h-full max-w-full rounded-card object-contain"
-              />
-            </motion.div>
+              <AnimatePresence custom={swipeDir} mode="wait">
+                <motion.div
+                  key={lightbox.job_id}
+                  custom={swipeDir}
+                  variants={slideVariants}
+                  initial="enter"
+                  animate="center"
+                  exit="exit"
+                  transition={{ type: 'spring', stiffness: 320, damping: 30, mass: 0.8 }}
+                  drag="x"
+                  dragConstraints={{ left: 0, right: 0 }}
+                  dragElastic={0.15}
+                  onDragEnd={(_, info) => {
+                    if (info.offset.x < -60 || info.velocity.x < -250) navigate(1)
+                    else if (info.offset.x > 60 || info.velocity.x > 250) navigate(-1)
+                  }}
+                  className="absolute inset-0 flex items-center justify-center p-4"
+                >
+                  <img
+                    src={lightbox.hd_url ?? lightbox.output_url}
+                    alt="result"
+                    className="max-h-full max-w-full rounded-card object-contain"
+                    draggable={false}
+                  />
+                </motion.div>
+              </AnimatePresence>
 
-            {/* Reactions in lightbox */}
+              {/* Prev chevron */}
+              {(lightboxIndex ?? 0) > 0 && (
+                <button
+                  onClick={() => navigate(-1)}
+                  className="absolute left-1 top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full bg-black/35 flex items-center justify-center"
+                >
+                  <ChevronLeft size={20} className="text-white/75" />
+                </button>
+              )}
+              {/* Next chevron */}
+              {lightboxIndex !== null && lightboxIndex < sorted.length - 1 && (
+                <button
+                  onClick={() => navigate(1)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full bg-black/35 flex items-center justify-center"
+                >
+                  <ChevronRight size={20} className="text-white/75" />
+                </button>
+              )}
+            </div>
+
+            {/* Reactions */}
             <div className="px-4 pb-2" onClick={(e) => e.stopPropagation()}>
               <ReactionRow
                 jobId={lightbox.job_id}
@@ -519,6 +639,7 @@ export default function Gallery() {
               />
             </div>
 
+            {/* Action buttons */}
             <div className="grid grid-cols-2 gap-2 p-4" onClick={(e) => e.stopPropagation()}>
               <a
                 href={lightbox.hd_url ?? lightbox.output_url}

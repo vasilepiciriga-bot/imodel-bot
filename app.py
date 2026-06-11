@@ -6887,16 +6887,14 @@ async def api_gallery(request: Request):
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     uid = int(user["uid"])
-    source_jobs = list(JOBS.values())
     if DB_READY:
-        db_jobs = _db_load_recent_jobs(100)
-        if db_jobs:
-            source_jobs = db_jobs
-    items = [
-        public_job_snapshot(j)
-        for j in source_jobs
-        if int(j.get("chat_id") or 0) == uid and j.get("status") == "ready"
-    ][-20:]
+        items = [public_job_snapshot(j) for j in _db_load_user_jobs(uid, 50)]
+    else:
+        items = sorted(
+            [public_job_snapshot(j) for j in JOBS.values()
+             if int(j.get("chat_id") or 0) == uid and j.get("status") == "ready"],
+            key=lambda x: x.get("created_at", 0), reverse=True
+        )[:50]
     return {"items": items}
 
 ALLOWED_REACTIONS = ["❤️", "🔥", "😍", "👏", "😮"]
