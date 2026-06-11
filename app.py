@@ -7274,6 +7274,101 @@ async def api_admin_broadcast_cancel(request: Request):
     return JSONResponse({"error": "no_active_campaign"}, status_code=404)
 
 
+def _admin_resolve_user(q: str) -> Optional[int]:
+    """Resolve a search query (UID or @username) to a uid, or None."""
+    q = q.strip().lstrip("@")
+    if q.isdigit():
+        uid = int(q)
+        return uid if uid in STATS_USERS_INFO or uid in USER_CREDITS else None
+    # Search by username (case-insensitive)
+    q_lower = q.lower()
+    for uid, info in STATS_USERS_INFO.items():
+        if (info.get("username") or "").lower() == q_lower:
+            return uid
+    return None
+
+
+@app.get("/api/v1/admin/user")
+async def api_admin_user_lookup(request: Request):
+    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
+    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    q = str(request.query_params.get("q") or "").strip()
+    if not q:
+        return JSONResponse({"error": "missing_q"}, status_code=400)
+    uid = _admin_resolve_user(q)
+    if uid is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    info = STATS_USERS_INFO.get(uid) or {}
+    now = time.time()
+    last_seen = float(info.get("last_seen", 0))
+    first_seen = float(info.get("first_seen", 0))
+    return {
+        "uid": uid,
+        "username": info.get("username") or "",
+        "credits": USER_CREDITS.get(uid, 0),
+        "plan": USER_SUBSCRIPTION.get(uid, {}).get("plan", "free"),
+        "streak": USER_STREAK.get(uid, 0),
+        "gens_ok": int(info.get("gens_ok", 0)),
+        "payments": int(info.get("payments", 0)),
+        "language": USER_LANG.get(uid, LANG_DEFAULT),
+        "unlocked_packs": sorted(USER_STYLE_PACKS.get(uid, set())),
+        "last_seen": last_seen,
+        "last_seen_ago": f"{int((now - last_seen) // 3600)}h ago" if last_seen else "never",
+        "first_seen": first_seen,
+        "blocked": bool(NUDGE_INFO.get(uid, {}).get("blocked")),
+        "is_free": is_free_user(uid),
+    }
+
+
+@app.post("/api/v1/admin/user/credits")
+async def api_admin_user_credits(request: Request):
+    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
+    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    uid = int(body.get("uid", 0))
+    delta = int(body.get("delta", 0))
+    reason = str(body.get("reason", "admin_grant"))[:80]
+    if not uid or delta == 0:
+        return JSONResponse({"error": "bad_params"}, status_code=400)
+    ensure_user_credit(uid)
+    async with _credits_lock:
+        before = USER_CREDITS.get(uid, 0)
+        USER_CREDITS[uid] = max(0, before + delta)
+        after = USER_CREDITS[uid]
+    _credits_save()
+    analytics_event(uid, "admin_credit_grant", {"delta": delta, "before": before, "after": after, "reason": reason})
+    log_event("admin_credit_grant", uid=uid, delta=delta, reason=reason)
+    return {"uid": uid, "before": before, "after": after, "delta": delta}
+
+
+@app.post("/api/v1/admin/user/message")
+async def api_admin_user_message(request: Request):
+    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
+    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    uid = int(body.get("uid", 0))
+    text = str(body.get("text", "")).strip()[:1000]
+    if not uid or not text:
+        return JSONResponse({"error": "bad_params"}, status_code=400)
+    try:
+        await bot.send_message(uid, text)
+        analytics_event(uid, "admin_message_sent", {"text_len": len(text)})
+        return {"sent": True}
+    except (TelegramForbiddenError, TelegramNotFound):
+        return JSONResponse({"error": "user_blocked_bot"}, status_code=422)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:120]}, status_code=500)
+
+
 @app.get("/api/v1/shop")
 async def api_shop(request: Request):
     user = webapp_user_from_request(request)
@@ -7513,6 +7608,109 @@ async def http_metrics(request: Request):
     resp["generation_latency_avg_ms"] = int(STATS.get("generation_latency_total_ms", 0) / gen_count) if gen_count else 0
     resp["db_ready"] = DB_READY
     return resp
+
+def _admin_user_lookup_section() -> str:
+    """User lookup & credit grant section for the admin panel."""
+    return """
+      <div class="section">
+        <div class="card">
+          <div class="muted" style="margin-bottom:10px">User Lookup &amp; Credit Grant</div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input id="ul_q" placeholder="UID or @username" style="flex:1;background:#1b2030;border:1px solid #2a3556;border-radius:6px;color:#e6edf3;padding:6px 10px;font-size:13px">
+            <button onclick="ulLookup()" style="padding:6px 16px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:13px">Search</button>
+          </div>
+          <div id="ul_result"></div>
+        </div>
+      </div>
+      <script>
+      async function ulLookup() {
+        const q = document.getElementById('ul_q').value.trim();
+        if (!q) return;
+        const res = document.getElementById('ul_result');
+        res.innerHTML = '<span class="muted">Searching…</span>';
+        try {
+          const r = await fetch('/api/v1/admin/user?q=' + encodeURIComponent(q) + '&secret=' + encodeURIComponent(ADMIN_SECRET));
+          if (!r.ok) { res.innerHTML = '<span style="color:#e56565">Not found</span>'; return; }
+          const u = await r.json();
+          const plan_color = u.plan === 'free' ? '#9aa4b2' : '#ffd700';
+          res.innerHTML = `
+            <div style="background:#131a2b;border:1px solid #2a3556;border-radius:8px;padding:12px 14px;margin-bottom:10px">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <span style="font-size:16px;font-weight:700;color:#e6edf3">@${u.username || '—'}</span>
+                <span class="muted">UID: ${u.uid}</span>
+                <span style="color:${plan_color};font-size:11px;font-weight:600;background:${plan_color}22;padding:2px 7px;border-radius:10px">${u.plan.toUpperCase()}</span>
+                ${u.blocked ? '<span style="color:#e56565;font-size:11px">🚫 blocked bot</span>' : ''}
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
+                <div style="background:#1b2030;border-radius:6px;padding:8px;text-align:center">
+                  <div style="font-size:18px;font-weight:700;color:var(--accent)">${u.credits}</div>
+                  <div class="muted" style="font-size:10px">Credits</div>
+                </div>
+                <div style="background:#1b2030;border-radius:6px;padding:8px;text-align:center">
+                  <div style="font-size:18px;font-weight:700;color:#ffd700">${u.gens_ok}</div>
+                  <div class="muted" style="font-size:10px">Gens</div>
+                </div>
+                <div style="background:#1b2030;border-radius:6px;padding:8px;text-align:center">
+                  <div style="font-size:18px;font-weight:700;color:#24c38b">${u.payments}</div>
+                  <div class="muted" style="font-size:10px">Payments</div>
+                </div>
+                <div style="background:#1b2030;border-radius:6px;padding:8px;text-align:center">
+                  <div style="font-size:18px;font-weight:700;color:#ff9500">${u.streak}</div>
+                  <div class="muted" style="font-size:10px">Streak</div>
+                </div>
+              </div>
+              <div class="muted" style="font-size:11px;margin-bottom:10px">
+                Lang: ${u.language} &nbsp;·&nbsp; Last seen: ${u.last_seen_ago}
+                ${u.unlocked_packs.length ? ' &nbsp;·&nbsp; Packs: ' + u.unlocked_packs.join(', ') : ''}
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                ${[-10,-5,5,10,25,50].map(d =>
+                  `<button onclick="ulCredits(${u.uid},${d})" style="padding:4px 10px;background:${d>0?'#24c38b22':'#e5656522'};border:1px solid ${d>0?'#24c38b55':'#e5656555'};border-radius:5px;color:${d>0?'#24c38b':'#e56565'};cursor:pointer;font-size:12px">${d>0?'+':''}${d}⚡</button>`
+                ).join('')}
+                <button onclick="ulCreditsCustom(${u.uid})" style="padding:4px 10px;background:#7aa2f722;border:1px solid #7aa2f755;border-radius:5px;color:#7aa2f7;cursor:pointer;font-size:12px">Custom</button>
+              </div>
+              <div style="display:flex;gap:6px">
+                <input id="ul_msg_${u.uid}" placeholder="Send message to user…" style="flex:1;background:#1b2030;border:1px solid #2a3556;border-radius:5px;color:#e6edf3;padding:5px 8px;font-size:12px">
+                <button onclick="ulMsg(${u.uid})" style="padding:4px 12px;background:#7aa2f722;border:1px solid #7aa2f755;border-radius:5px;color:#7aa2f7;cursor:pointer;font-size:12px">Send</button>
+              </div>
+              <div id="ul_action_${u.uid}" style="font-size:12px;margin-top:6px;min-height:16px"></div>
+            </div>`;
+        } catch(e) { res.innerHTML = '<span style="color:#e56565">Error: ' + e.message + '</span>'; }
+      }
+      document.getElementById('ul_q').addEventListener('keydown', e => { if(e.key==='Enter') ulLookup(); });
+
+      async function ulCredits(uid, delta) {
+        const reason = delta < 0 ? 'admin_deduct' : 'admin_grant';
+        const r = await fetch('/api/v1/admin/user/credits?secret=' + encodeURIComponent(ADMIN_SECRET), {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({uid, delta, reason})
+        });
+        const d = await r.json();
+        const el = document.getElementById('ul_action_' + uid);
+        if (r.ok) el.innerHTML = `<span style="color:#24c38b">✓ Credits updated: ${d.before} → ${d.after}</span>`;
+        else el.innerHTML = `<span style="color:#e56565">Error: ${d.error}</span>`;
+      }
+      async function ulCreditsCustom(uid) {
+        const raw = prompt('Enter credit delta (e.g. +50 or -10):');
+        if (!raw) return;
+        const delta = parseInt(raw.replace(/^\\+/, ''), 10);
+        if (isNaN(delta) || delta === 0) return alert('Invalid delta');
+        await ulCredits(uid, delta);
+      }
+      async function ulMsg(uid) {
+        const text = document.getElementById('ul_msg_' + uid).value.trim();
+        if (!text) return;
+        const r = await fetch('/api/v1/admin/user/message?secret=' + encodeURIComponent(ADMIN_SECRET), {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({uid, text})
+        });
+        const d = await r.json();
+        const el = document.getElementById('ul_action_' + uid);
+        if (r.ok) el.innerHTML = '<span style="color:#24c38b">✓ Message sent</span>';
+        else el.innerHTML = `<span style="color:#e56565">Error: ${d.error}</span>`;
+      }
+      </script>"""
+
 
 def _admin_broadcast_section() -> str:
     """Broadcast campaign launcher + history table."""
@@ -8288,6 +8486,7 @@ async def admin_panel(request: Request):
         </div>
       </div>
 
+      {_admin_user_lookup_section()}
       {_admin_broadcast_section()}
       {_admin_revenue_section()}
       {_admin_funnel_section()}
