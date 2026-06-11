@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { UserProfile, Preset, Generation, GenerationMode, PhotoshootModeKey } from '../types'
+import type { UserProfile, Preset, Generation, GenerationMode, PhotoshootModeKey, Challenge } from '../types'
 
 type Tab = 'studio' | 'styles' | 'gallery' | 'shop' | 'profile'
 
@@ -42,6 +42,11 @@ interface AppState {
   gallery: Generation[]
   setGallery: (items: Generation[]) => void
   prependGallery: (item: Generation) => void
+
+  challenge: Challenge | null
+  challengeLoaded: boolean
+  setChallenge: (c: Challenge | null) => void
+  setChallengeLoaded: (v: boolean) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -83,4 +88,9 @@ export const useAppStore = create<AppState>((set) => ({
   gallery: [],
   setGallery: (items) => set({ gallery: items }),
   prependGallery: (item) => set((s) => ({ gallery: [item, ...s.gallery] })),
+
+  challenge: null,
+  challengeLoaded: false,
+  setChallenge: (challenge) => set({ challenge }),
+  setChallengeLoaded: (challengeLoaded) => set({ challengeLoaded }),
 }))

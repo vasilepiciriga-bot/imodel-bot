@@ -6,7 +6,6 @@ import { useAppStore } from '../store/appStore'
 import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { createGift } from '../api/gift'
-import type { Challenge } from '../types'
 import type { ReferralData } from '../api/session'
 
 const tg = window.Telegram?.WebApp
@@ -24,7 +23,6 @@ function formatCountdown(secs: number): string {
 export default function Profile() {
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
-  const [challenge, setChallenge] = useState<Challenge | null>(null)
   const [dailyClaimed, setDailyClaimed] = useState(false)
   const [nextBonusIn, setNextBonusIn] = useState<number | null>(null)
   const [claimLoading, setClaimLoading] = useState(false)
@@ -35,9 +33,16 @@ export default function Profile() {
   const [giftSent, setGiftSent] = useState(false)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
+  const challenge = useAppStore((s) => s.challenge)
+  const challengeLoaded = useAppStore((s) => s.challengeLoaded)
 
   useEffect(() => {
-    getChallenge().then(setChallenge).catch(() => null)
+    if (!challengeLoaded) {
+      useAppStore.getState().setChallengeLoaded(true)
+      getChallenge()
+        .then((c) => useAppStore.getState().setChallenge(c))
+        .catch(() => null)
+    }
     getReferral().then(setReferral).catch(() => null)
   }, [])
 

@@ -15,7 +15,7 @@ import { createGeneration, createBatch, getGeneration, requestHD } from '../api/
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
 import { getChallenge } from '../api/session'
 import { track } from '../api/analytics'
-import type { Challenge, Generation, PhotoshootMode } from '../types'
+import type { Generation, PhotoshootMode } from '../types'
 
 const tg = window.Telegram?.WebApp
 
@@ -30,7 +30,6 @@ export default function Studio() {
   const [progressStep, setProgressStep] = useState(0)
   const [pollingJobId, setPollingJobId] = useState<string | null>(null)
   const [hdLoading, setHdLoading] = useState(false)
-  const [challenge, setChallenge] = useState<Challenge | null>(null)
   const [batchIndex, setBatchIndex] = useState(0)
   const [showModePicker, setShowModePicker] = useState(false)
   const [photoshootModes, setPhotoshootModes] = useState<PhotoshootMode[]>([])
@@ -38,9 +37,16 @@ export default function Studio() {
 
   const user = useAppStore((s) => s.user)
   const streak = user?.streak ?? 0
+  const challenge = useAppStore((s) => s.challenge)
+  const challengeLoaded = useAppStore((s) => s.challengeLoaded)
 
   useEffect(() => {
-    getChallenge().then(setChallenge).catch(() => null)
+    if (!challengeLoaded) {
+      useAppStore.getState().setChallengeLoaded(true)
+      getChallenge()
+        .then((c) => useAppStore.getState().setChallenge(c))
+        .catch(() => null)
+    }
   }, [])
 
   useEffect(() => {

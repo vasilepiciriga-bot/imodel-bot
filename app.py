@@ -177,9 +177,26 @@ def log_event(event: str, **fields: Any):
             payload[k] = str(v)
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
+_DB_POOL = None
+
+def _init_db_pool():
+    global _DB_POOL
+    if not DATABASE_URL or psycopg is None:
+        return
+    try:
+        from psycopg_pool import ConnectionPool
+        _DB_POOL = ConnectionPool(DATABASE_URL, min_size=2, max_size=10, open=True)
+        print("[db] connection pool initialized (2-10 connections)")
+    except ImportError:
+        print("[db] psycopg_pool not available, using single connections")
+    except Exception as e:
+        print("[db] pool init error:", str(e)[:120])
+
 def _db_connect():
     if not DATABASE_URL or psycopg is None:
         return None
+    if _DB_POOL:
+        return _DB_POOL.connection()
     return psycopg.connect(DATABASE_URL, autocommit=True)
 
 def _db_execute(sql: str, params: tuple = ()) -> bool:
@@ -446,6 +463,7 @@ STATS_DAILY_FILE  = os.path.join(DATA_DIR, "stats_daily.json")
 USERS_FILE        = os.path.join(DATA_DIR, "users.json")
 
 STATS_DAILY: Dict[str, Dict[str, int]] = {}
+_STATS_DIRTY = False
 
 def _date_key(ts: Optional[float] = None) -> str:
     t = time.gmtime(ts or time.time())
@@ -569,19 +587,45 @@ def stats_load():
         print("[users] load error:", str(e)[:160])
 
 def stats_incr(key: str, n: int = 1):
+    global _STATS_DIRTY
     try:
         STATS[key] = int(STATS.get(key, 0)) + n
-        stats_save_totals()
         day = _date_key()
         d = STATS_DAILY.setdefault(day, {})
         d[key] = int(d.get(key, 0)) + n
-        stats_save_daily()
+        _STATS_DIRTY = True
     except Exception as e:
         print("[stats] incr error:", key, str(e)[:160])
+
+async def _stats_flush_loop():
+    global _STATS_DIRTY
+    await asyncio.sleep(30)
+    while True:
+        try:
+            if _STATS_DIRTY:
+                _STATS_DIRTY = False
+                stats_save_totals()
+                stats_save_daily()
+        except Exception as e:
+            print("[stats] flush error:", str(e)[:120])
+        await asyncio.sleep(30)
 
 # ===================== ANALYTICS EVENTS ========================
 POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY", "")
 POSTHOG_HOST    = os.getenv("POSTHOG_HOST", "https://app.posthog.com")
+_POSTHOG_Q: asyncio.Queue = asyncio.Queue(maxsize=500)
+
+async def _posthog_worker():
+    while True:
+        try:
+            item = await asyncio.wait_for(_POSTHOG_Q.get(), timeout=60)
+            uid, event, props, ts = item
+            await asyncio.to_thread(_posthog_capture_sync, uid, event, props, ts)
+            _POSTHOG_Q.task_done()
+        except asyncio.TimeoutError:
+            continue
+        except Exception as e:
+            print("[posthog] worker error:", str(e)[:120])
 
 def analytics_event(uid: Optional[int], event: str, props: Optional[Dict[str, Any]] = None):
     """
@@ -606,10 +650,11 @@ def analytics_event(uid: Optional[int], event: str, props: Optional[Dict[str, An
             (uid, event, p_json, day, now),
         )
         stats_incr(f"evt_{event}", 1)
-        # PostHog (fire-and-forget via thread to avoid blocking event loop)
         if POSTHOG_API_KEY and uid:
-            import threading as _th
-            _th.Thread(target=_posthog_capture_sync, args=(uid, event, p, now), daemon=True).start()
+            try:
+                _POSTHOG_Q.put_nowait((uid, event, p, now))
+            except asyncio.QueueFull:
+                pass
     except Exception as e:
         print(f"[analytics] event error {event}: {str(e)[:120]}")
 
@@ -3454,6 +3499,17 @@ async def memory_cleanup_loop():
                 # USER_HISTORY kept (small, text-like in RAM; clear only refs/output bytes)
             if stale:
                 print(f"[cleanup] freed image bytes for {len(stale)} inactive users")
+            # Prune JOBS older than 48h that are no longer running
+            job_cutoff = now - 48 * 3600
+            stale_jobs = [
+                jid for jid, j in list(JOBS.items())
+                if j.get("status") not in ("running", "queued")
+                and j.get("created_at", now) < job_cutoff
+            ]
+            for jid in stale_jobs:
+                JOBS.pop(jid, None)
+            if stale_jobs:
+                print(f"[cleanup] pruned {len(stale_jobs)} old jobs from memory")
         except Exception as e:
             print("[cleanup] error:", str(e)[:160])
         await asyncio.sleep(3600)
@@ -5911,7 +5967,8 @@ async def on_startup():
     missing_vars = [v for v in ["BOT_TOKEN", "REPLICATE_API_TOKEN"] if not os.getenv(v)]
     if missing_vars:
         raise SystemExit(f"❌ Missing required env vars: {missing_vars}")
-    # DB init with retry (transient network failures on Railway cold-start)
+    # DB connection pool + init with retry (transient network failures on Railway cold-start)
+    _init_db_pool()
     for _db_attempt in range(3):
         try:
             db_init()
@@ -5977,6 +6034,10 @@ async def on_startup():
                 log_event("background_task_error", task=task.get_name(), error=str(exc)[:240])
 
     try:
+        t = asyncio.create_task(_stats_flush_loop(), name="stats_flush")
+        t.add_done_callback(_bg_task_error_handler)
+        t = asyncio.create_task(_posthog_worker(), name="posthog_worker")
+        t.add_done_callback(_bg_task_error_handler)
         t = asyncio.create_task(memory_cleanup_loop(), name="memory_cleanup")
         t.add_done_callback(_bg_task_error_handler)
         if NUDGE_ENABLED:
@@ -6546,6 +6607,10 @@ async def api_me(request: Request):
         "portfolio_url": f"{WEBHOOK_BASE.rstrip('/')}/p/{uid}" if USER_PORTFOLIO_PUBLIC.get(uid) else None,
     }
 
+_LEADERBOARD_CACHE: Optional[List[Dict]] = None
+_LEADERBOARD_CACHE_AT: float = 0.0
+_LEADERBOARD_TTL = 300  # 5 minutes
+
 def _weekly_top_generators(n: int = 10) -> List[Dict[str, Any]]:
     """Return top-N users by generation_completed events in the last 7 days.
     Falls back to lifetime STATS_USERS_INFO gens when DB is unavailable."""
@@ -6602,8 +6667,13 @@ async def api_leaderboard(request: Request):
     user = webapp_user_from_request(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
+    global _LEADERBOARD_CACHE, _LEADERBOARD_CACHE_AT
     caller_uid = int(user["uid"])
-    top = _weekly_top_generators(10)
+    now_ts = time.time()
+    if _LEADERBOARD_CACHE is None or now_ts - _LEADERBOARD_CACHE_AT > _LEADERBOARD_TTL:
+        _LEADERBOARD_CACHE = _weekly_top_generators(10)
+        _LEADERBOARD_CACHE_AT = now_ts
+    top = _LEADERBOARD_CACHE
     # Determine caller's rank
     caller_rank: Optional[int] = None
     caller_gens = 0

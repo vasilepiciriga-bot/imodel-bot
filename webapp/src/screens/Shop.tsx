@@ -9,6 +9,22 @@ import { track } from '../api/analytics'
 
 const tg = window.Telegram?.WebApp
 
+const SHOP_CACHE_KEY = 'imodel_shop_v1'
+const SHOP_TTL = 5 * 60 * 1000
+
+async function getShopCached(): Promise<ShopData> {
+  try {
+    const raw = localStorage.getItem(SHOP_CACHE_KEY)
+    if (raw) {
+      const { ts, data } = JSON.parse(raw)
+      if (Date.now() - ts < SHOP_TTL) return data
+    }
+  } catch {}
+  const data = await getShop()
+  localStorage.setItem(SHOP_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }))
+  return data
+}
+
 function fireConfetti() {
   confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
 }
@@ -20,7 +36,7 @@ export default function Shop() {
   const updateCredits = useAppStore((s) => s.updateCredits)
 
   useEffect(() => {
-    getShop().then(setShop).catch(() => null)
+    getShopCached().then(setShop).catch(() => null)
   }, [])
 
   const handleBuy = useCallback(async (itemId: string, stars?: number) => {
@@ -35,6 +51,7 @@ export default function Shop() {
           const updated = await getMe()
           setUser(updated)
           updateCredits(updated.credits)
+          localStorage.removeItem(SHOP_CACHE_KEY)
           const freshShop = await getShop()
           setShop(freshShop)
         }
