@@ -2914,6 +2914,95 @@ def _nudge_load():
 
 _nudge_load()
 
+# ── Broadcast campaigns ────────────────────────────────────────────────────────
+BROADCAST_HISTORY: List[Dict[str, Any]] = []   # kept in memory; survives restart via DB
+_broadcast_lock = asyncio.Lock()
+_broadcast_running: Dict[str, Any] = {}        # at most one live campaign at a time
+
+BROADCAST_SEGMENTS: Dict[str, str] = {
+    "inactive_3_7d":    "Lapsed 3–7 days, ≥3 gens, 0 purchases",
+    "inactive_7_14d":   "Lapsed 7–14 days, any gens",
+    "zero_purchase":    "Active ≤14 days, ≥3 gens, 0 purchases",
+    "paid":             "Buyers (payments > 0)",
+    "new_7d":           "New users (joined last 7 days)",
+    "all_active_30d":   "All active in last 30 days",
+}
+
+def _broadcast_segment_uids(segment: str) -> List[int]:
+    now = time.time()
+    out: List[int] = []
+    for uid, ui in STATS_USERS_INFO.items():
+        if NUDGE_INFO.get(uid, {}).get("blocked"):
+            continue
+        last_seen  = float(ui.get("last_seen", 0))
+        first_seen = float(ui.get("first_seen", 0))
+        gens_ok    = int(ui.get("gens_ok", 0))
+        payments   = int(ui.get("payments", 0))
+        age        = now - last_seen
+        if segment == "inactive_3_7d":
+            if 3 * 86400 <= age <= 7 * 86400 and gens_ok >= 3 and payments == 0:
+                out.append(uid)
+        elif segment == "inactive_7_14d":
+            if 7 * 86400 <= age <= 14 * 86400 and gens_ok >= 1:
+                out.append(uid)
+        elif segment == "zero_purchase":
+            if age <= 14 * 86400 and gens_ok >= 3 and payments == 0:
+                out.append(uid)
+        elif segment == "paid":
+            if payments > 0:
+                out.append(uid)
+        elif segment == "new_7d":
+            if first_seen > 0 and now - first_seen <= 7 * 86400:
+                out.append(uid)
+        elif segment == "all_active_30d":
+            if age <= 30 * 86400:
+                out.append(uid)
+    return out
+
+async def run_broadcast_job(campaign_id: str, uids: List[int], message: str, deep_link: str):
+    global _broadcast_running
+    sent = failed = blocked_count = 0
+    total = len(uids)
+    entry = {
+        "campaign_id": campaign_id,
+        "total": total,
+        "sent": 0,
+        "failed": 0,
+        "blocked": 0,
+        "status": "running",
+        "started_at": time.time(),
+        "finished_at": None,
+    }
+    BROADCAST_HISTORY.insert(0, entry)
+    _broadcast_running = entry
+
+    try:
+        for uid in uids:
+            if not _broadcast_running.get("status") == "running":
+                break
+            try:
+                text = message
+                if deep_link:
+                    text += f"\n\n{deep_link}"
+                await bot.send_message(uid, text)
+                analytics_event(uid, "broadcast_sent", {"campaign_id": campaign_id})
+                sent += 1
+            except (TelegramForbiddenError, TelegramNotFound):
+                NUDGE_INFO.setdefault(uid, {})["blocked"] = True
+                blocked_count += 1
+            except Exception:
+                failed += 1
+            entry["sent"] = sent
+            entry["failed"] = failed
+            entry["blocked"] = blocked_count
+            await asyncio.sleep(NUDGE_SEND_DELAY)
+    finally:
+        entry["status"] = "done"
+        entry["finished_at"] = time.time()
+        _broadcast_running = {}
+        stats_incr("broadcasts_sent", sent)
+        print(f"[broadcast] {campaign_id} done: sent={sent} failed={failed} blocked={blocked_count}/{total}")
+
 def _nudge_eligible(uid: int) -> bool:
     now = time.time()
     ui = STATS_USERS_INFO.get(uid) or {}
@@ -4203,6 +4292,11 @@ async def cmd_start(m: Message):
                 asyncio.create_task(_maybe_give_milestone_bonus(ref_id, new_count))
         except Exception:
             pass
+
+    # Deep-link: start=bc_<campaign_id> → broadcast attribution
+    if len(parts) > 1 and parts[1].startswith("bc_"):
+        campaign_id = parts[1]
+        analytics_event(m.chat.id, "broadcast_opened", {"campaign_id": campaign_id})
 
     # Deep-link: start=style_<token> → preload Copy Mode with style
     if len(parts) > 1 and parts[1].startswith("style_"):
@@ -6394,6 +6488,71 @@ async def api_photoshoot_modes(request: Request):
     return {"modes": result}
 
 
+@app.get("/api/v1/admin/broadcast")
+async def api_admin_broadcast_status(request: Request):
+    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
+    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    segments = {k: {"desc": v, "size": len(_broadcast_segment_uids(k))} for k, v in BROADCAST_SEGMENTS.items()}
+    return {
+        "running": _broadcast_running,
+        "history": BROADCAST_HISTORY[:20],
+        "segments": segments,
+    }
+
+@app.post("/api/v1/admin/broadcast")
+async def api_admin_broadcast_send(request: Request):
+    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
+    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if _broadcast_running.get("status") == "running":
+        return JSONResponse({"error": "campaign_already_running"}, status_code=409)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    segment   = str(body.get("segment", "")).strip()
+    message   = str(body.get("message", "")).strip()
+    deep_link = str(body.get("deep_link", "")).strip()
+    name      = str(body.get("name", segment)).strip()[:80]
+    if segment not in BROADCAST_SEGMENTS:
+        return JSONResponse({"error": "unknown_segment"}, status_code=400)
+    if not message:
+        return JSONResponse({"error": "empty_message"}, status_code=400)
+    if len(message) > 4000:
+        return JSONResponse({"error": "message_too_long"}, status_code=400)
+    uids = _broadcast_segment_uids(segment)
+    if not uids:
+        return JSONResponse({"error": "empty_segment", "size": 0}, status_code=400)
+    campaign_id = f"bc_{int(time.time())}_{segment}"
+    # Record in history before spawning so it's immediately visible
+    BROADCAST_HISTORY.insert(0, {
+        "campaign_id": campaign_id,
+        "name": name,
+        "segment": segment,
+        "total": len(uids),
+        "sent": 0,
+        "failed": 0,
+        "blocked": 0,
+        "status": "queued",
+        "started_at": time.time(),
+        "finished_at": None,
+    })
+    asyncio.create_task(run_broadcast_job(campaign_id, uids, message, deep_link))
+    analytics_event(0, "broadcast_started", {"campaign_id": campaign_id, "segment": segment, "size": len(uids)})
+    return {"campaign_id": campaign_id, "size": len(uids)}
+
+@app.delete("/api/v1/admin/broadcast")
+async def api_admin_broadcast_cancel(request: Request):
+    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
+    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if _broadcast_running.get("status") == "running":
+        _broadcast_running["status"] = "cancelled"
+        return {"cancelled": True}
+    return JSONResponse({"error": "no_active_campaign"}, status_code=404)
+
+
 @app.get("/api/v1/shop")
 async def api_shop(request: Request):
     user = webapp_user_from_request(request)
@@ -6619,6 +6778,122 @@ async def http_metrics(request: Request):
     resp["generation_latency_avg_ms"] = int(STATS.get("generation_latency_total_ms", 0) / gen_count) if gen_count else 0
     resp["db_ready"] = DB_READY
     return resp
+
+def _admin_broadcast_section() -> str:
+    """Broadcast campaign launcher + history table."""
+    now = time.time()
+    running = _broadcast_running
+    status_block = ""
+    if running.get("status") == "running":
+        pct = int(100 * running.get("sent", 0) / max(running.get("total", 1), 1))
+        status_block = (
+            f'<div style="background:#1a2a1a;border:1px solid #2a4a2a;border-radius:8px;padding:10px 14px;margin-bottom:12px;">'
+            f'<b style="color:#24c38b">▶ Running:</b> {html_lib.escape(running.get("campaign_id",""))} &nbsp;'
+            f'Sent {running.get("sent",0)}/{running.get("total",0)} ({pct}%) · '
+            f'Failed {running.get("failed",0)} · Blocked {running.get("blocked",0)}'
+            f'&nbsp;<button onclick="cancelCampaign()" style="margin-left:12px;padding:2px 10px;background:#e56565;border:none;border-radius:4px;color:#fff;cursor:pointer">Cancel</button>'
+            f'</div>'
+        )
+
+    history_rows = ""
+    for c in BROADCAST_HISTORY[:10]:
+        started = c.get("started_at", 0)
+        age = int(now - started) if started else 0
+        age_str = f"{age//3600}h {(age%3600)//60}m ago" if age > 3600 else f"{age//60}m ago"
+        st = c.get("status", "")
+        st_color = "#24c38b" if st == "done" else ("#7aa2f7" if st == "running" else "#9aa4b2")
+        history_rows += (
+            f'<tr>'
+            f'<td>{html_lib.escape(c.get("name") or c.get("campaign_id",""))}</td>'
+            f'<td>{html_lib.escape(c.get("segment",""))}</td>'
+            f'<td style="color:{st_color}">{html_lib.escape(st)}</td>'
+            f'<td>{c.get("sent",0)}/{c.get("total",0)}</td>'
+            f'<td>{c.get("failed",0)}</td>'
+            f'<td>{c.get("blocked",0)}</td>'
+            f'<td>{age_str}</td>'
+            f'</tr>'
+        )
+
+    seg_opts = "".join(
+        f'<option value="{k}">{html_lib.escape(v)}</option>'
+        for k, v in BROADCAST_SEGMENTS.items()
+    )
+    seg_sizes = {k: len(_broadcast_segment_uids(k)) for k in BROADCAST_SEGMENTS}
+    seg_size_json = json.dumps(seg_sizes)
+
+    return f"""
+<div class="section">
+  <div class="card">
+    <div class="muted" style="font-weight:600;font-size:13px;margin-bottom:10px">📣 Broadcast Campaigns</div>
+    {status_block}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <div>
+        <div class="muted" style="margin-bottom:8px">Send Campaign</div>
+        <label style="display:block;margin-bottom:6px;font-size:13px">Segment
+          <select id="bc_seg" onchange="updateSegSize()" style="width:100%;margin-top:4px;background:#1b2030;border:1px solid #2a3556;border-radius:6px;color:#e6edf3;padding:6px 8px;">
+            {seg_opts}
+          </select>
+        </label>
+        <div id="bc_seg_size" style="font-size:12px;color:#7aa2f7;margin-bottom:8px;">— users</div>
+        <label style="display:block;margin-bottom:6px;font-size:13px">Campaign name (optional)
+          <input id="bc_name" style="width:100%;margin-top:4px;background:#1b2030;border:1px solid #2a3556;border-radius:6px;color:#e6edf3;padding:6px 8px;" placeholder="e.g. June win-back">
+        </label>
+        <label style="display:block;margin-bottom:6px;font-size:13px">Deep link (optional — appended to message)
+          <input id="bc_link" style="width:100%;margin-top:4px;background:#1b2030;border:1px solid #2a3556;border-radius:6px;color:#e6edf3;padding:6px 8px;" placeholder="https://t.me/your_bot?start=...">
+        </label>
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:6px;font-size:13px">Message
+          <textarea id="bc_msg" rows="7" style="width:100%;margin-top:4px;background:#1b2030;border:1px solid #2a3556;border-radius:6px;color:#e6edf3;padding:6px 8px;resize:vertical;" placeholder="Hey! Your AI photos are waiting... 📸"></textarea>
+        </label>
+        <button onclick="sendCampaign()" style="width:100%;padding:8px;background:#6c47ff;border:none;border-radius:8px;color:#fff;font-weight:600;cursor:pointer;font-size:14px;">Send Campaign</button>
+        <div id="bc_result" style="font-size:12px;margin-top:8px;color:#9aa4b2;"></div>
+      </div>
+    </div>
+    {'<table style="margin-top:16px"><tr><th>Name</th><th>Segment</th><th>Status</th><th>Sent</th><th>Failed</th><th>Blocked</th><th>When</th></tr>' + history_rows + '</table>' if history_rows else ''}
+  </div>
+</div>
+<script>
+const SEG_SIZES = {seg_size_json};
+const ADMIN_SECRET = new URLSearchParams(location.search).get('secret') || '';
+function updateSegSize() {{
+  const seg = document.getElementById('bc_seg').value;
+  document.getElementById('bc_seg_size').textContent = (SEG_SIZES[seg] || 0) + ' users in segment';
+}}
+updateSegSize();
+async function sendCampaign() {{
+  const seg = document.getElementById('bc_seg').value;
+  const msg = document.getElementById('bc_msg').value.trim();
+  const link = document.getElementById('bc_link').value.trim();
+  const name = document.getElementById('bc_name').value.trim();
+  const res = document.getElementById('bc_result');
+  if (!msg) {{ res.textContent = '❌ Message is empty'; return; }}
+  if (!confirm(`Send to ${{SEG_SIZES[seg] || '?'}} users?`)) return;
+  res.textContent = 'Sending...';
+  try {{
+    const r = await fetch('/api/v1/admin/broadcast?secret=' + encodeURIComponent(ADMIN_SECRET), {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json','X-Admin-Secret':ADMIN_SECRET}},
+      body: JSON.stringify({{segment:seg, message:msg, deep_link:link, name:name}})
+    }});
+    const d = await r.json();
+    if (r.ok) {{
+      res.textContent = `✅ Started ${{d.campaign_id}} → ${{d.size}} users`;
+      setTimeout(() => location.reload(), 2000);
+    }} else {{
+      res.textContent = '❌ ' + (d.error || r.status);
+    }}
+  }} catch(e) {{ res.textContent = '❌ ' + e.message; }}
+}}
+async function cancelCampaign() {{
+  if (!confirm('Cancel the running campaign?')) return;
+  await fetch('/api/v1/admin/broadcast?secret=' + encodeURIComponent(ADMIN_SECRET), {{
+    method: 'DELETE', headers: {{'X-Admin-Secret':ADMIN_SECRET}}
+  }});
+  location.reload();
+}}
+</script>
+"""
 
 def _admin_experiments_section() -> str:
     """Experiment results: exposures + downstream conversion per variant."""
@@ -7071,6 +7346,7 @@ async def admin_panel(request: Request):
         </div>
       </div>
 
+      {_admin_broadcast_section()}
       {_admin_funnel_section()}
       {_admin_nudge_section()}
       {_admin_experiments_section()}
