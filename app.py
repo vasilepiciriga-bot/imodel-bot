@@ -973,6 +973,10 @@ SUB_WEEKLY_STARS   = int(os.getenv("SUB_WEEKLY_STARS",   "149"))
 SUB_WEEKLY_CREDITS = int(os.getenv("SUB_WEEKLY_CREDITS", "20"))
 SUB_WEEKLY_PERIOD  = 604800  # 7 days
 
+# Creator subscription tier (~€15/month)
+SUB_CREATOR_STARS   = int(os.getenv("SUB_CREATOR_STARS",   "1150"))
+SUB_CREATOR_CREDITS = int(os.getenv("SUB_CREATOR_CREDITS", "400"))
+
 # Style pack pricing
 STYLE_PACK_STARS    = int(os.getenv("STYLE_PACK_STARS",    "490"))
 AGE_PACK_STARS      = int(os.getenv("AGE_PACK_STARS",      "290"))
@@ -991,6 +995,7 @@ def _build_payment_sku_map() -> Dict[str, int]:
         "pack_300":       2990,
         "sub_weekly":     SUB_WEEKLY_STARS,
         "sub_pro":        SUB_PRO_STARS,
+        "sub_creator":    SUB_CREATOR_STARS,
         "sub_elite":      SUB_ELITE_STARS,
         "premium_pack_1": STYLE_PACK_STARS,
         "age_pack":       AGE_PACK_STARS,
@@ -1010,6 +1015,7 @@ TRENDING_PRESETS_ENV = os.getenv("TRENDING_PRESETS", "cinematic,neon_night,golde
 
 # Daily bonus / streak
 DAILY_BONUS_BASE = int(os.getenv("DAILY_BONUS_BASE", "1"))
+STREAK_MILESTONE_BONUSES: Dict[int, int] = {3: 3, 7: 7, 14: 14, 30: 25}  # streak day → extra credits
 DAILY_STREAK_MILESTONES: Dict[int, int] = {3: 2, 7: 3, 14: 5, 30: 7}  # day → bonus gens
 
 # Onboarding demo photo (Telegram file_id or public HTTPS URL; leave empty to skip)
@@ -1528,7 +1534,7 @@ DAILY_WINDOW = 86400  # 24h in seconds
 STREAK_RESET  = 172800  # 48h — miss a day = reset
 
 def _claim_daily_bonus(uid: int) -> Optional[tuple]:
-    """Try to claim daily bonus. Returns (gens_added, streak_day) or None if already claimed."""
+    """Try to claim daily bonus. Returns (gens_added, streak_day, milestone_bonus) or None if already claimed."""
     now = time.time()
     last = USER_LAST_BONUS.get(uid, 0)
     elapsed = now - last
@@ -1544,10 +1550,19 @@ def _claim_daily_bonus(uid: int) -> Optional[tuple]:
     USER_LAST_BONUS[uid] = now
     # Determine bonus amount
     add = DAILY_STREAK_MILESTONES.get(streak, DAILY_BONUS_BASE)
+    # Streak milestone bonus (one-time per milestone)
+    milestone_bonus = 0
+    if streak in STREAK_MILESTONE_BONUSES:
+        ui = STATS_USERS_INFO.setdefault(uid, {})
+        claimed_milestones = ui.get("streak_milestone_claimed", [])
+        if streak not in claimed_milestones:
+            milestone_bonus = STREAK_MILESTONE_BONUSES[streak]
+            ui["streak_milestone_claimed"] = claimed_milestones + [streak]
+            add += milestone_bonus
     USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
     _bonus_save()
     _credits_save()
-    return (add, streak)
+    return (add, streak, milestone_bonus)
 
 # ---- Style packs persistence ----
 STYLE_PACKS_FILE = os.getenv("STYLE_PACKS_FILE", os.path.join(DATA_DIR, "style_packs.json"))
@@ -4715,12 +4730,14 @@ async def got_payment(m: Message):
         log_event("payment_duplicate_skipped", uid=uid, charge_id=charge_id, payload=payload)
         return
 
-    is_sub = payload in ("sub_pro", "sub_elite", "sub_weekly")
+    is_sub = payload in ("sub_pro", "sub_elite", "sub_weekly", "sub_creator")
     if is_sub:
         if payload == "sub_weekly":
             plan, credits_per_month, period = "weekly", SUB_WEEKLY_CREDITS, SUB_WEEKLY_PERIOD
         elif payload == "sub_pro":
             plan, credits_per_month, period = "pro", SUB_PRO_CREDITS, SUB_PERIOD
+        elif payload == "sub_creator":
+            plan, credits_per_month, period = "creator", SUB_CREATOR_CREDITS, SUB_PERIOD
         else:
             plan, credits_per_month, period = "elite", SUB_ELITE_CREDITS, SUB_PERIOD
         add = credits_per_month
@@ -5363,7 +5380,7 @@ async def cmd_daily(m: Message):
         return
     result = _claim_daily_bonus(uid)
     if result:
-        add, streak = result
+        add, streak, _milestone_bonus = result
         milestone_key = f"daily_milestone_{streak}" if streak in DAILY_STREAK_MILESTONES else None
         if milestone_key and milestone_key in lang:
             txt = lang[milestone_key].format(n=add, streak=streak)
@@ -5893,7 +5910,7 @@ async def _on_photo_inner(m: Message):
     if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
         result = _claim_daily_bonus(m.chat.id)
         if result:
-            add, streak = result
+            add, streak, _mb = result
             lang = L(m.chat.id)
             milestone_key = f"daily_milestone_{streak}" if streak in DAILY_STREAK_MILESTONES else None
             if milestone_key and milestone_key in lang:
@@ -7194,6 +7211,8 @@ async def api_me(request: Request):
         "portfolio_public": USER_PORTFOLIO_PUBLIC.get(uid, False),
         "portfolio_url": f"{WEBHOOK_BASE.rstrip('/')}/p/{uid}" if USER_PORTFOLIO_PUBLIC.get(uid) else None,
         "last_gen_at": float(ui.get("last_gen_at", 0)) or None,
+        "can_claim_daily": (time.time() - USER_LAST_BONUS.get(uid, 0)) >= DAILY_WINDOW,
+        "next_daily_credits": DAILY_STREAK_MILESTONES.get(int(ui.get("streak", 0)) + 1, DAILY_BONUS_BASE),
         "age_pack": USER_AGE_PACKS.get(uid, False),
         "unlocked_packs": sorted(USER_STYLE_PACKS.get(uid, set())),
         "total_generated": int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0)),
@@ -8661,6 +8680,9 @@ async def api_shop(request: Request):
             {"id": "sub_pro",   "plan": "pro",    "stars": SUB_PRO_STARS,
              "credits": SUB_PRO_CREDITS,   "period": "month",
              "active": bool(sub and sub.get("plan") == "pro")},
+            {"id": "sub_creator", "plan": "creator", "stars": SUB_CREATOR_STARS,
+             "credits": SUB_CREATOR_CREDITS, "period": "month",
+             "active": bool(sub and sub.get("plan") == "creator")},
             {"id": "sub_elite", "plan": "elite",  "stars": SUB_ELITE_STARS,
              "credits": SUB_ELITE_CREDITS, "period": "month",
              "active": bool(sub and sub.get("plan") == "elite")},
@@ -8690,6 +8712,7 @@ async def api_shop(request: Request):
             "free":    ["5 free gens/day", "All basic styles", "Standard quality"],
             "weekly":  [f"{SUB_WEEKLY_CREDITS} gens/week", "All basic styles", "Standard quality", "Priority queue"],
             "pro":     [f"{SUB_PRO_CREDITS} gens/month", "All styles unlocked", "HD upscale included", "Priority queue", "Batch ×4"],
+            "creator": [f"{SUB_CREATOR_CREDITS} gens/month", "All styles + packs", "HD upscale included", "Priority queue", "Batch ×4", "Style packs included"],
             "elite":   [f"{SUB_ELITE_CREDITS} gens/month", "All styles + packs", "4K HD upscale", "Priority queue", "Batch ×4", "Early access"],
         },
     }
@@ -8708,6 +8731,7 @@ async def api_shop_invoice(request: Request):
         "pack_300":       ("iModel — 300 Generations","300 AI portrait generations (Save 50%)", 2990, False),
         "sub_weekly":     ("iModel Weekly Pro", f"{SUB_WEEKLY_CREDITS} gens/week, auto-renewal", SUB_WEEKLY_STARS, True),
         "sub_pro":        ("iModel Pro", f"{SUB_PRO_CREDITS} gens/month, auto-renewal", SUB_PRO_STARS, True),
+        "sub_creator":    ("iModel Creator", f"{SUB_CREATOR_CREDITS} gens/month, auto-renewal", SUB_CREATOR_STARS, True),
         "sub_elite":      ("iModel Elite", f"{SUB_ELITE_CREDITS} gens/month, auto-renewal", SUB_ELITE_STARS, True),
         "premium_pack_1": ("iModel Premium Styles", "15 exclusive artistic style presets", STYLE_PACK_STARS, False),
         "age_pack":       ("iModel Age Magic", "4 age transformation styles", AGE_PACK_STARS, False),
@@ -8765,8 +8789,8 @@ async def api_claim_daily(request: Request):
         last = USER_LAST_BONUS.get(uid, 0)
         next_at = int(last + DAILY_WINDOW)
         return JSONResponse({"error": "already_claimed", "next_at": next_at}, status_code=400)
-    gens_added, streak = result
-    return {"gens_added": gens_added, "streak": streak, "credits": USER_CREDITS.get(uid, 0)}
+    gens_added, streak, milestone_bonus = result
+    return {"gens_added": gens_added, "streak": streak, "credits": USER_CREDITS.get(uid, 0), "milestone_bonus": milestone_bonus}
 
 @app.get("/api/v1/profile/challenge")
 async def api_daily_challenge(request: Request):

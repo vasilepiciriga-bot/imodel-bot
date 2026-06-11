@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Check } from 'lucide-react'
+import { X, Check, Crown } from 'lucide-react'
 import type { PhotoshootMode, PhotoshootModeKey } from '../../types'
 import { track } from '../../api/analytics'
+
+const PREMIUM_MODES = new Set(['vogue', 'ceo', 'luxury'])
 
 const tg = window.Telegram?.WebApp
 
@@ -27,12 +29,13 @@ interface Props {
   open: boolean
   onClose: () => void
   onSelect: (mode: PhotoshootModeKey, customDesc?: string) => void
+  onUpgrade?: () => void
   currentMode: PhotoshootModeKey
   userCredits: number
   modes: PhotoshootMode[]
 }
 
-export function PhotoshootModePicker({ open, onClose, onSelect, currentMode, userCredits, modes }: Props) {
+export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, currentMode, userCredits, modes }: Props) {
   const [selected, setSelected] = useState<PhotoshootModeKey>(currentMode)
   const [customDesc, setCustomDesc] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -56,6 +59,13 @@ export function PhotoshootModePicker({ open, onClose, onSelect, currentMode, use
     tg?.HapticFeedback?.impactOccurred('medium')
     if (selected === 'custom' && !customDesc.trim()) {
       textareaRef.current?.focus()
+      return
+    }
+    // Premium mode gate: if user can't afford, show upgrade sheet
+    if (PREMIUM_MODES.has(selected) && userCredits < (selectedMode?.credits ?? 6)) {
+      track('premium_mode_upgrade_shown', { mode: selected, credits: userCredits })
+      onClose()
+      onUpgrade?.()
       return
     }
     track('mode_selected', { mode: selected, credits: selectedMode?.credits })
@@ -132,7 +142,12 @@ export function PhotoshootModePicker({ open, onClose, onSelect, currentMode, use
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[15px] font-semibold text-[#1D1D1F]">{mode.label}</span>
-                        {mode.badge && (
+                        {PREMIUM_MODES.has(mode.key) && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gradient-to-r from-[#FF9500] to-[#FF2D78] text-white">
+                            <Crown size={8} strokeWidth={3} />PRO
+                          </span>
+                        )}
+                        {mode.badge && !PREMIUM_MODES.has(mode.key) && (
                           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white">
                             {BADGE_LABELS[mode.badge] ?? mode.badge}
                           </span>

@@ -10,7 +10,7 @@ export interface TelegramUser {
 export interface UserProfile {
   uid: number
   credits: number
-  plan: 'free' | 'pro' | 'elite' | 'sub_weekly'
+  plan: 'free' | 'pro' | 'creator' | 'elite' | 'sub_weekly' | 'weekly'
   plan_expiry?: string
   streak: number
   total_generated: number
@@ -25,6 +25,8 @@ export interface UserProfile {
   portfolio_url?: string
   role?: string
   last_gen_at?: number | null
+  can_claim_daily?: boolean
+  next_daily_credits?: number
 }
 
 export interface Preset {
@@ -126,4 +128,5 @@ export interface DailyBonusResult {
   streak: number
   credits: number
   next_at?: number
+  milestone_bonus?: number
 }

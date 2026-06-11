@@ -12,11 +12,10 @@ import { useBackButton } from '../../hooks/useBackButton'
 
 const tg = window.Telegram?.WebApp
 
-// Hardcoded top packs — avoids extra fetch, keeps modal instant
 const QUICK_PACKS = [
-  { id: 'pack_10',  label: '10 gens',  stars: 99,  icon: <Zap size={16} className="text-[#6C47FF]" fill="#6C47FF" strokeWidth={0} /> },
-  { id: 'pack_30',  label: '30 gens',  stars: 199, icon: <Star size={16} className="text-[#FF9500]" fill="#FF9500" strokeWidth={0} /> },
-  { id: 'pack_100', label: '100 gens', stars: 499, icon: <Crown size={16} className="text-[#FF2D78]" /> },
+  { id: 'pack_10',  label: '10 gens',  stars: 199,  icon: <Zap size={16} className="text-[#6C47FF]" fill="#6C47FF" strokeWidth={0} /> },
+  { id: 'pack_30',  label: '30 gens',  stars: 490,  icon: <Star size={16} className="text-[#FF9500]" fill="#FF9500" strokeWidth={0} /> },
+  { id: 'pack_100', label: '100 gens', stars: 1290, icon: <Crown size={16} className="text-[#FF2D78]" /> },
 ] as const
 
 type Segment = 'first' | 'active' | 'paid' | 'blocked'

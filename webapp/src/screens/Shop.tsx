@@ -32,9 +32,10 @@ function fireConfetti() {
 }
 
 const SUB_META: Record<string, { color: string; label: string; emoji: string; badge?: string }> = {
-  sub_weekly: { color: '#34C759',  label: 'Weekly',  emoji: '⚡', },
-  sub_pro:    { color: '#6C47FF',  label: 'Pro',     emoji: '🚀', badge: 'Most Popular' },
-  sub_elite:  { color: '#FF9500',  label: 'Elite',   emoji: '👑' },
+  sub_weekly:  { color: '#34C759',  label: 'Weekly',   emoji: '⚡' },
+  sub_pro:     { color: '#6C47FF',  label: 'Pro',      emoji: '🚀', badge: 'Most Popular' },
+  sub_creator: { color: '#FF2D78',  label: 'Creator',  emoji: '🔥', badge: 'Best Value' },
+  sub_elite:   { color: '#FF9500',  label: 'Elite',    emoji: '👑' },
 }
 
 const PACK_META: Record<string, { badge?: string; highlight?: boolean }> = {

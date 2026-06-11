@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Grid2X2, Diamond, Check, Download, Upload } from 'lucide-react'
+import { Flame, Grid2X2, Diamond, Check, Download, Upload, Zap } from 'lucide-react'
+import confetti from 'canvas-confetti'
 import { SelfieUploader } from '../components/studio/SelfieUploader'
 import { ModeSelector } from '../components/studio/ModeSelector'
 import { GenerateButton } from '../components/studio/GenerateButton'
@@ -10,11 +11,12 @@ import { ResultCard } from '../components/studio/ResultCard'
 import { CreditBadge } from '../components/layout/CreditBadge'
 import { PhotoshootModePicker } from '../components/studio/PhotoshootModePicker'
 import { PaywallModal } from '../components/studio/PaywallModal'
+import { FirstGenModal } from '../components/shared/FirstGenModal'
 import { useAppStore } from '../store/appStore'
 import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
-import { getChallenge } from '../api/session'
+import { getChallenge, claimDaily, getMe } from '../api/session'
 import { track } from '../api/analytics'
 import { useToast } from '../hooks/useToast'
 import type { Generation, PhotoshootMode } from '../types'
@@ -37,14 +39,42 @@ export default function Studio() {
   const [showModePicker, setShowModePicker] = useState(false)
   const [photoshootModes, setPhotoshootModes] = useState<PhotoshootMode[]>([])
   const [showPaywall, setShowPaywall] = useState(false)
+  const [showFirstGen, setShowFirstGen] = useState(false)
+  const [firstGenUrl, setFirstGenUrl] = useState('')
   const [refUrl, setRefUrl] = useState('')
   const [refB64, setRefB64] = useState<string | null>(null)
   const [refPreview, setRefPreview] = useState<string | null>(null)
   const [refLoading, setRefLoading] = useState(false)
+  const [claimingDaily, setClaimingDaily] = useState(false)
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
+  const setUser = useAppStore((s) => s.setUser)
+  const updateCredits = useAppStore((s) => s.updateCredits)
   const streak = user?.streak ?? 0
+
+  const handleClaimDaily = useCallback(async () => {
+    if (claimingDaily) return
+    setClaimingDaily(true)
+    tg?.HapticFeedback?.impactOccurred('medium')
+    try {
+      const result = await claimDaily()
+      confetti({ particleCount: result.milestone_bonus ? 140 : 60, spread: result.milestone_bonus ? 90 : 60, origin: { y: 0.5 }, colors: ['#6C47FF', '#FF2D78', '#FFD700', '#34C759'] })
+      tg?.HapticFeedback?.notificationOccurred('success')
+      if (result.milestone_bonus) {
+        toast.success(`🔥 Day ${result.streak} streak! +${result.gens_added}⚡ milestone bonus!`, { icon: '🏆' })
+      } else {
+        toast.success(`+${result.gens_added}⚡ daily bonus claimed!`, { icon: '🎁' })
+      }
+      const updated = await getMe()
+      setUser(updated)
+      updateCredits(updated.credits)
+    } catch {
+      toast.error('Already claimed today')
+    } finally {
+      setClaimingDaily(false)
+    }
+  }, [claimingDaily, setUser, updateCredits, toast])
   const challenge = useAppStore((s) => s.challenge)
   const challengeLoaded = useAppStore((s) => s.challengeLoaded)
 
@@ -122,6 +152,15 @@ export default function Studio() {
 
         if (job.output_url) {
           useAppStore.getState().prependGallery(job)
+        }
+
+        // First-generation celebration (only once ever)
+        const freshUser = useAppStore.getState().user
+        const celebrated = localStorage.getItem('imodel_first_gen_celebrated')
+        if (!celebrated && (freshUser?.gens_ok ?? 0) === 1 && job.output_url) {
+          localStorage.setItem('imodel_first_gen_celebrated', '1')
+          setFirstGenUrl(job.output_url)
+          setTimeout(() => setShowFirstGen(true), 800)
         }
 
         // Proactive paywall: show right after result if credits just ran out
@@ -286,6 +325,32 @@ export default function Studio() {
         <CreditBadge />
       </div>
 
+      {/* Daily bonus ready pill */}
+      <AnimatePresence>
+        {user?.can_claim_daily && (
+          <motion.button
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            onClick={handleClaimDaily}
+            disabled={claimingDaily}
+            className="mx-4 mb-1 flex items-center gap-2 px-4 py-2.5 rounded-[14px] bg-gradient-to-r from-[#34C759]/15 to-[#34C759]/5 border border-[#34C759]/30 disabled:opacity-60"
+          >
+            <motion.span
+              animate={{ scale: [1, 1.15, 1] }}
+              transition={{ repeat: Infinity, duration: 1.8 }}
+              className="text-[18px]"
+            >🎁</motion.span>
+            <div className="flex-1 text-left">
+              <span className="text-[13px] font-semibold text-[#1D1D1F]">
+                {claimingDaily ? 'Claiming…' : `Daily bonus ready! +${user.next_daily_credits ?? 1}⚡`}
+              </span>
+            </div>
+            <span className="text-[12px] text-[#34C759] font-semibold">Claim →</span>
+          </motion.button>
+        )}
+      </AnimatePresence>
+
       <div className="flex-1 px-4 pb-4 space-y-3">
         <SelfieUploader />
         <ModeSelector />
@@ -362,17 +427,30 @@ export default function Studio() {
         </AnimatePresence>
 
         {/* Streak at risk banner */}
-        {user?.last_gen_at && (Date.now() / 1000 - user.last_gen_at) > 20 * 3600 && (user?.streak ?? 0) > 0 && (
+        {user?.last_gen_at && (Date.now() / 1000 - user.last_gen_at) > 18 * 3600 && streak >= 3 && (
           <motion.div
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex items-center gap-2.5 px-4 py-3 rounded-card bg-orange-50 border border-orange-200"
           >
-            <Flame size={18} className="text-orange-500 flex-shrink-0" fill="currentColor" />
+            <motion.div
+              animate={{ scale: [1, 1.2, 1] }}
+              transition={{ repeat: Infinity, duration: 1.2 }}
+            >
+              <Flame size={20} className="text-orange-500 flex-shrink-0" fill="currentColor" />
+            </motion.div>
             <div className="flex-1 min-w-0">
-              <p className="text-[13px] font-bold text-orange-700">Streak at risk! 🔥 {streak} days</p>
-              <p className="text-[11px] text-orange-500">Generate now to keep your streak alive</p>
+              <p className="text-[13px] font-bold text-orange-700">🔥 {streak}-day streak at risk!</p>
+              <p className="text-[11px] text-orange-500">Generate now to keep it alive</p>
             </div>
+            {selfieB64 && (
+              <button
+                onClick={() => generate()}
+                className="px-3 py-1.5 rounded-[10px] bg-orange-500 text-white text-[11px] font-bold flex-shrink-0"
+              >
+                Generate →
+              </button>
+            )}
           </motion.div>
         )}
 
@@ -481,6 +559,26 @@ export default function Studio() {
               <span className="text-[11px] text-[#6E6E73] ml-1.5">{modeConfig.short_desc}</span>
             </div>
           </motion.div>
+        )}
+
+        {/* Low-credit soft upsell banner */}
+        {(user?.credits ?? 0) > 0 && (user?.credits ?? 0) <= 3 && (user?.gens_ok ?? 0) >= 1 && (
+          <motion.button
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: [0, 1] }}
+            onClick={() => setShowPaywall(true)}
+            className="w-full flex items-center gap-2.5 px-4 py-3 rounded-[14px] bg-amber-50 border border-amber-300"
+          >
+            <motion.div
+              animate={{ opacity: [0.6, 1, 0.6] }}
+              transition={{ repeat: Infinity, duration: 1.6 }}
+            >
+              <Zap size={16} className="text-amber-500" fill="currentColor" />
+            </motion.div>
+            <span className="flex-1 text-left text-[13px] font-semibold text-amber-700">
+              Only {user?.credits} gen{user?.credits === 1 ? '' : 's'} left · Top up →
+            </span>
+          </motion.button>
         )}
 
         <GenerateButton onClick={generate} loading={loading && (!currentJob || !isJobDone(currentJob))} disabled={!selfieB64 || (mode === 'copy_image' && !refB64)} cost={cost} />
@@ -639,6 +737,7 @@ export default function Studio() {
           if (desc) setCustomDesc(desc)
           setShowModePicker(false)
         }}
+        onUpgrade={() => setShowPaywall(true)}
         currentMode={photoshootMode}
         userCredits={user?.credits ?? 0}
         modes={photoshootModes}
@@ -650,6 +749,17 @@ export default function Studio() {
           <PaywallModal
             lastResultUrl={currentJob?.output_url ?? undefined}
             onClose={() => setShowPaywall(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* First-generation celebration modal */}
+      <AnimatePresence>
+        {showFirstGen && (
+          <FirstGenModal
+            resultUrl={firstGenUrl}
+            onClose={() => setShowFirstGen(false)}
+            onUpgrade={() => { setShowFirstGen(false); setShowPaywall(true) }}
           />
         )}
       </AnimatePresence>
