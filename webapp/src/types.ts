@@ -28,6 +28,8 @@ export interface UserProfile {
   can_claim_daily?: boolean
   next_daily_credits?: number
   first_seen?: number | null
+  recent_presets?: string[]
+  recent_modes?: string[]
 }
 
 export interface Preset {
@@ -45,6 +47,8 @@ export interface Preset {
   creator_uid?: number
   my_vote?: boolean
   created_at?: number
+  personalized_score?: number
+  usage_7d?: number
 }
 
 export interface Generation {

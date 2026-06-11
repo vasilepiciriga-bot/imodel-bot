@@ -4,13 +4,15 @@ import { Users, Zap, TrendingUp, Radio, Search, Send, Plus, Minus, RefreshCw, Ch
 import {
   getDashboard, lookupUser, grantCredits, sendUserMessage,
   getBroadcastStatus, sendBroadcast, cancelBroadcast, generatePresetThumbs,
+  getFunnel, getExperimentResults,
   type AdminDashboard, type AdminUser, type BroadcastStatus,
+  type FunnelData, type ExperimentsData,
 } from '../api/admin'
 import { track } from '../api/analytics'
 
 const tg = window.Telegram?.WebApp
 
-type AdminTab = 'dashboard' | 'users' | 'broadcast' | 'tools'
+type AdminTab = 'dashboard' | 'users' | 'broadcast' | 'tools' | 'analytics'
 
 function timeAgo(ts: number): string {
   if (!ts) return 'never'
@@ -574,6 +576,134 @@ function ToolsTab() {
 }
 
 
+// ─── Analytics tab ────────────────────────────────────────────────────────────
+function AnalyticsTab() {
+  const [days, setDays] = useState(7)
+  const [funnel, setFunnel] = useState<FunnelData | null>(null)
+  const [experiments, setExperiments] = useState<ExperimentsData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    Promise.all([getFunnel(days), getExperimentResults(days * 2)])
+      .then(([f, e]) => { setFunnel(f); setExperiments(e) })
+      .catch(() => null)
+      .finally(() => setLoading(false))
+  }, [days])
+
+  function pct(v: number | null | undefined) {
+    return v == null ? '—' : `${(v * 100).toFixed(1)}%`
+  }
+  function num(v: number | undefined) {
+    return v == null ? '—' : v.toLocaleString()
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      {/* Period selector */}
+      <div className="flex gap-2">
+        {[7, 14, 30].map((d) => (
+          <button
+            key={d}
+            onClick={() => setDays(d)}
+            className={`px-3 py-1.5 rounded-full text-[12px] font-semibold ${
+              days === d ? 'bg-[#6C47FF] text-white' : 'bg-[#E8E8ED] text-[#6E6E73]'
+            }`}
+          >
+            {d}d
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p className="text-[13px] text-[#6E6E73]">Loading…</p>
+      ) : (
+        <>
+          {/* Funnel metrics */}
+          <div className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+            <div className="px-4 py-3 border-b border-black/[0.04]">
+              <p className="text-[13px] font-bold text-[#1D1D1F]">Funnel — last {funnel?.period_days}d</p>
+            </div>
+            <div className="divide-y divide-black/[0.04]">
+              {[
+                ['Generations started', num(funnel?.generation_started), null],
+                ['Completions', num(funnel?.generation_completed), pct(funnel?.completion_rate)],
+                ['Paywall hits', num(funnel?.paywall_hit), pct(funnel?.paywall_rate)],
+                ['Purchases', num(funnel?.purchase_completed), pct(funnel?.purchase_rate)],
+                ['Shares', num(funnel?.share_tapped), null],
+                ['Nudge conversions', num(funnel?.nudge_converted), pct(funnel?.nudge_conversion_rate)],
+                ['Upgrade sheet used', '—', pct(funnel?.upgrade_sheet_rate)],
+                ['Unique generators', num(funnel?.unique_generators), null],
+                ['Unique buyers', num(funnel?.unique_buyers), null],
+              ].map(([label, val, rate]) => (
+                <div key={String(label)} className="flex items-center justify-between px-4 py-2.5">
+                  <span className="text-[12px] text-[#1D1D1F]">{label}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[12px] font-semibold text-[#1D1D1F]">{val}</span>
+                    {rate && <span className="text-[11px] text-[#34C759] font-medium">{rate}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Revenue by segment */}
+          {funnel?.revenue_by_segment && Object.keys(funnel.revenue_by_segment).length > 0 && (
+            <div className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+              <div className="px-4 py-3 border-b border-black/[0.04]">
+                <p className="text-[13px] font-bold text-[#1D1D1F]">Revenue by segment · {funnel.total_stars.toLocaleString()}★ total</p>
+              </div>
+              {Object.entries(funnel.revenue_by_segment).map(([seg, data]) => (
+                <div key={seg} className="flex items-center justify-between px-4 py-2.5 border-b border-black/[0.04] last:border-0">
+                  <span className="text-[12px] text-[#1D1D1F] capitalize">{seg}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] text-[#6E6E73]">{data.purchases} purchases</span>
+                    <span className="text-[12px] font-semibold text-[#FF9500]">{data.stars.toLocaleString()}★</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Experiment results */}
+          {experiments && Object.entries(experiments.experiments).map(([expName, exp]) => (
+            <div key={expName} className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+              <div className="px-4 py-3 border-b border-black/[0.04]">
+                <p className="text-[13px] font-bold text-[#1D1D1F]">{expName}</p>
+                <p className="text-[11px] text-[#6E6E73]">{exp.description} · metric: {exp.primary_metric}</p>
+              </div>
+              <div className="divide-y divide-black/[0.04]">
+                {Object.entries(exp.variants).map(([variant, stats]) => {
+                  const isWinner = stats.rate != null && Object.values(exp.variants).every(
+                    (v) => v === stats || (v.rate ?? -1) <= (stats.rate ?? 0)
+                  )
+                  return (
+                    <div key={variant} className="flex items-center justify-between px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[12px] font-semibold ${isWinner ? 'text-[#34C759]' : 'text-[#1D1D1F]'}`}>
+                          {variant} {isWinner && stats.rate != null ? '🏆' : ''}
+                        </span>
+                        <span className="text-[10px] text-[#6E6E73]">{stats.exposed} exposed</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-[#6E6E73]">{stats.converted} cvt</span>
+                        <span className={`text-[12px] font-bold ${isWinner ? 'text-[#34C759]' : 'text-[#6C47FF]'}`}>
+                          {pct(stats.rate)}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  )
+}
+
+
 // ─── Main Admin screen ─────────────────────────────────────────────────────────
 export default function Admin() {
   const [tab, setTab] = useState<AdminTab>('dashboard')
@@ -587,6 +717,7 @@ export default function Admin() {
     { key: 'users', label: 'Users', icon: Users },
     { key: 'broadcast', label: 'Broadcast', icon: Radio },
     { key: 'tools', label: 'Tools', icon: Layers },
+    { key: 'analytics', label: 'Analytics', icon: TrendingUp },
   ]
 
   return (
@@ -634,6 +765,7 @@ export default function Admin() {
           {tab === 'users' && <UsersTab />}
           {tab === 'broadcast' && <BroadcastTab />}
           {tab === 'tools' && <ToolsTab />}
+          {tab === 'analytics' && <AnalyticsTab />}
         </motion.div>
       </AnimatePresence>
 

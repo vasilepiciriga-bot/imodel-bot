@@ -12,6 +12,7 @@ import { getLeaderboard } from '../api/leaderboard'
 import { AchievementPopup } from '../components/shared/AchievementPopup'
 import { HomeScreenModal } from '../components/HomeScreenModal'
 import { hap } from '../lib/haptics'
+import { track } from '../api/analytics'
 import type { ReferralData } from '../api/session'
 import type { LeaderboardData } from '../api/leaderboard'
 import type { QuestItem, Achievement } from '../types'
@@ -176,8 +177,10 @@ export default function Profile() {
 
   async function handleGiftSub() {
     hap.medium()
+    track('gift_sub_tapped')
     try {
       const { share_link, gift_days } = await createGiftSub()
+      track('gift_sub_shared', { gift_days })
       const text = encodeURIComponent(`🎁 I'm gifting you ${gift_days} days of iModel Pro — AI portraits for free!`)
       tg?.openLink(`https://t.me/share/url?url=${encodeURIComponent(share_link)}&text=${text}`)
     } catch { /* noop */ }

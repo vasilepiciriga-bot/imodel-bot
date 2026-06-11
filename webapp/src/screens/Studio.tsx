@@ -19,6 +19,8 @@ import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/pho
 import { getChallenge, claimDaily, getMe } from '../api/session'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { getQuests, claimQuest, type QuestItem } from '../api/quests'
+import { getCachedPresets } from '../api/presets'
+import type { Preset } from '../types'
 import { track } from '../api/analytics'
 import { useToast } from '../hooks/useToast'
 import type { Generation, PhotoshootMode } from '../types'
@@ -51,6 +53,7 @@ export default function Studio() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [claimableQuest, setClaimableQuest] = useState<QuestItem | null>(null)
   const [claimingQuest, setClaimingQuest] = useState(false)
+  const [recentPresets, setRecentPresets] = useState<Preset[]>([])
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -115,6 +118,18 @@ export default function Studio() {
       }).catch(() => null)
     }
   }, [])
+
+  // Build "Continue where you left off" strip from user's style history
+  useEffect(() => {
+    if (!user?.recent_presets?.length) return
+    const cached = getCachedPresets()
+    if (!cached?.length) return
+    const picks = user.recent_presets
+      .map((key) => cached.find((p) => p.key === key))
+      .filter((p): p is Preset => p != null)
+      .slice(0, 3)
+    setRecentPresets(picks)
+  }, [user?.recent_presets])
 
   useEffect(() => {
     if (activePreset) setPrompt('')
@@ -442,6 +457,39 @@ export default function Studio() {
               {leaderboard.my_rank && (
                 <span className="text-[11px] text-[#6E6E73] ml-auto shrink-0">You: #{leaderboard.my_rank}</span>
               )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* "Continue where you left off" recent presets strip */}
+        <AnimatePresence>
+          {recentPresets.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+            >
+              <p className="text-[11px] font-semibold text-[#6E6E73] mb-1.5 px-0.5">Continue where you left off</p>
+              <div className="flex gap-2">
+                {recentPresets.map((p) => (
+                  <motion.button
+                    key={p.key}
+                    whileTap={{ scale: 0.93 }}
+                    onClick={() => {
+                      useAppStore.getState().setActivePreset(p)
+                      track('recent_preset_tapped', { key: p.key })
+                    }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[11px] font-semibold transition-colors ${
+                      activePreset?.key === p.key
+                        ? 'bg-[#6C47FF] border-[#6C47FF] text-white'
+                        : 'bg-white border-[#E0E0E5] text-[#1D1D1F]'
+                    }`}
+                  >
+                    <span>{p.emoji}</span>
+                    <span className="truncate max-w-[60px]">{p.label}</span>
+                  </motion.button>
+                ))}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

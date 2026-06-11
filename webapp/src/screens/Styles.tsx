@@ -30,7 +30,7 @@ const CATEGORY_ACCENT: Record<string, string> = {
   challenge: '#FF9500',
 }
 
-const CATEGORIES = ['All', 'Studio', 'Cinematic', 'Outdoor', 'Lifestyle', 'Artistic', '★ Premium', '🌍 Community']
+const CATEGORIES = ['For You', 'All', 'Studio', 'Cinematic', 'Outdoor', 'Lifestyle', 'Artistic', '★ Premium', '🌍 Community']
 
 function PresetCard({ preset, active, index, onTap, onLongPress }: {
   preset: Preset
@@ -365,7 +365,20 @@ export default function Styles() {
       .finally(() => setLoading(false))
   }, [])
 
-  const filtered = category === 'All'
+  const _recentKeys = new Set(user?.recent_presets ?? [])
+  const filtered = category === 'For You'
+    ? [...presets]
+        .filter((p) => !p.locked)
+        .sort((a, b) => {
+          // Recently used first, then by personalized_score, then usage_7d
+          const aRecent = _recentKeys.has(a.key) ? 1000 : 0
+          const bRecent = _recentKeys.has(b.key) ? 1000 : 0
+          const aScore = (aRecent + (a.personalized_score ?? 0) + (a.usage_7d ?? 0))
+          const bScore = (bRecent + (b.personalized_score ?? 0) + (b.usage_7d ?? 0))
+          return bScore - aScore
+        })
+        .slice(0, 30)
+    : category === 'All'
     ? presets.filter((p) => p.category !== 'community')
     : category === '★ Premium'
     ? presets.filter((p) => p.is_premium)

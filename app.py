@@ -835,6 +835,30 @@ def _analytics_funnel_counts(days: int = 7) -> Dict[str, Any]:
             d = totals.get(den, 0)
             return round(totals.get(num, 0) / d, 3) if d else None
 
+        # Revenue: sum stars from purchase_completed events
+        rev_rows = _db_fetchall(
+            "SELECT COALESCE(SUM((props_json::jsonb->>'stars')::int), 0) "
+            "FROM imodel_events WHERE event='purchase_completed' AND day >= %s "
+            "AND props_json::jsonb ? 'stars'",
+            (cutoff_day,),
+        )
+        total_stars = int((rev_rows[0][0] if rev_rows else 0) or 0)
+
+        # Revenue by user segment
+        seg_rev_rows = _db_fetchall(
+            "SELECT props_json::jsonb->>'segment' AS seg, "
+            "COUNT(*) AS purchases, "
+            "COALESCE(SUM((props_json::jsonb->>'stars')::int), 0) AS stars "
+            "FROM imodel_events WHERE event='purchase_completed' AND day >= %s "
+            "AND props_json::jsonb ? 'segment' "
+            "GROUP BY seg",
+            (cutoff_day,),
+        )
+        revenue_by_segment: Dict[str, Dict] = {}
+        for seg, purchases, stars in (seg_rev_rows or []):
+            if seg:
+                revenue_by_segment[str(seg)] = {"purchases": int(purchases), "stars": int(stars or 0)}
+
         return {
             "period_days": days,
             "generation_started":    totals.get("generation_started", 0),
@@ -845,18 +869,94 @@ def _analytics_funnel_counts(days: int = 7) -> Dict[str, Any]:
             "nudge_converted":       totals.get("nudge_converted", 0),
             "referral_joined":       totals.get("referral_joined", 0),
             "mode_selected":         totals.get("mode_selected", 0),
+            "premium_mode_upgrade_shown": totals.get("premium_mode_upgrade_shown", 0),
+            "premium_mode_use_credits":   totals.get("premium_mode_use_credits", 0),
             # Rates
             "completion_rate":       rate("generation_completed", "generation_started"),
             "paywall_rate":          rate("paywall_hit", "generation_started"),
             "purchase_rate":         rate("purchase_completed", "paywall_hit"),
             "share_rate":            rate("share_tapped", "generation_completed"),
             "nudge_conversion_rate": rate("nudge_converted", "nudges_sent"),
+            "upgrade_sheet_rate":    rate("premium_mode_use_credits", "premium_mode_upgrade_shown"),
+            # Revenue
+            "total_stars":           total_stars,
+            "revenue_by_segment":    revenue_by_segment,
             # Unique users
             "unique_generators":     uniq.get("generation_started", 0),
             "unique_buyers":         uniq.get("purchase_completed", 0),
         }
     except Exception as e:
         print(f"[analytics] funnel error: {str(e)[:120]}")
+        return {}
+
+
+def _analytics_experiment_results(days: int = 14) -> Dict[str, Any]:
+    """Per-variant conversion rates for all active experiments."""
+    if not DB_READY:
+        return {}
+    try:
+        cutoff_day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400))
+        result: Dict[str, Any] = {}
+        for exp_name, exp_cfg in EXPERIMENTS.items():
+            if not exp_cfg.get("active"):
+                continue
+            exposure_evt = exp_cfg.get("exposure_event", "experiment_exposure")
+            primary_evt  = exp_cfg.get("primary_metric", "purchase_completed")
+            variants = exp_cfg.get("variants", ["control"])
+
+            # Exposures per variant: query events with matching experiment variant in props
+            exp_rows = _db_fetchall(
+                "SELECT props_json::jsonb->>'variant' AS v, COUNT(DISTINCT uid) "
+                "FROM imodel_events "
+                "WHERE day >= %s AND event = %s "
+                "AND (props_json::jsonb->>'experiment' = %s OR props_json::jsonb->>'variant' IS NOT NULL) "
+                "GROUP BY v",
+                (cutoff_day, exposure_evt, exp_name),
+            )
+            # Also query via experiment_exposure events
+            exp_rows2 = _db_fetchall(
+                "SELECT props_json::jsonb->>'variant' AS v, COUNT(DISTINCT uid) "
+                "FROM imodel_events "
+                "WHERE day >= %s AND event = 'experiment_exposure' "
+                "AND props_json::jsonb->>'experiment' = %s "
+                "GROUP BY v",
+                (cutoff_day, exp_name),
+            )
+            exposed: Dict[str, int] = {}
+            for rows in (exp_rows, exp_rows2):
+                for v, cnt in (rows or []):
+                    if v:
+                        exposed[str(v)] = max(exposed.get(str(v), 0), int(cnt))
+
+            # Conversions per variant
+            conv_rows = _db_fetchall(
+                "SELECT props_json::jsonb->>'variant' AS v, COUNT(DISTINCT uid) "
+                "FROM imodel_events "
+                "WHERE day >= %s AND event = %s "
+                "AND props_json::jsonb ? 'variant' "
+                "GROUP BY v",
+                (cutoff_day, primary_evt),
+            )
+            converted: Dict[str, int] = {str(v): int(c) for v, c in (conv_rows or []) if v}
+
+            variant_stats: Dict[str, Dict] = {}
+            for v in variants:
+                exp_count = exposed.get(v, 0)
+                conv_count = converted.get(v, 0)
+                variant_stats[v] = {
+                    "exposed": exp_count,
+                    "converted": conv_count,
+                    "rate": round(conv_count / exp_count, 4) if exp_count else None,
+                }
+            result[exp_name] = {
+                "description": exp_cfg.get("description", ""),
+                "primary_metric": primary_evt,
+                "exposure_event": exposure_evt,
+                "variants": variant_stats,
+            }
+        return {"period_days": days, "experiments": result}
+    except Exception as e:
+        print(f"[analytics] experiment results error: {str(e)[:120]}")
         return {}
 
 def _touch_user(uid: int, username: Optional[str] = None):
@@ -1383,6 +1483,9 @@ USER_LAST_SHARE_REWARD: Dict[int, str] = {}  # uid → ISO date of last share-re
 STATS_PRESET_USAGE:   Dict[str, int]   = {}  # preset_key → uses this week (resets weekly)
 _preset_usage_reset_at: float = time.time()
 USER_AUTO_RECHARGE: Dict[int, Dict]    = {}  # uid → {"pack": "pack_30", "threshold": 5, "enabled": bool}
+USER_STYLE_HISTORY: Dict[int, List[str]] = {}  # uid → last-5 preset_keys
+USER_MODE_HISTORY:  Dict[int, List[str]] = {}  # uid → last-3 photoshoot modes
+USER_REENGAGEMENT:  Dict[int, Dict]      = {}  # uid → {seq: int, last_at: float} re-engagement sequence state
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -3718,32 +3821,41 @@ def _nudge_eligible(uid: int) -> bool:
 
 def _nudge_pick_segment(uid: int) -> str:
     """
-    Segment users into 5 nudge types based on behavior:
+    Segment users into nudge types based on behavior:
+      POWER_USER       — generates daily, hasn't paid → strong upsell candidate
+      CHURNING         — paid user, going quiet (last gen 5-12 days ago)
       LAPSE_CREDITS    — has credits, been away 24-72h
       PREMIUM_UPSELL   — generated with everyday only, never tried a paid mode
-      RETURNING_PAID   — previous payer, came back
+      RETURNING_PAID   — previous payer, came back after 48h
       LAPSE_NOCREDITS  — 0 credits, inactive (give free credit)
-      VIRAL_SHARE      — generated but probably never shared (no share event)
+      VIRAL_SHARE      — generated but probably never shared
     """
     ui = STATS_USERS_INFO.get(uid) or {}
     now = time.time()
     last_seen = float(ui.get("last_seen", 0))
+    last_gen = float(ui.get("last_gen_at", 0))
     hours_away = (now - last_seen) / 3600 if last_seen else 9999
+    days_since_gen = (now - last_gen) / 86400 if last_gen else 9999
     gens_ok = int(ui.get("gens_ok", 0))
     paid = int(ui.get("payments", 0)) > 0
     credits_left = USER_CREDITS.get(uid, 0)
     ni = NUDGE_INFO.get(uid) or {}
     nudge_count = int(ni.get("count", 0))
+    account_days = (now - float(ui.get("first_seen", now))) / 86400
 
+    # Power user: frequent generator, never paid — prime conversion target
+    if not paid and gens_ok >= 10 and account_days >= 7 and credits_left <= 5:
+        return "POWER_USER"
+    # Churning: was paying, hasn't generated in 5-12 days
+    if paid and 5 <= days_since_gen <= 12:
+        return "CHURNING"
     if paid and hours_away > 48:
         return "RETURNING_PAID"
     if gens_ok >= 2 and credits_left >= 3 and hours_away < 72:
-        # Has tried the bot, has credits, just drifted away — upsell premium mode
         return "PREMIUM_UPSELL"
     if credits_left > 0 and hours_away >= 24:
         return "LAPSE_CREDITS"
     if gens_ok >= 1 and nudge_count == 0:
-        # Generated before, never nudged → viral share
         return "VIRAL_SHARE"
     return "LAPSE_NOCREDITS"
 
@@ -3880,6 +3992,30 @@ _NUDGE_COPY: Dict[str, Dict[str, list]] = {
         "ro": ["Îți oferim +1 generație gratuită — revino și creează ceva nou! 🎁"],
         "de": ["Wir schenken dir +1 Generierung — komm zurück und erstelle etwas Tolles! 🎁"],
     },
+    "POWER_USER": {
+        "ru": [
+            "⚡ Ты уже сгенерировал {n} фото — ты точно знаешь толк! Подписка Pro даёт +75 генераций каждый месяц всего за 490★.",
+            "🔥 {n} генераций и ты всё ещё на бесплатном плане? Подписка Pro открывает Vogue, CEO и Luxury режимы — попробуй сейчас.",
+        ],
+        "en": [
+            "⚡ You've already generated {n} photos — you clearly love it! Pro subscription gives +75 credits/month for just 490★.",
+            "🔥 {n} generations and still on the free plan? Pro unlocks Vogue, CEO, Luxury modes — upgrade now.",
+        ],
+        "ro": [
+            "⚡ Ai generat deja {n} fotografii — clar îți place! Abonamentul Pro oferă +75 credite/lună pentru doar 490★.",
+        ],
+    },
+    "CHURNING": {
+        "ru": [
+            "💜 Давно не было фото! Твоя подписка ещё активна — зайди и сгенерируй что-нибудь красивое.",
+            "📸 Неделя без генераций — это много! Возвращайся, баланс ждёт.",
+        ],
+        "en": [
+            "💜 It's been a while! Your subscription is still active — come back and generate something beautiful.",
+            "📸 A week without photos is too long! Come back, your credits are waiting.",
+        ],
+        "ro": ["💜 A trecut ceva timp! Abonamentul tău e încă activ — revino și creează ceva frumos."],
+    },
 }
 
 def _pick_nudge_text(segment: str, lang: str, **fmt) -> str:
@@ -3929,6 +4065,11 @@ async def _send_nudge(uid: int, lang: str):
         text = _pick_nudge_text(segment, lang, code=promo_code)
     elif segment == "LAPSE_CREDITS":
         text = _pick_nudge_text(segment, lang, n=credits_left)
+    elif segment == "POWER_USER":
+        gens_ok = int((STATS_USERS_INFO.get(uid) or {}).get("gens_ok", 0))
+        text = _pick_nudge_text(segment, lang, n=gens_ok)
+    elif segment == "CHURNING":
+        text = _pick_nudge_text(segment, lang)
     else:
         text = _pick_nudge_text(segment, lang)
 
@@ -3966,6 +4107,142 @@ async def _send_nudge(uid: int, lang: str):
             stats_incr("nudges_granted", 1)
 
 INACTIVE_TTL = int(os.getenv("INACTIVE_TTL_HOURS", "24")) * 3600  # bytes freed after N hours of inactivity
+
+# ── Post-purchase onboarding ──────────────────────────────────────────────────
+
+_POST_PURCHASE_MSG: Dict[str, str] = {
+    "ru": (
+        "🎉 Отлично, твои кредиты готовы!\n\n"
+        "Вот как получить лучший результат:\n"
+        "1. Загрузи чёткое фото лица при хорошем освещении\n"
+        "2. Выбери стиль в разделе 🎭 Стили\n"
+        "3. Нажми «Генерировать» — первый результат через ~30 сек\n\n"
+        "Совет: режим *Vogue* даёт журнальное качество 🔥"
+    ),
+    "en": (
+        "🎉 Your credits are ready!\n\n"
+        "Here's how to get the best results:\n"
+        "1. Upload a clear, well-lit face photo\n"
+        "2. Pick a style in the 🎭 Styles tab\n"
+        "3. Hit Generate — first result in ~30 sec\n\n"
+        "Tip: *Vogue* mode gives magazine-quality shots 🔥"
+    ),
+    "ro": (
+        "🎉 Creditele tale sunt gata!\n\n"
+        "Cum să obții cele mai bune rezultate:\n"
+        "1. Încarcă o fotografie clară, bine iluminată\n"
+        "2. Alege un stil în secțiunea 🎭 Stiluri\n"
+        "3. Apasă Generează — primul rezultat în ~30 sec\n\n"
+        "Sfat: modul *Vogue* oferă calitate de revistă 🔥"
+    ),
+}
+
+async def _post_purchase_onboarding(uid: int, lang: str, is_sub: bool) -> None:
+    await asyncio.sleep(300)  # 5-minute delay
+    try:
+        text = _POST_PURCHASE_MSG.get(lang) or _POST_PURCHASE_MSG["en"]
+        kb: Optional[InlineKeyboardMarkup] = None
+        if WEBHOOK_BASE:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="📸 Open Studio", web_app=WebAppInfo(url=f"{WEBHOOK_BASE}/webapp")),
+            ]])
+        await bot.send_message(uid, text, reply_markup=kb, parse_mode="Markdown")
+        analytics_event(uid, "post_purchase_onboarding_sent", {"is_sub": is_sub, "lang": lang})
+    except Exception as e:
+        print(f"[post_purchase_onboarding] uid={uid} error: {str(e)[:100]}")
+
+
+# ── Re-engagement sequence ────────────────────────────────────────────────────
+
+_REENGAGEMENT_COPY: List[Dict[str, Any]] = [
+    # seq=0: 3-day reminder — friendly
+    {
+        "delay_days": 3,
+        "en": "✨ Miss you! Your style photos are waiting. Come back and generate something stunning today 📸",
+        "ru": "✨ Скучаем! Твои фото ждут. Вернись и сгенерируй что-то крутое сегодня 📸",
+        "ro": "✨ Ne-a fost dor! Fotografiile tale te așteaptă. Revino și creează ceva uimitor azi 📸",
+    },
+    # seq=1: 7-day — free credits offer
+    {
+        "delay_days": 7,
+        "en": "🎁 It's been a week — here are +3 free credits to get back on track! Tap Open Studio to use them.",
+        "ru": "🎁 Прошла неделя — держи +3 бесплатных кредита! Нажми «Открыть Студию» чтобы использовать.",
+        "ro": "🎁 A trecut o săptămână — iată +3 credite gratuite! Apasă Deschide Studio pentru a le folosi.",
+        "grant": 3,
+    },
+    # seq=2: 14-day — promo code
+    {
+        "delay_days": 14,
+        "en": "💜 We saved you a special deal: 30% off any pack. Use code *COMEBACK30* — valid 48 hours only.",
+        "ru": "💜 Мы придержали для тебя особое предложение: −30% на любой пак. Промокод *COMEBACK30* — только 48 часов.",
+        "ro": "💜 Am păstrat o ofertă specială: −30% la orice pachet. Cod *COMEBACK30* — valabil 48 de ore.",
+        "promo": True,
+    },
+]
+
+async def reengagement_loop() -> None:
+    """Every 6 hours: check inactive users and send re-engagement sequence messages."""
+    await asyncio.sleep(600)  # initial delay
+    while True:
+        try:
+            now = time.time()
+            sent = 0
+            for uid, ui in list(STATS_USERS_INFO.items()):
+                try:
+                    last_gen = float(ui.get("last_gen_at") or ui.get("last_seen") or 0)
+                    if not last_gen:
+                        continue
+                    days_inactive = (now - last_gen) / 86400
+                    re = USER_REENGAGEMENT.setdefault(uid, {"seq": 0, "last_at": 0.0})
+                    seq = int(re.get("seq", 0))
+                    if seq >= len(_REENGAGEMENT_COPY):
+                        continue  # sequence exhausted
+                    step = _REENGAGEMENT_COPY[seq]
+                    if days_inactive < step["delay_days"]:
+                        continue
+                    # Cooldown: don't resend within 23h
+                    if now - float(re.get("last_at", 0)) < 23 * 3600:
+                        continue
+                    # Skip if they bought recently
+                    if now - float(ui.get("last_purchase_at", 0)) < 7 * 86400:
+                        re["seq"] = 0
+                        continue
+                    lang = str(USER_LANG.get(uid, LANG_DEFAULT))
+                    if not _nudge_allowed_now(lang):
+                        continue
+                    text = step.get(lang) or step.get("en", "")
+                    grant = int(step.get("grant", 0))
+                    if grant:
+                        async with _credits_lock:
+                            USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + grant
+                        _credits_save()
+                    if step.get("promo"):
+                        promo = _create_user_promo(uid, add=3, ttl_uses=1)
+                        text = text.replace("COMEBACK30", promo)
+                    kb: Optional[InlineKeyboardMarkup] = None
+                    if WEBHOOK_BASE:
+                        kb = InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(text="📸 Open Studio", web_app=WebAppInfo(url=f"{WEBHOOK_BASE}/webapp")),
+                        ]])
+                    try:
+                        await bot.send_message(uid, text, reply_markup=kb, parse_mode="Markdown")
+                        re["seq"] = seq + 1
+                        re["last_at"] = now
+                        USER_REENGAGEMENT[uid] = re
+                        analytics_event(uid, "reengagement_sent", {"seq": seq, "days_inactive": round(days_inactive, 1), "grant": grant})
+                        sent += 1
+                    except (TelegramForbiddenError, TelegramNotFound):
+                        re["seq"] = len(_REENGAGEMENT_COPY)  # stop sequence
+                    except Exception as e:
+                        print(f"[reengagement] uid={uid}: {str(e)[:80]}")
+                except Exception:
+                    pass
+            if sent:
+                print(f"[reengagement_loop] sent {sent} messages")
+        except Exception as e:
+            print(f"[reengagement_loop] error: {str(e)[:150]}")
+        await asyncio.sleep(6 * 3600)
+
 
 async def memory_cleanup_loop():
     """Hourly: drop image bytes for users inactive > INACTIVE_TTL seconds."""
@@ -4927,7 +5204,11 @@ async def got_payment(m: Message):
     stats_incr("payments", 1)
     _uadd(uid, "payments", 1)
     # Reset bonus phase: purchased users get Phase 0 bonuses for 30 days
-    STATS_USERS_INFO.setdefault(uid, {})['last_purchase_at'] = time.time()
+    _ui_post = STATS_USERS_INFO.setdefault(uid, {})
+    _ui_post['last_purchase_at'] = time.time()
+    # Post-purchase onboarding: send guided message 5 min after first-ever purchase
+    if int(_ui_post.get("payments", 0)) == 1:
+        asyncio.create_task(_post_purchase_onboarding(uid, str(USER_LANG.get(uid, LANG_DEFAULT)), is_sub))
     try:
         uname = getattr(m.from_user, "username", None)
         name = getattr(m.from_user, "full_name", None) or getattr(m.from_user, "first_name", "")
@@ -4945,7 +5226,25 @@ async def got_payment(m: Message):
             balance=USER_CREDITS.get(uid, 0),
             stars=xtr,
         )
-        analytics_event(uid, "purchase_completed", {"pack": payload, "credits_added": add, "stars": xtr, "source": "telegram_stars"})
+        _ui_purchase = STATS_USERS_INFO.get(uid, {})
+        _payments_count = int(_ui_purchase.get("payments", 0))
+        _purchase_segment = (
+            "returning" if _payments_count > 1
+            else "first_time" if _payments_count == 1
+            else "new"
+        )
+        _, _, _purchase_phase = _get_bonus_phase(uid)
+        _purchase_variant = get_variant(uid, "paywall_copy")
+        analytics_event(uid, "purchase_completed", {
+            "pack": payload,
+            "credits_added": add,
+            "stars": xtr,
+            "source": "telegram_stars",
+            "segment": _purchase_segment,
+            "bonus_phase": _purchase_phase,
+            "variant": _purchase_variant,
+            "is_sub": is_sub,
+        })
     except Exception as e:
         print("notify admins (payment) error:", str(e)[:160])
 
@@ -6763,6 +7062,9 @@ async def on_startup():
             t = asyncio.create_task(quest_reminder_loop(), name="quest_reminder_loop")
             t.add_done_callback(_bg_task_error_handler)
             print("Quest reminder loop started")
+            t = asyncio.create_task(reengagement_loop(), name="reengagement_loop")
+            t.add_done_callback(_bg_task_error_handler)
+            print("Re-engagement loop started")
         if GROUP_POSTS_ENABLED:
             t = asyncio.create_task(group_posts_loop(), name="group_posts_loop")
             t.add_done_callback(_bg_task_error_handler)
@@ -7002,6 +7304,18 @@ async def run_webapp_generation_job(job_id: str):
                 STATS_PRESET_USAGE.clear()
                 _preset_usage_reset_at = time.time()
             STATS_PRESET_USAGE[_preset_key] = STATS_PRESET_USAGE.get(_preset_key, 0) + 1
+        # Style history — last-5 presets for personalized ranking (most-recent first)
+        if _preset_key:
+            _sh = USER_STYLE_HISTORY.get(uid, [])
+            _sh = [k for k in _sh if k != _preset_key]  # dedupe
+            USER_STYLE_HISTORY[uid] = ([_preset_key] + _sh)[:5]
+        _mode_key = str(job.get("photoshoot_mode") or "everyday")
+        _mh = USER_MODE_HISTORY.get(uid, [])
+        _mh = [m for m in _mh if m != _mode_key]
+        USER_MODE_HISTORY[uid] = ([_mode_key] + _mh)[:3]
+        # Reset re-engagement sequence on activity
+        if uid in USER_REENGAGEMENT:
+            USER_REENGAGEMENT[uid]["seq"] = 0
         # Persist quest progress to DB
         _pj = USER_QUEST_PROGRESS.get(uid, {})
         for _qid in ("gen_daily_2", "gen_daily_5", "try_preset"):
@@ -7497,6 +7811,8 @@ async def api_me(request: Request):
         "friends_invited": int(ui.get("referrals_sent", 0)),
         "language": USER_LANG.get(uid, LANG_DEFAULT),
         "first_seen": float(ui.get("first_seen", 0)) or None,
+        "recent_presets": USER_STYLE_HISTORY.get(uid, []),
+        "recent_modes": USER_MODE_HISTORY.get(uid, []),
     }
 
 @app.post("/api/v1/me/language")
@@ -8339,9 +8655,12 @@ async def api_create_generation(request: Request):
     # Check and deduct credits (n credits for photoshoot modes)
     if not await _try_use_credits_n(uid, credit_cost, username):
         _pw_ui = STATS_USERS_INFO.get(uid) or {}
+        _, _, _pw_phase = _get_bonus_phase(uid)
         analytics_event(uid, "paywall_hit", {
             "source": "webapp", "mode": photoshoot_mode, "required": credit_cost,
             "gens_ok": int(_pw_ui.get("gens_ok", 0)), "payments": int(_pw_ui.get("payments", 0)),
+            "bonus_phase": _pw_phase,
+            "variant": get_variant(uid, "paywall_copy"),
         })
         return JSONResponse(
             {"error": "no_credits", "required": credit_cost, "available": USER_CREDITS.get(uid, 0)},
@@ -8631,6 +8950,12 @@ async def api_presets(request: Request):
             "my_vote": _has_community_vote(uid, cp["key"]),
             "created_at": cp["created_at"],
         })
+
+    # Personalized scores — recently used presets float to top
+    _user_history = USER_STYLE_HISTORY.get(uid, [])
+    _history_score = {k: (len(_user_history) - i) * 10 for i, k in enumerate(_user_history)}
+    for item in result:
+        item["personalized_score"] = _history_score.get(item["key"], 0)
 
     # Build trending: top-10 by real usage_7d, fallback to env var list
     _top_by_usage = sorted(
@@ -9307,7 +9632,6 @@ async def api_analytics_funnel(request: Request):
     user = webapp_user_from_request(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
-    # Only admins
     uid = int(user["uid"])
     username = str(user.get("username") or "")
     if role_for_user(uid, username) not in ("admin", "superadmin"):
@@ -9315,6 +9639,21 @@ async def api_analytics_funnel(request: Request):
     days = int(request.query_params.get("days", 7))
     days = max(1, min(days, 90))
     return _analytics_funnel_counts(days)
+
+
+@app.get("/api/v1/analytics/experiments")
+async def api_analytics_experiments(request: Request):
+    """Per-variant conversion rates for all active experiments (admin only)."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    if role_for_user(uid, username) not in ("admin", "superadmin"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    days = int(request.query_params.get("days", 14))
+    days = max(1, min(days, 90))
+    return _analytics_experiment_results(days)
 
 def _quest_progress_for_user(uid: int, today: str) -> List[Dict]:
     """Return quests with current progress for a user."""

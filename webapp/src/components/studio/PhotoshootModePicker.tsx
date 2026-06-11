@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { X, Check, Crown } from 'lucide-react'
 import type { PhotoshootMode, PhotoshootModeKey } from '../../types'
 import { track } from '../../api/analytics'
+import { getVariantSync } from '../../api/experiments'
 
 const PREMIUM_MODES = new Set(['vogue', 'ceo', 'luxury'])
 
@@ -63,8 +64,15 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
     if (mode.key !== 'custom') setCustomDesc('')
     // Show inline upgrade sheet when premium mode + low credits
     if (PREMIUM_MODES.has(mode.key) && userCredits < 10) {
-      track('premium_mode_upgrade_shown', { mode: mode.key, credits: userCredits })
-      setUpgradeMode(mode)
+      const variant = getVariantSync('upgrade_sheet')
+      track('premium_mode_upgrade_shown', { mode: mode.key, credits: userCredits, variant })
+      if (variant === 'paywall') {
+        // Control arm: skip inline sheet, go direct to paywall
+        onClose()
+        onUpgrade?.()
+      } else {
+        setUpgradeMode(mode)
+      }
     } else {
       setUpgradeMode(null)
     }
@@ -81,7 +89,8 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
   }
 
   function handleUpgradeSubscribe() {
-    track('premium_mode_subscribe_tapped', { mode: upgradeMode?.key })
+    const variant = getVariantSync('upgrade_sheet')
+    track('premium_mode_subscribe_tapped', { mode: upgradeMode?.key, variant })
     setUpgradeMode(null)
     onClose()
     onUpgrade?.()
@@ -90,7 +99,8 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
   function handleUpgradeUseCredits() {
     if (!upgradeMode) return
     tg?.HapticFeedback?.impactOccurred('medium')
-    track('premium_mode_use_credits', { mode: upgradeMode.key, credits: userCredits })
+    const variant = getVariantSync('upgrade_sheet')
+    track('premium_mode_use_credits', { mode: upgradeMode.key, credits: userCredits, variant })
     setUpgradeMode(null)
     onSelect(upgradeMode.key)
   }

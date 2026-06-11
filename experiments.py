@@ -17,6 +17,8 @@ EXPERIMENTS: Dict[str, Dict] = {
         "traffic": 1.0,
         "active": True,
         "description": "Paywall headline copy variant",
+        "primary_metric": "purchase_completed",
+        "exposure_event": "paywall_hit",
     },
     # Nudge message minimum gap — tests 24h vs 48h re-engagement timing
     "nudge_interval": {
@@ -24,6 +26,8 @@ EXPERIMENTS: Dict[str, Dict] = {
         "traffic": 0.5,
         "active": True,
         "description": "Minimum hours between nudges",
+        "primary_metric": "nudge_converted",
+        "exposure_event": "nudge_sent",
     },
     # Onboarding CTA button text
     "onboarding_cta": {
@@ -31,6 +35,26 @@ EXPERIMENTS: Dict[str, Dict] = {
         "traffic": 1.0,
         "active": True,
         "description": "Welcome screen CTA button label",
+        "primary_metric": "generation_started",
+        "exposure_event": "onboarding_viewed",
+    },
+    # Premium mode upgrade sheet — inline two-button sheet vs direct paywall
+    "upgrade_sheet": {
+        "variants": ["inline", "paywall"],
+        "traffic": 1.0,
+        "active": True,
+        "description": "Premium mode gate: inline upgrade sheet vs direct paywall redirect",
+        "primary_metric": "premium_mode_use_credits",
+        "exposure_event": "premium_mode_upgrade_shown",
+    },
+    # Bundle offer position in Shop packs tab
+    "bundle_position": {
+        "variants": ["top", "control"],
+        "traffic": 0.8,
+        "active": True,
+        "description": "Show bundle card at top of packs tab vs standard position",
+        "primary_metric": "purchase_completed",
+        "exposure_event": "shop_opened",
     },
 }
 

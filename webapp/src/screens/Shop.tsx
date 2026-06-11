@@ -6,6 +6,8 @@ import { getShop, createInvoice, setAutoRecharge, type ShopData } from '../api/s
 import { getMe } from '../api/session'
 import { useAppStore } from '../store/appStore'
 import { track } from '../api/analytics'
+import { useExperiment } from '../hooks/useExperiment'
+import { getVariantSync } from '../api/experiments'
 import { useToast } from '../hooks/useToast'
 import { hap } from '../lib/haptics'
 
@@ -104,6 +106,7 @@ export default function Shop() {
   const [activeSubTab, setActiveSubTab] = useState<'monthly' | 'packs'>('monthly')
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly')
   const [autoRechargeEnabled, setAutoRechargeEnabled] = useState(false)
+  const bundleVariant = useExperiment('bundle_position')
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
   const updateCredits = useAppStore((s) => s.updateCredits)
@@ -111,11 +114,12 @@ export default function Shop() {
 
   useEffect(() => {
     getShopCached().then(setShop).catch(() => null)
+    track('shop_opened', { variant: getVariantSync('bundle_position') })
   }, [])
 
   const handleBuy = useCallback(async (itemId: string, stars?: number) => {
     hap.medium()
-    track('buy_tapped', { pack: itemId, stars: stars ?? 0 })
+    track('buy_tapped', { pack: itemId, stars: stars ?? 0, bundle_variant: bundleVariant })
     try {
       const { invoice_url } = await createInvoice(itemId)
       tg?.openInvoice(invoice_url, async (status: string) => {
@@ -141,6 +145,7 @@ export default function Shop() {
     const next = !autoRechargeEnabled
     setAutoRechargeEnabled(next)
     hap.select()
+    track('auto_recharge_toggled', { enabled: next })
     try {
       await setAutoRecharge('pack_30', 5, next)
       toast.success(next ? 'Auto-recharge enabled' : 'Auto-recharge disabled', {
@@ -178,6 +183,11 @@ export default function Shop() {
       </div>
 
       <div className="flex-1 px-4 pb-8 space-y-4">
+        {/* Bundle at top — experiment: bundle_position=top */}
+        {shop?.bundle && bundleVariant === 'top' && (
+          <BundleCard bundle={shop.bundle} onBuy={() => handleBuy(shop!.bundle!.id, shop!.bundle!.stars)} />
+        )}
+
         {/* Balance hero */}
         <div className="relative rounded-[24px] overflow-hidden p-5 text-white"
           style={{ background: 'linear-gradient(135deg, #6C47FF 0%, #FF2D78 100%)' }}>
@@ -237,7 +247,7 @@ export default function Shop() {
                   {(['monthly', 'annual'] as const).map((cycle) => (
                     <button
                       key={cycle}
-                      onClick={() => { hap.select(); setBillingCycle(cycle) }}
+                      onClick={() => { hap.select(); setBillingCycle(cycle); track('billing_cycle_switched', { cycle }) }}
                       className={`flex-1 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all flex items-center justify-center gap-1.5 ${
                         billingCycle === cycle ? 'bg-white text-[#1D1D1F] shadow-sm' : 'text-[#6E6E73]'
                       }`}
@@ -355,8 +365,8 @@ export default function Shop() {
               transition={{ duration: 0.15 }}
               className="space-y-4"
             >
-              {/* Bundle of the week */}
-              {shop?.bundle && (
+              {/* Bundle of the week — shown in-tab only for control variant */}
+              {shop?.bundle && bundleVariant !== 'top' && (
                 <BundleCard bundle={shop.bundle} onBuy={() => handleBuy(shop!.bundle!.id, shop!.bundle!.stars)} />
               )}
 

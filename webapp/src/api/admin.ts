@@ -102,3 +102,46 @@ export const generatePresetThumbs = (reference_url?: string) =>
     '/api/v1/admin/generate-preset-thumbs',
     reference_url ? { reference_url } : {},
   )
+
+export interface FunnelData {
+  period_days: number
+  generation_started: number
+  generation_completed: number
+  paywall_hit: number
+  purchase_completed: number
+  share_tapped: number
+  nudge_converted: number
+  completion_rate: number | null
+  paywall_rate: number | null
+  purchase_rate: number | null
+  nudge_conversion_rate: number | null
+  upgrade_sheet_rate: number | null
+  total_stars: number
+  revenue_by_segment: Record<string, { purchases: number; stars: number }>
+  unique_generators: number
+  unique_buyers: number
+}
+
+export interface ExperimentVariantStats {
+  exposed: number
+  converted: number
+  rate: number | null
+}
+
+export interface ExperimentResult {
+  description: string
+  primary_metric: string
+  exposure_event: string
+  variants: Record<string, ExperimentVariantStats>
+}
+
+export interface ExperimentsData {
+  period_days: number
+  experiments: Record<string, ExperimentResult>
+}
+
+export const getFunnel = (days = 7) =>
+  api.get<FunnelData>(`/api/v1/analytics/funnel?days=${days}`)
+
+export const getExperimentResults = (days = 14) =>
+  api.get<ExperimentsData>(`/api/v1/analytics/experiments?days=${days}`)
