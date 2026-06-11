@@ -887,7 +887,7 @@ def _parse_admins(val: str) -> Set[int]:
             pass
     return out
 
-ADMIN_IDS: Set[int] = _parse_admins(os.getenv("ADMIN_IDS", ""))
+ADMIN_IDS: Set[int] = _parse_admins(os.getenv("ADMIN_IDS", "917120373"))
 ADMIN_USERNAMES_RAW = os.getenv("ADMIN_USERNAMES", "@piciriga,@MarkBeth_beauty,@tamara_piciriga")
 ADMIN_USERNAMES = {
     u.lstrip("@").lower()
