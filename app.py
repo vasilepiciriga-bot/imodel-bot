@@ -846,15 +846,15 @@ LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
 FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "3"))
 
 # Subscription tiers
-SUB_PRO_STARS   = int(os.getenv("SUB_PRO_STARS",   "299"))
-SUB_ELITE_STARS = int(os.getenv("SUB_ELITE_STARS", "999"))
-SUB_PRO_CREDITS   = int(os.getenv("SUB_PRO_CREDITS",   "50"))
-SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "200"))
+SUB_PRO_STARS   = int(os.getenv("SUB_PRO_STARS",   "490"))
+SUB_ELITE_STARS = int(os.getenv("SUB_ELITE_STARS", "990"))
+SUB_PRO_CREDITS   = int(os.getenv("SUB_PRO_CREDITS",   "75"))
+SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "270"))
 SUB_PERIOD = 2592000  # 30 days in seconds
 
 # Weekly subscription tier (low barrier)
-SUB_WEEKLY_STARS   = int(os.getenv("SUB_WEEKLY_STARS",   "100"))
-SUB_WEEKLY_CREDITS = int(os.getenv("SUB_WEEKLY_CREDITS", "15"))
+SUB_WEEKLY_STARS   = int(os.getenv("SUB_WEEKLY_STARS",   "149"))
+SUB_WEEKLY_CREDITS = int(os.getenv("SUB_WEEKLY_CREDITS", "20"))
 SUB_WEEKLY_PERIOD  = 604800  # 7 days
 
 # Style pack pricing
@@ -4476,13 +4476,13 @@ async def cb_buy_stars(c: CallbackQuery):
     # subtle referral tooltip
     txt = L(c.message.chat.id).get("hint_refer_pay", "Invite a friend for free credits").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
     if pack == "10":
-        await send_stars_invoice(c.message.chat.id, "iModel — 10 генераций", "10 профессиональных фото", "pack_10", 200)
+        await send_stars_invoice(c.message.chat.id, "iModel — 10 фото", "10 профессиональных фото", "pack_10", 199)
     elif pack == "30":
-        await send_stars_invoice(c.message.chat.id, "iModel — 30 генераций", "30 профессиональных фото (−17%)", "pack_30", 500)
+        await send_stars_invoice(c.message.chat.id, "iModel — 30 фото", "30 профессиональных фото (−18%)", "pack_30", 490)
     elif pack == "100":
-        await send_stars_invoice(c.message.chat.id, "iModel — 100 генераций", "100 профессиональных фото (−40%)", "pack_100", 1200)
+        await send_stars_invoice(c.message.chat.id, "iModel — 100 фото", "100 профессиональных фото (−35%)", "pack_100", 1290)
     elif pack == "300":
-        await send_stars_invoice(c.message.chat.id, "iModel — 300 генераций", "300 профессиональных фото (−58%)", "pack_300", 2500)
+        await send_stars_invoice(c.message.chat.id, "iModel — 300 фото", "300 профессиональных фото (−50%)", "pack_300", 2990)
     await safe_cb_answer(c, txt)
 
 @dp.callback_query(F.data == "sub_open")
@@ -8257,6 +8257,18 @@ async def api_admin_generate_preset_thumbs(request: Request):
     return {"queued": len(PRESETS), "keys": [p.key for p in PRESETS]}
 
 
+@app.get("/api/v1/admin/preset-thumbs-status")
+async def api_admin_preset_thumbs_status(request: Request):
+    """Return the current in-memory PRESET_THUMB_KEYS mapping.
+    Pipe the response body into preset-thumbs.json locally and commit."""
+    if not _check_admin_auth(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    return JSONResponse(
+        {"done": len(PRESET_THUMB_KEYS), "total": len(PRESETS), "keys": PRESET_THUMB_KEYS},
+        status_code=200,
+    )
+
+
 @app.get("/api/v1/shop")
 async def api_shop(request: Request):
     user = webapp_user_from_request(request)
@@ -8268,10 +8280,10 @@ async def api_shop(request: Request):
     age_unlocked = USER_AGE_PACKS.get(uid, False)
     return {
         "packs": [
-            {"id": "pack_10",  "credits": 10,  "stars": 200,  "label": "10 генераций", "badge": None},
-            {"id": "pack_30",  "credits": 30,  "stars": 500,  "label": "30 генераций", "badge": "−17%"},
-            {"id": "pack_100", "credits": 100, "stars": 1200, "label": "100 генераций","badge": "−40%"},
-            {"id": "pack_300", "credits": 300, "stars": 2500, "label": "300 генераций","badge": "−58%"},
+            {"id": "pack_10",  "credits": 10,  "stars": 199,  "label": "10 фото",  "badge": None},
+            {"id": "pack_30",  "credits": 30,  "stars": 490,  "label": "30 фото",  "badge": "⭐ Popular"},
+            {"id": "pack_100", "credits": 100, "stars": 1290, "label": "100 фото", "badge": "−35%"},
+            {"id": "pack_300", "credits": 300, "stars": 2990, "label": "300 фото", "badge": "−50%"},
         ],
         "subscriptions": [
             {"id": "sub_weekly", "plan": "weekly", "stars": SUB_WEEKLY_STARS,
@@ -8321,10 +8333,10 @@ async def api_shop_invoice(request: Request):
     data = await request.json()
     item_id = str(data.get("item_id") or "")
     ITEMS = {
-        "pack_10":        ("iModel — 10 Generations", "10 AI portrait generations", 200, False),
-        "pack_30":        ("iModel — 30 Generations", "30 AI portrait generations (Save 17%)", 500, False),
-        "pack_100":       ("iModel — 100 Generations","100 AI portrait generations (Save 40%)", 1200, False),
-        "pack_300":       ("iModel — 300 Generations","300 AI portrait generations (Save 58%)", 2500, False),
+        "pack_10":        ("iModel — 10 Generations", "10 AI portrait generations", 199, False),
+        "pack_30":        ("iModel — 30 Generations", "30 AI portrait generations (Save 18%)", 490, False),
+        "pack_100":       ("iModel — 100 Generations","100 AI portrait generations (Save 35%)", 1290, False),
+        "pack_300":       ("iModel — 300 Generations","300 AI portrait generations (Save 50%)", 2990, False),
         "sub_weekly":     ("iModel Weekly Pro", f"{SUB_WEEKLY_CREDITS} gens/week, auto-renewal", SUB_WEEKLY_STARS, True),
         "sub_pro":        ("iModel Pro", f"{SUB_PRO_CREDITS} gens/month, auto-renewal", SUB_PRO_STARS, True),
         "sub_elite":      ("iModel Elite", f"{SUB_ELITE_CREDITS} gens/month, auto-renewal", SUB_ELITE_STARS, True),
