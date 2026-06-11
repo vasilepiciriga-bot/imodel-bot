@@ -6441,6 +6441,146 @@ async def http_metrics(request: Request):
     resp["db_ready"] = DB_READY
     return resp
 
+def _pct(num: float | None) -> str:
+    if num is None:
+        return "—"
+    return f"{num * 100:.1f}%"
+
+def _admin_funnel_section() -> str:
+    """Funnel conversion table (7d and 30d side by side)."""
+    f7  = _analytics_funnel_counts(7)
+    f30 = _analytics_funnel_counts(30)
+    if not f7 and not f30:
+        return ""
+    rows = [
+        ("Generation started",   "generation_started",   None),
+        ("Generation completed", "generation_completed", "completion_rate"),
+        ("Paywall hit",          "paywall_hit",          "paywall_rate"),
+        ("Purchase completed",   "purchase_completed",   "purchase_rate"),
+        ("Share tapped",         "share_tapped",         "share_rate"),
+        ("Nudge sent",           "nudges_sent",          None),
+        ("Nudge converted",      "nudge_converted",      "nudge_conversion_rate"),
+        ("Referral joined",      "referral_joined",      None),
+        ("Onboarding viewed",    "onboarding_viewed",    None),
+        ("Onboarding completed", "onboarding_completed", None),
+        ("Mode selected",        "mode_selected",        None),
+        ("Buy tapped",           "buy_tapped",           None),
+    ]
+    def rate_cell(f: dict, rate_key: str | None) -> str:
+        if not rate_key:
+            return "<td>—</td>"
+        v = f.get(rate_key)
+        color = ""
+        if v is not None:
+            if v >= 0.7:
+                color = "color:var(--ok)"
+            elif v < 0.2:
+                color = "color:var(--fail)"
+        return f'<td style="{color}">{_pct(v)}</td>'
+    trs = "".join(
+        f"<tr><td>{label}</td>"
+        f"<td>{f7.get(key, 0)}</td>{rate_cell(f7, rk)}"
+        f"<td>{f30.get(key, 0)}</td>{rate_cell(f30, rk)}</tr>"
+        for label, key, rk in rows
+    )
+    return f"""
+      <div class="section">
+        <div class="card">
+          <div class="muted">Analytics Funnel</div>
+          <table>
+            <tr><th>Event</th><th>7d count</th><th>7d rate</th><th>30d count</th><th>30d rate</th></tr>
+            {trs}
+          </table>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            Unique generators 7d: {f7.get('unique_generators',0)} &nbsp;|&nbsp;
+            Unique buyers 7d: {f7.get('unique_buyers',0)} &nbsp;|&nbsp;
+            Unique generators 30d: {f30.get('unique_generators',0)} &nbsp;|&nbsp;
+            Unique buyers 30d: {f30.get('unique_buyers',0)}
+          </div>
+        </div>
+      </div>"""
+
+def _admin_nudge_section() -> str:
+    """Nudge scheduler status card."""
+    now = time.time()
+    week_ago = now - 7 * 24 * 3600
+    total_users = len(STATS_USERS_INFO)
+    eligible_count = sum(1 for uid in STATS_USERS_INFO if _nudge_eligible(uid))
+    blocked_count  = sum(1 for ni in NUDGE_INFO.values() if ni.get("blocked"))
+    total_sent     = sum(int(ni.get("count", 0)) for ni in NUDGE_INFO.values())
+    capped_total   = sum(1 for ni in NUDGE_INFO.values() if int(ni.get("count", 0)) >= NUDGE_MAX_TOTAL)
+    capped_weekly  = sum(
+        1 for ni in NUDGE_INFO.values()
+        if len([t for t in (ni.get("sent_timestamps") or []) if float(t) > week_ago]) >= NUDGE_WEEKLY_CAP
+    )
+    sent_7d = sum(
+        len([t for t in (ni.get("sent_timestamps") or []) if float(t) > week_ago])
+        for ni in NUDGE_INFO.values()
+    )
+    status_color = "var(--ok)" if NUDGE_ENABLED else "var(--fail)"
+    status_text  = "ENABLED" if NUDGE_ENABLED else "DISABLED (set NUDGE_ENABLED=1)"
+    return f"""
+      <div class="section">
+        <div class="card">
+          <div class="muted">Nudge Scheduler</div>
+          <div style="margin:8px 0">
+            Status: <b style="color:{status_color}">{status_text}</b>
+          </div>
+          <table>
+            <tr><th>Metric</th><th>Value</th><th>Config</th></tr>
+            <tr><td>Total users</td><td>{total_users}</td><td>—</td></tr>
+            <tr><td>Eligible now</td><td>{eligible_count}</td><td>inactive &gt; {NUDGE_INTERVAL_HOURS}h</td></tr>
+            <tr><td>Sent this week</td><td>{sent_7d}</td><td>cap {NUDGE_WEEKLY_CAP}/7d</td></tr>
+            <tr><td>Sent lifetime</td><td>{total_sent}</td><td>max {NUDGE_MAX_TOTAL} per user</td></tr>
+            <tr><td>Blocked (bot)</td><td style="color:var(--fail)">{blocked_count}</td><td>permanent skip</td></tr>
+            <tr><td>Lifetime capped</td><td>{capped_total}</td><td>≥ {NUDGE_MAX_TOTAL} sends</td></tr>
+            <tr><td>Weekly capped</td><td>{capped_weekly}</td><td>≥ {NUDGE_WEEKLY_CAP}/7d</td></tr>
+            <tr><td>Batch limit</td><td>{NUDGE_BATCH_LIMIT}/hr</td><td>NUDGE_BATCH_LIMIT</td></tr>
+            <tr><td>Send window</td><td>{NUDGE_DAY_START_HOUR}:00–{NUDGE_DAY_END_HOUR}:00</td><td>per-user TZ</td></tr>
+          </table>
+        </div>
+      </div>"""
+
+def _admin_daily_trend_section() -> str:
+    """Last 14-day mini-table of gens + payments."""
+    now_ts = time.time()
+    days_data = []
+    for d in range(13, -1, -1):
+        dk = _date_key(now_ts - d * 86400)
+        dm = STATS_DAILY.get(dk) or {}
+        days_data.append({
+            "day": dk[-5:],  # MM-DD
+            "gens": int(dm.get("gens_ok", 0)) + int(dm.get("gens_copy_ok", 0)),
+            "pay": int(dm.get("payments", 0)),
+            "msg": int(dm.get("messages", 0)),
+            "photos": int(dm.get("photos", 0)),
+        })
+    max_gens = max((d["gens"] for d in days_data), default=1) or 1
+    bars = "".join(
+        f'<td style="vertical-align:bottom;text-align:center">'
+        f'<div style="background:var(--accent);opacity:.8;width:24px;height:{max(4, int(d["gens"]/max_gens*60))}px;margin:0 auto 2px;border-radius:3px 3px 0 0"></div>'
+        f'<div class="muted" style="font-size:10px">{d["day"]}</div>'
+        f'</td>'
+        for d in days_data
+    )
+    rows = "".join(
+        f'<tr><td>{d["day"]}</td><td>{d["gens"]}</td><td>{d["pay"]}</td><td>{d["msg"]}</td><td>{d["photos"]}</td></tr>'
+        for d in days_data
+    )
+    return f"""
+      <div class="section">
+        <div class="card">
+          <div class="muted">Daily trend (last 14 days)</div>
+          <div style="overflow-x:auto;margin:12px 0">
+            <table style="border:none"><tr style="border:none">{bars}</tr></table>
+          </div>
+          <table>
+            <tr><th>Date</th><th>Gens</th><th>Payments</th><th>Messages</th><th>Photos</th></tr>
+            {rows}
+          </table>
+        </div>
+      </div>"""
+
 @app.get("/admin")
 async def admin_panel(request: Request):
     if not ADMIN_PANEL_SECRET or request.query_params.get("secret") != ADMIN_PANEL_SECRET:
@@ -6697,6 +6837,11 @@ async def admin_panel(request: Request):
           </table>
         </div>
       </div>
+
+      {_admin_funnel_section()}
+      {_admin_nudge_section()}
+      {_admin_daily_trend_section()}
+
     </div>
   </body>
   </html>
