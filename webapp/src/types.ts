@@ -19,6 +19,8 @@ export interface UserProfile {
   unlocked_packs: string[]
   age_pack: boolean
   bot_link?: string
+  gens_ok?: number
+  payments?: number
 }
 
 export interface Preset {

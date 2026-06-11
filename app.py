@@ -1533,6 +1533,9 @@ T = {
         "fail": "Не удалось сгенерировать. Попробуйте изменить описание или фото.",
         "ready": "Готово ✅",
         "credits_none": "💎 Генерации закончились\n\nТы уже видел, как работает iModel — теперь знаешь, чего это стоит.\n\nВыбери тариф и продолжи:",
+        "credits_none_paid": "💎 Кредиты закончились\n\nВы уже знаете результат — не останавливайтесь.\n\nПополните баланс и продолжите:",
+        "credits_none_active": "⚡ Генерации закончились\n\nВы уже сделали несколько крутых фото — загляните ещё дальше.\n\nВыберите пакет:",
+        "credits_none_first": "✨ Бесплатные генерации использованы\n\nВам понравилось? Продолжайте — лучшие результаты ещё впереди.\n\nВыберите свой план:",
         "credits_low": "🔋 Осталось: {n} {gen}",
         "credits_last": "⚠️ Последняя генерация! Пополни баланс → /buy",
         "credits_gen_1": "генерация",
@@ -1636,6 +1639,9 @@ T = {
         "fail": "Generation failed. Try adjusting your description or selfie.",
         "ready": "Done ✅",
         "credits_none": "💎 Out of generations\n\nYou've seen what iModel can do — keep going.\n\nChoose a plan:",
+        "credits_none_paid": "💎 Credits used up\n\nYou already know the quality — don't stop now.\n\nTop up and keep creating:",
+        "credits_none_active": "⚡ Out of generations\n\nYou've made some great photos — there's more to explore.\n\nPick a pack:",
+        "credits_none_first": "✨ Free credits used\n\nLiked what you saw? The best results are ahead.\n\nChoose your plan:",
         "credits_low": "🔋 Remaining: {n} {gen}",
         "credits_last": "⚠️ Last generation! Top up → /buy",
         "credits_gen_1": "generation",
@@ -1739,6 +1745,9 @@ T = {
         "fail": "Nu am reușit. Încearcă altă descriere sau alt selfie.",
         "ready": "Gata ✅",
         "credits_none": "💎 Generațiile s-au terminat\n\nAi văzut ce poate iModel — continuă.\n\nAlege un plan:",
+        "credits_none_paid": "💎 Credite epuizate\n\nȘtii deja calitatea — nu te opri acum.\n\nReîncarcă și continuă:",
+        "credits_none_active": "⚡ Generații epuizate\n\nAi creat câteva poze excelente — explorează mai mult.\n\nAlege un pachet:",
+        "credits_none_first": "✨ Credite gratuite folosite\n\nȚi-a plăcut? Cele mai bune rezultate urmează.\n\nAlege planul tău:",
         "credits_low": "🔋 Rămase: {n} {gen}",
         "credits_last": "⚠️ Ultima generație! Alimentează → /buy",
         "credits_gen_1": "generație",
@@ -1844,6 +1853,9 @@ T = {
         "fail": "Erzeugung fehlgeschlagen. Bitte Beschreibung oder Selfie anpassen.",
         "ready": "Fertig ✅",
         "credits_none": "💎 Keine Generierungen mehr\n\nDu hast iModel kennengelernt — mach weiter.\n\nWähle einen Plan:",
+        "credits_none_paid": "💎 Credits aufgebraucht\n\nDu kennst die Qualität — hör nicht auf.\n\nAufladen und weitermachen:",
+        "credits_none_active": "⚡ Generierungen aufgebraucht\n\nDu hast tolle Fotos gemacht — entdecke mehr.\n\nWähle ein Paket:",
+        "credits_none_first": "✨ Kostenlose Credits verwendet\n\nGefällt dir das Ergebnis? Die besten Resultate kommen noch.\n\nWähle deinen Plan:",
         "credits_low": "🔋 Verbleibend: {n} {gen}",
         "credits_last": "⚠️ Letzte Generierung! Aufladen → /buy",
         "credits_gen_1": "Generierung",
@@ -3693,6 +3705,18 @@ async def _send_credits_hint(m: Message, uid: int, username: Optional[str] = Non
         except Exception:
             pass
 
+def _smart_paywall_text(uid: int) -> str:
+    """Return segment-aware paywall copy."""
+    ui = STATS_USERS_INFO.get(uid) or {}
+    payments = int(ui.get("payments", 0))
+    gens_ok = int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0))
+    lang = L(uid)
+    if payments > 0:
+        return lang.get("credits_none_paid", lang["credits_none"])
+    if gens_ok >= 3:
+        return lang.get("credits_none_active", lang["credits_none"])
+    return lang.get("credits_none_first", lang["credits_none"])
+
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
     invite_text = lang.get("btn_invite", "👥 Invite a friend (+{n} free)").format(n=REF_BONUS_REF)
@@ -5134,8 +5158,12 @@ async def _on_photo_inner(m: Message):
 
     _uname_photo = getattr(m.from_user, "username", None)
     if not await _try_use_credit(m.chat.id, _uname_photo):
-        analytics_event(m.chat.id, "paywall_hit", {"source": "bot", "mode": "everyday"})
-        return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+        ui = STATS_USERS_INFO.get(m.chat.id) or {}
+        analytics_event(m.chat.id, "paywall_hit", {
+            "source": "bot", "mode": "everyday",
+            "gens_ok": int(ui.get("gens_ok", 0)), "payments": int(ui.get("payments", 0)),
+        })
+        return await safe_answer(m, _smart_paywall_text(m.chat.id), reply_markup=kb_invite_buy(m.chat.id))
 
     _t0 = time.time()
     analytics_event(m.chat.id, "generation_started", {"source": "bot", "mode": "everyday"})
@@ -5959,6 +5987,7 @@ async def api_me(request: Request):
     uid = int(user["uid"])
     username = str(user.get("username") or "")
     ensure_user_credit(uid)
+    ui = STATS_USERS_INFO.get(uid) or {}
     return {
         "chat_id": uid,
         "username": username,
@@ -5966,6 +5995,9 @@ async def api_me(request: Request):
         "role": role_for_user(uid, username),
         "grants": sorted(grants_for_user(uid, username)),
         "bot_link": f"https://t.me/{BOT_USERNAME_GLOBAL}" if BOT_USERNAME_GLOBAL else None,
+        "gens_ok": int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0)),
+        "payments": int(ui.get("payments", 0)),
+        "streak": int(ui.get("streak", 0)),
     }
 
 def _weekly_top_generators(n: int = 10) -> List[Dict[str, Any]]:
@@ -6113,7 +6145,11 @@ async def api_create_generation(request: Request):
 
     # Check and deduct credits (n credits for photoshoot modes)
     if not await _try_use_credits_n(uid, credit_cost, username):
-        analytics_event(uid, "paywall_hit", {"source": "webapp", "mode": photoshoot_mode, "required": credit_cost})
+        _pw_ui = STATS_USERS_INFO.get(uid) or {}
+        analytics_event(uid, "paywall_hit", {
+            "source": "webapp", "mode": photoshoot_mode, "required": credit_cost,
+            "gens_ok": int(_pw_ui.get("gens_ok", 0)), "payments": int(_pw_ui.get("payments", 0)),
+        })
         return JSONResponse(
             {"error": "no_credits", "required": credit_cost, "available": USER_CREDITS.get(uid, 0)},
             status_code=402,

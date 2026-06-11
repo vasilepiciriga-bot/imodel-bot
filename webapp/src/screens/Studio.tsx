@@ -8,6 +8,7 @@ import { ProgressRing } from '../components/studio/ProgressRing'
 import { ResultCard } from '../components/studio/ResultCard'
 import { CreditBadge } from '../components/layout/CreditBadge'
 import { PhotoshootModePicker } from '../components/studio/PhotoshootModePicker'
+import { PaywallModal } from '../components/studio/PaywallModal'
 import { useAppStore } from '../store/appStore'
 import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
@@ -33,6 +34,7 @@ export default function Studio() {
   const [batchIndex, setBatchIndex] = useState(0)
   const [showModePicker, setShowModePicker] = useState(false)
   const [photoshootModes, setPhotoshootModes] = useState<PhotoshootMode[]>([])
+  const [showPaywall, setShowPaywall] = useState(false)
 
   const user = useAppStore((s) => s.user)
   const streak = user?.streak ?? 0
@@ -93,6 +95,12 @@ export default function Studio() {
         if (job.output_url) {
           useAppStore.getState().prependGallery(job)
         }
+
+        // Proactive paywall: show right after result if credits just ran out
+        const credits = useAppStore.getState().user?.credits ?? 1
+        if (credits <= 0) {
+          setTimeout(() => setShowPaywall(true), 1800) // let user see result first
+        }
       }
     }
   })
@@ -130,9 +138,14 @@ export default function Studio() {
       setLoading(false)
       setProgressStep(0)
       setStepLabel(undefined)
-      const msg = e instanceof Error ? e.message : 'Generation failed'
       tg?.HapticFeedback?.notificationOccurred('error')
-      alert(msg)
+      // 402 = no credits — show paywall instead of alert
+      if ((e as { status?: number })?.status === 402) {
+        track('paywall_shown', { trigger: 'blocked', source: 'webapp' })
+        setShowPaywall(true)
+        return
+      }
+      alert(e instanceof Error ? e.message : 'Generation failed')
     }
   }
 
@@ -341,6 +354,16 @@ export default function Studio() {
         userCredits={user?.credits ?? 0}
         modes={photoshootModes}
       />
+
+      {/* Paywall modal */}
+      <AnimatePresence>
+        {showPaywall && (
+          <PaywallModal
+            lastResultUrl={currentJob?.output_url ?? undefined}
+            onClose={() => setShowPaywall(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }
