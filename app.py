@@ -833,7 +833,7 @@ SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "200"))
 SUB_PERIOD = 2592000  # 30 days in seconds
 
 # Weekly subscription tier (low barrier)
-SUB_WEEKLY_STARS   = int(os.getenv("SUB_WEEKLY_STARS",   "99"))
+SUB_WEEKLY_STARS   = int(os.getenv("SUB_WEEKLY_STARS",   "100"))
 SUB_WEEKLY_CREDITS = int(os.getenv("SUB_WEEKLY_CREDITS", "15"))
 SUB_WEEKLY_PERIOD  = 604800  # 7 days
 
@@ -959,7 +959,7 @@ def audit_log(actor_uid: Optional[int], action: str, target_uid: Optional[int] =
 
 def _job_result_json(job: Dict[str, Any]) -> str:
     result = {}
-    for key in ("output_url", "output_bytes", "delivery_message_id", "output_urls", "step_label"):
+    for key in ("output_url", "output_s3_key", "output_bytes", "delivery_message_id", "output_urls", "step_label"):
         if key in job:
             result[key] = job.get(key)
     return json.dumps(result, ensure_ascii=False)
@@ -1047,6 +1047,16 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 _PRESET_THUMBS_DIR = os.path.join(_DATA_DIR, "preset-thumbs")
 os.makedirs(_PRESET_THUMBS_DIR, exist_ok=True)
 app.mount("/preset-thumbs", _SF(directory=_PRESET_THUMBS_DIR), name="preset_thumbs")
+
+# Thumbnail S3 key registry — committed to git, survives deploys
+_PRESET_THUMB_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preset-thumbs.json")
+PRESET_THUMB_KEYS: dict = {}
+try:
+    if os.path.exists(_PRESET_THUMB_CONFIG):
+        with open(_PRESET_THUMB_CONFIG) as _f:
+            PRESET_THUMB_KEYS = json.load(_f)
+except Exception:
+    pass
 
 # Gallery JSON-lines cache — persists completed jobs when DB is unavailable
 import json as _json
@@ -2403,6 +2413,54 @@ def s3_put_and_presign(img_bytes: bytes, key_prefix: str = "inputs/") -> Optiona
     except Exception as e:
         print("S3 upload/presign error:", str(e)[:200])
         return None
+
+def s3_upload_and_key(
+    img_bytes: bytes,
+    key_prefix: str = "inputs/",
+    content_type: str = "image/jpeg",
+) -> tuple:
+    """Upload to S3 and return (presigned_url, s3_key) with 7-day expiry. Both None on error."""
+    if not all([S3_BUCKET, S3_KEY_ID, S3_SECRET, S3_ENDPOINT, S3_REGION]):
+        return None, None
+    key = f"{key_prefix}{int(time.time())}_{hashlib.md5(img_bytes).hexdigest()[:8]}.jpg"
+    try:
+        _s3.put_object(Bucket=S3_BUCKET, Key=key, Body=img_bytes, ContentType=content_type)
+        url = _s3.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": S3_BUCKET, "Key": key},
+            ExpiresIn=604800,
+        )
+        return url, key
+    except Exception as e:
+        print(f"S3 upload_and_key error: {e}")
+        return None, None
+
+
+def s3_presign_key(key: str, expires: int = 604800) -> Optional[str]:
+    """Generate a fresh presigned URL for an existing S3 key (7-day default)."""
+    if not all([S3_BUCKET, S3_KEY_ID, S3_SECRET, S3_ENDPOINT]):
+        return None
+    try:
+        return _s3.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": S3_BUCKET, "Key": key},
+            ExpiresIn=expires,
+        )
+    except Exception:
+        return None
+
+
+def s3_put_at_key(img_bytes: bytes, key: str, content_type: str = "image/jpeg") -> bool:
+    """Upload to S3 at a specific fixed key (no random suffix)."""
+    if not all([S3_BUCKET, S3_KEY_ID, S3_SECRET, S3_ENDPOINT]):
+        return False
+    try:
+        _s3.put_object(Bucket=S3_BUCKET, Key=key, Body=img_bytes, ContentType=content_type)
+        return True
+    except Exception as e:
+        print(f"S3 put_at_key error: {e}")
+        return False
+
 
 # ===================== REPLICATE HELPERS =============
 def _extract_first_url(output) -> Optional[str]:
@@ -6411,7 +6469,7 @@ async def run_webapp_generation_job(job_id: str):
         stats_incr("jobs_failed", 1)
         record_job(job_id, status="failed", error=JOBS.get(job_id, {}).get("error") or "generation_failed")
         return
-    output_url = s3_put_and_presign(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
+    output_url, output_s3_key = s3_upload_and_key(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
     stats_incr("jobs_done", 1)
     # Variable reward: 10% chance of +1–3 bonus credits
     bonus_credits = 0
@@ -6423,8 +6481,8 @@ async def run_webapp_generation_job(job_id: str):
     if uid:
         ui = STATS_USERS_INFO.setdefault(uid, {})
         ui["last_gen_at"] = time.time()
-    record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes),
-               bonus_credits=bonus_credits if bonus_credits else None)
+    record_job(job_id, status="ready", output_url=output_url, output_s3_key=output_s3_key,
+               output_bytes=len(final_bytes), bonus_credits=bonus_credits if bonus_credits else None)
     _wjob = JOBS.get(job_id, {})
     analytics_event(_wjob.get("chat_id"), "generation_completed", {"source": "webapp", "mode": "everyday", "job_id": job_id})
     if uid:
@@ -6447,8 +6505,9 @@ async def _run_hd_upscale_job(hd_job_id: str, parent_job_id: str):
         if not hd_bytes:
             record_job(hd_job_id, status="failed", error="enhance_failed")
             return
-        output_url = s3_put_and_presign(hd_bytes, key_prefix=f"outputs/webapp/{hd_job_id}_hd_")
-        record_job(hd_job_id, status="ready", output_url=output_url, output_bytes=len(hd_bytes))
+        output_url, output_s3_key = s3_upload_and_key(hd_bytes, key_prefix=f"outputs/webapp/{hd_job_id}_hd_")
+        record_job(hd_job_id, status="ready", output_url=output_url, output_s3_key=output_s3_key,
+                   output_bytes=len(hd_bytes))
     except Exception as e:
         record_job(hd_job_id, status="failed", error=str(e)[:400])
 
@@ -6953,6 +7012,16 @@ async def api_leaderboard(request: Request):
         "updated_at": int(time.time()),
     }
 
+def _refresh_gallery_url(item: dict) -> dict:
+    """Regenerate a fresh 7-day presigned URL from the stored S3 key (if available)."""
+    s3_key = item.get("output_s3_key")
+    if s3_key:
+        fresh = s3_presign_key(s3_key)
+        if fresh:
+            item = dict(item, output_url=fresh)
+    return item
+
+
 @app.get("/api/v1/gallery")
 async def api_gallery(request: Request):
     user = webapp_user_from_request(request)
@@ -6960,13 +7029,16 @@ async def api_gallery(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     uid = int(user["uid"])
     if DB_READY:
-        items = [public_job_snapshot(j) for j in _db_load_user_jobs(uid, 50)]
+        items = [_refresh_gallery_url(public_job_snapshot(j)) for j in _db_load_user_jobs(uid, 50)]
     else:
         all_cached = _cache_load_jobs()
-        items = sorted(
-            [j for j in all_cached if int(j.get("chat_id") or 0) == uid],
-            key=lambda x: x.get("created_at", 0), reverse=True,
-        )[:50]
+        items = [
+            _refresh_gallery_url(j)
+            for j in sorted(
+                [j for j in all_cached if int(j.get("chat_id") or 0) == uid],
+                key=lambda x: x.get("created_at", 0), reverse=True,
+            )[:50]
+        ]
     return {"items": items}
 
 @app.delete("/api/v1/gallery/{job_id}")
@@ -7569,6 +7641,14 @@ async def api_presets(request: Request):
     uid = int(user["uid"])
     unlocked = USER_STYLE_PACKS.get(uid, set())
     age_unlocked = USER_AGE_PACKS.get(uid, False)
+    def _thumb_url(key: str) -> str:
+        s3_k = PRESET_THUMB_KEYS.get(key)
+        if s3_k and S3_BUCKET:
+            fresh = s3_presign_key(s3_k)
+            if fresh:
+                return fresh
+        return f"/preset-thumbs/{key}.webp"
+
     result = []
     for p in PRESETS:
         lang = USER_LANG.get(uid, LANG_DEFAULT)
@@ -7578,17 +7658,17 @@ async def api_presets(request: Request):
         elif lang == "de": label = p.label_de
         result.append({"key": p.key, "label": label, "category": _preset_category(p.key),
                         "is_premium": False, "locked": False, "emoji": getattr(p, "emoji", "✦"),
-                        "thumbnail_url": f"/preset-thumbs/{p.key}.webp"})
+                        "thumbnail_url": _thumb_url(p.key)})
     for s in PREMIUM_STYLES:
         result.append({"key": s["key"], "label": s["label_en"], "emoji": s.get("emoji","✦"),
                         "category": s["category"], "is_premium": True,
                         "pack_id": s["pack_id"], "locked": s["pack_id"] not in unlocked,
-                        "thumbnail_url": f"/preset-thumbs/{s['key']}.webp"})
+                        "thumbnail_url": _thumb_url(s["key"])})
     for a in AGE_STYLES:
         result.append({"key": a["key"], "label": a["label_en"], "emoji": a.get("emoji","✨"),
                         "category": "age", "is_premium": True,
                         "pack_id": "age_pack", "locked": not age_unlocked,
-                        "thumbnail_url": f"/preset-thumbs/{a['key']}.webp"})
+                        "thumbnail_url": _thumb_url(a["key"])})
     for pack_id, cfg in PRESET_PACKS.items():
         pack_unlocked = pack_id in unlocked
         lang = USER_LANG.get(uid, LANG_DEFAULT)
@@ -7599,7 +7679,7 @@ async def api_presets(request: Request):
                 "category": cfg["category"], "is_premium": True,
                 "pack_id": pack_id, "locked": not pack_unlocked,
                 "prompt": p["prompt"],
-                "thumbnail_url": f"/preset-thumbs/{p['key']}.webp",
+                "thumbnail_url": _thumb_url(p["key"]),
             })
     trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
     return {"presets": result, "trending": trending_keys}
@@ -7906,8 +7986,18 @@ async def api_admin_generate_preset_thumbs(request: Request):
                     with open(path, "wb") as fh:
                         fh.write(result)
                     print(f"✅ thumb saved: {_key} ({len(result)} bytes)")
+                    s3_key = f"preset-thumbs/{_key}.webp"
+                    if s3_put_at_key(result, s3_key, content_type="image/webp"):
+                        PRESET_THUMB_KEYS[_key] = s3_key
+                        print(f"✅ thumb uploaded to S3: {s3_key}")
             except Exception as exc:
                 print(f"⚠️ thumb failed: {_key}: {exc}")
+        try:
+            with open(_PRESET_THUMB_CONFIG, "w") as _f:
+                json.dump(PRESET_THUMB_KEYS, _f, indent=2, sort_keys=True)
+            print(f"✅ preset-thumbs.json updated ({len(PRESET_THUMB_KEYS)} entries)")
+        except Exception as _e:
+            print(f"preset-thumbs.json write error: {_e}")
 
     asyncio.create_task(_gen_all_thumbs())
     return {"queued": len(PRESETS), "keys": [p.key for p in PRESETS]}
