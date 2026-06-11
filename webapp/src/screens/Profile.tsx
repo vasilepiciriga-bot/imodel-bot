@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift } from 'lucide-react'
+import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
 import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
@@ -179,11 +179,28 @@ export default function Profile() {
   }
 
   const streak = user?.streak ?? 0
+  const totalGens = user?.total_generated ?? 0
   const initials = (tg?.initDataUnsafe?.user?.first_name ?? 'U').charAt(0).toUpperCase()
   const username = tg?.initDataUnsafe?.user?.username
   const displayName = tg?.initDataUnsafe?.user?.first_name ?? 'User'
   const weekDays = Array.from({ length: 7 }, (_, i) => i < streak % 7)
   const claimableCount = quests.filter((q) => q.claimable).length
+
+  // Next milestone logic
+  const GEN_MILESTONES = [10, 50, 100, 250, 500, 1000]
+  const STREAK_MILESTONES = [3, 7, 14, 30, 60, 100]
+  const nextGenMilestone = GEN_MILESTONES.find((m) => m > totalGens) ?? null
+  const nextStreakMilestone = STREAK_MILESTONES.find((m) => m > streak) ?? null
+  const milestoneDiff = (nextGenMilestone ? nextGenMilestone - totalGens : Infinity)
+  const streakDiff = (nextStreakMilestone ? nextStreakMilestone - streak : Infinity)
+  const showMilestone = milestoneDiff <= 15 || streakDiff <= 3
+  const milestoneIsGen = milestoneDiff <= streakDiff
+  const milestoneTarget = milestoneIsGen ? nextGenMilestone : nextStreakMilestone
+  const milestoneProgress = milestoneIsGen ? totalGens : streak
+  const milestoneRemaining = milestoneIsGen ? milestoneDiff : streakDiff
+  const milestoneLabel = milestoneIsGen
+    ? `${milestoneRemaining} more gen${milestoneRemaining !== 1 ? 's' : ''} → ${nextGenMilestone} total achievement`
+    : `${milestoneRemaining} more day${milestoneRemaining !== 1 ? 's' : ''} → ${nextStreakMilestone}-day streak badge`
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -218,20 +235,45 @@ export default function Profile() {
           </div>
         </div>
 
-        {/* Stats row */}
-        <div className="grid grid-cols-3 gap-2">
+        {/* Stats row — 4 cards */}
+        <div className="grid grid-cols-4 gap-2">
           {[
-            { icon: Camera, value: user?.total_generated ?? 0, label: 'Photos' },
-            { icon: Flame, value: streak, label: 'Day streak', fill: true },
-            { icon: Users, value: user?.friends_invited ?? 0, label: 'Friends' },
-          ].map(({ icon: Icon, value, label, fill }) => (
-            <div key={label} className="flex flex-col items-center p-3 bg-white rounded-card shadow-sm">
-              <Icon size={18} className={fill ? 'text-orange-500 mb-1' : 'text-[#6C47FF] mb-1'} fill={fill ? 'currentColor' : 'none'} />
-              <span className="text-[22px] font-bold text-[#1D1D1F] leading-none">{value}</span>
-              <span className="text-[10px] text-[#6E6E73] mt-0.5">{label}</span>
+            { icon: Camera,  value: totalGens,                   label: 'Photos',  color: 'text-[#6C47FF]', fill: false },
+            { icon: Flame,   value: streak,                      label: 'Streak',  color: 'text-orange-500', fill: true },
+            { icon: Users,   value: user?.friends_invited ?? 0,  label: 'Invited', color: 'text-[#34C759]',  fill: false },
+            { icon: Target,  value: achievements.filter((a) => a.unlocked).length, label: 'Awards', color: 'text-[#FF9500]', fill: false },
+          ].map(({ icon: Icon, value, label, color, fill }) => (
+            <div key={label} className="flex flex-col items-center p-2.5 bg-white rounded-[16px] shadow-sm">
+              <Icon size={16} className={`${color} mb-1`} fill={fill ? 'currentColor' : 'none'} />
+              <span className="text-[18px] font-bold text-[#1D1D1F] leading-none">{value}</span>
+              <span className="text-[9px] text-[#6E6E73] mt-0.5 text-center leading-tight">{label}</span>
             </div>
           ))}
         </div>
+
+        {/* Next milestone card */}
+        {showMilestone && milestoneTarget && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 rounded-[20px] bg-gradient-to-r from-[#6C47FF]/10 to-[#FF2D78]/10 border border-[#6C47FF]/20"
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[18px]">🎯</span>
+              <p className="text-[13px] font-bold text-[#1D1D1F]">Almost there!</p>
+            </div>
+            <p className="text-[12px] text-[#6E6E73] mb-2.5">{milestoneLabel}</p>
+            <div className="h-2 rounded-full bg-black/[0.06] overflow-hidden">
+              <motion.div
+                className="h-full rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78]"
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(100, (milestoneProgress / milestoneTarget) * 100)}%` }}
+                transition={{ duration: 0.8, ease: 'easeOut' }}
+              />
+            </div>
+            <p className="text-[10px] text-[#6E6E73] mt-1.5 text-right">{milestoneProgress}/{milestoneTarget}</p>
+          </motion.div>
+        )}
 
         {/* Streak calendar */}
         {streak > 0 && (

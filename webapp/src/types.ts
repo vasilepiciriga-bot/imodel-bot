@@ -24,6 +24,7 @@ export interface UserProfile {
   portfolio_public?: boolean
   portfolio_url?: string
   role?: string
+  last_gen_at?: number | null
 }
 
 export interface Preset {
@@ -90,6 +91,7 @@ export interface Challenge {
   label: string
   bonus_credits: number
   date: string
+  participants_today?: number
 }
 
 export interface QuestItem {

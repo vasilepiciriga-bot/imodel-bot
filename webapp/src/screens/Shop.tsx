@@ -1,16 +1,17 @@
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, Zap, Crown, Star } from 'lucide-react'
+import { CheckCircle2, Zap, Crown, Star, Check, ChevronRight } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { getShop, createInvoice, type ShopData } from '../api/shop'
 import { getMe } from '../api/session'
 import { useAppStore } from '../store/appStore'
 import { track } from '../api/analytics'
 import { useToast } from '../hooks/useToast'
+import { hap } from '../lib/haptics'
 
 const tg = window.Telegram?.WebApp
 
-const SHOP_CACHE_KEY = 'imodel_shop_v1'
+const SHOP_CACHE_KEY = 'imodel_shop_v2'
 const SHOP_TTL = 5 * 60 * 1000
 
 async function getShopCached(): Promise<ShopData> {
@@ -30,8 +31,22 @@ function fireConfetti() {
   confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
 }
 
+const SUB_META: Record<string, { color: string; label: string; emoji: string; badge?: string }> = {
+  sub_weekly: { color: '#34C759',  label: 'Weekly',  emoji: '⚡', },
+  sub_pro:    { color: '#6C47FF',  label: 'Pro',     emoji: '🚀', badge: 'Most Popular' },
+  sub_elite:  { color: '#FF9500',  label: 'Elite',   emoji: '👑' },
+}
+
+const PACK_META: Record<string, { badge?: string; highlight?: boolean }> = {
+  pack_10:  {},
+  pack_30:  { badge: 'Popular' },
+  pack_100: { badge: 'Best Value', highlight: true },
+  pack_300: { badge: 'Pro Pick' },
+}
+
 export default function Shop() {
   const [shop, setShop] = useState<ShopData | null>(null)
+  const [activeSubTab, setActiveSubTab] = useState<'monthly' | 'packs'>('monthly')
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
   const updateCredits = useAppStore((s) => s.updateCredits)
@@ -42,20 +57,21 @@ export default function Shop() {
   }, [])
 
   const handleBuy = useCallback(async (itemId: string, stars?: number) => {
-    tg?.HapticFeedback?.impactOccurred('medium')
+    hap.medium()
     track('buy_tapped', { pack: itemId, stars: stars ?? 0 })
     try {
       const { invoice_url } = await createInvoice(itemId)
       tg?.openInvoice(invoice_url, async (status: string) => {
         if (status === 'paid') {
           fireConfetti()
-          tg?.HapticFeedback?.notificationOccurred('success')
+          hap.success()
           const updated = await getMe()
           setUser(updated)
           updateCredits(updated.credits)
           localStorage.removeItem(SHOP_CACHE_KEY)
           const freshShop = await getShop()
           setShop(freshShop)
+          toast.success('Purchase successful!', { icon: '🎉', sub: 'Credits added to your balance' })
         }
       })
     } catch (e: unknown) {
@@ -67,183 +83,329 @@ export default function Shop() {
   const credits = user?.credits ?? 0
   const activePlan = shop?.subscription
 
+  const allFeatures = ['Generations', 'All styles', 'HD upscale', 'Priority queue', 'Batch ×4', 'Early access']
+  const freeFeatures = ['5 free gens/day', 'All basic styles', 'Standard quality']
+
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
-      <div className="px-4 pt-4 pb-2">
+    <div className="flex flex-col h-full overflow-y-auto bg-[#F5F5F7]">
+      {/* Banner */}
+      <AnimatePresence>
+        {shop?.banner && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-gradient-to-r from-[#FF2D78] to-[#FF9500] px-4 py-2.5 text-white text-[12px] font-semibold text-center"
+          >
+            {shop.banner}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="px-4 pt-4 pb-1">
         <h1 className="text-[22px] font-bold text-[#1D1D1F]">🛍 Shop</h1>
       </div>
 
-      <div className="flex-1 px-4 pb-6 space-y-5">
+      <div className="flex-1 px-4 pb-8 space-y-4">
         {/* Balance hero */}
-        <div className="p-5 rounded-card bg-gradient-to-br from-[#6C47FF] to-[#FF2D78] text-white text-center">
-          <p className="text-[13px] opacity-80 font-medium">Your balance</p>
-          <p className="text-[48px] font-bold leading-none mt-1">{credits}</p>
-          <p className="text-[13px] opacity-80 mt-1">generations remaining</p>
+        <div className="relative rounded-[24px] overflow-hidden p-5 text-white"
+          style={{ background: 'linear-gradient(135deg, #6C47FF 0%, #FF2D78 100%)' }}>
+          <div className="absolute top-0 right-0 w-40 h-40 rounded-full opacity-10 bg-white"
+            style={{ transform: 'translate(30%, -30%)' }} />
+          <p className="text-[12px] font-semibold opacity-80 uppercase tracking-widest">Your balance</p>
+          <div className="flex items-end gap-2 mt-1">
+            <span className="text-[52px] font-black leading-none">{credits}</span>
+            <span className="text-[16px] font-medium opacity-80 mb-2">generations</span>
+          </div>
           {credits <= 5 && (
             <motion.p
               animate={{ opacity: [0.7, 1, 0.7] }}
-              transition={{ repeat: Infinity, duration: 1.5 }}
-              className="text-[12px] mt-2 font-semibold"
+              transition={{ repeat: Infinity, duration: 1.4 }}
+              className="text-[12px] font-semibold mt-1 opacity-90"
             >
               ⚡ Running low — top up now
             </motion.p>
           )}
+          {activePlan && (
+            <div className="mt-3 flex items-center gap-1.5 bg-white/20 rounded-full px-3 py-1 w-fit">
+              <CheckCircle2 size={12} />
+              <span className="text-[11px] font-semibold capitalize">{activePlan.plan} active</span>
+            </div>
+          )}
         </div>
 
-        {/* Subscriptions */}
-        <div>
-          <p className="text-[13px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Subscriptions</p>
-          <div className="space-y-2">
-            {(shop?.subscriptions ?? []).map((sub) => {
-              const isActive = activePlan?.plan === sub.id
-              return (
-                <motion.button
-                  key={sub.id}
-                  whileTap={isActive ? {} : { scale: 0.98 }}
-                  disabled={isActive}
-                  onClick={() => handleBuy(sub.id, sub.stars)}
-                  className={`w-full flex items-center justify-between p-4 rounded-card border-2 ${
-                    isActive ? 'border-[#34C759] bg-[#34C759]/5' : 'border-[#6C47FF]/20 bg-white'
-                  }`}
-                >
-                  <div className="text-left">
-                    <div className="flex items-center gap-2">
-                      <Crown size={16} className={isActive ? 'text-[#34C759]' : 'text-[#6C47FF]'} />
-                      <span className="text-[15px] font-semibold text-[#1D1D1F]">{sub.label}</span>
-                    </div>
-                    <p className="text-[12px] text-[#6E6E73] mt-0.5">{sub.credits} generations · auto-renew</p>
-                    {isActive && activePlan?.expiry && (
-                      <p className="text-[11px] text-[#34C759] mt-0.5">
-                        ✓ Active until {new Date(activePlan.expiry).toLocaleDateString()}
-                      </p>
+        {/* Tab switcher */}
+        <div className="flex rounded-[14px] bg-[#E8E8ED] p-1 gap-1">
+          {(['monthly', 'packs'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => { hap.select(); setActiveSubTab(tab) }}
+              className={`flex-1 py-2 rounded-[10px] text-[13px] font-semibold transition-all ${
+                activeSubTab === tab
+                  ? 'bg-white text-[#1D1D1F] shadow-sm'
+                  : 'text-[#6E6E73]'
+              }`}
+            >
+              {tab === 'monthly' ? '💎 Subscriptions' : '⚡ Credit Packs'}
+            </button>
+          ))}
+        </div>
+
+        <AnimatePresence mode="wait">
+          {activeSubTab === 'monthly' ? (
+            <motion.div key="subs"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-3"
+            >
+              {/* Subscription comparison cards */}
+              {(shop?.subscriptions ?? []).map((sub) => {
+                const meta = SUB_META[sub.id] ?? { color: '#6C47FF', label: sub.plan, emoji: '⚡' }
+                const isActive = activePlan?.plan === sub.plan
+                const features = shop?.subscription_features?.[sub.plan] ?? []
+                return (
+                  <motion.div
+                    key={sub.id}
+                    whileTap={isActive ? {} : { scale: 0.98 }}
+                    className={`rounded-[20px] overflow-hidden border-2 ${
+                      isActive ? 'border-[#34C759]' : meta.badge ? `border-[${meta.color}]/40` : 'border-black/[0.06]'
+                    } bg-white`}
+                  >
+                    {meta.badge && !isActive && (
+                      <div className="py-1.5 text-center text-[11px] font-bold text-white"
+                        style={{ background: `linear-gradient(90deg, ${meta.color}, #FF2D78)` }}>
+                        {meta.badge}
+                      </div>
                     )}
-                  </div>
-                  {isActive ? (
-                    <CheckCircle2 size={22} className="text-[#34C759]" />
-                  ) : (
-                    <div className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] rounded-pill text-white text-[13px] font-semibold">
-                      <Star size={12} fill="white" strokeWidth={0} /> {sub.stars}
+                    {isActive && (
+                      <div className="py-1.5 text-center text-[11px] font-bold text-white bg-[#34C759]">
+                        ✓ Your current plan
+                      </div>
+                    )}
+                    <div className="p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[22px]">{meta.emoji}</span>
+                          <div>
+                            <p className="text-[16px] font-bold text-[#1D1D1F]">{meta.label}</p>
+                            <p className="text-[11px] text-[#6E6E73]">{sub.credits} gens / {sub.period}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="flex items-center gap-1">
+                            <Star size={13} style={{ color: meta.color }} fill={meta.color} strokeWidth={0} />
+                            <span className="text-[18px] font-black" style={{ color: meta.color }}>{sub.stars}</span>
+                          </div>
+                          <p className="text-[10px] text-[#6E6E73]">per {sub.period}</p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5 mb-3">
+                        {features.slice(0, 4).map((f) => (
+                          <div key={f} className="flex items-center gap-1">
+                            <Check size={11} style={{ color: meta.color }} strokeWidth={3} />
+                            <span className="text-[11px] text-[#1D1D1F]">{f}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {!isActive && (
+                        <motion.button
+                          whileTap={{ scale: 0.97 }}
+                          onClick={() => handleBuy(sub.id, sub.stars)}
+                          className="w-full py-3 rounded-[14px] text-white text-[14px] font-bold"
+                          style={{ background: `linear-gradient(135deg, ${meta.color}, #FF2D78)` }}
+                        >
+                          Subscribe · {sub.stars}★ / {sub.period}
+                        </motion.button>
+                      )}
+                      {isActive && activePlan?.expiry && (
+                        <p className="text-center text-[11px] text-[#34C759] font-medium">
+                          Renews {new Date(activePlan.expiry).toLocaleDateString()}
+                        </p>
+                      )}
                     </div>
-                  )}
-                </motion.button>
-              )
-            })}
-          </div>
-        </div>
+                  </motion.div>
+                )
+              })}
 
-        {/* Credit packs */}
-        <div>
-          <p className="text-[13px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Credit Packs</p>
-          <div className="grid grid-cols-2 gap-2">
-            {(shop?.packs ?? []).map((pack) => (
-              <motion.button
-                key={pack.id}
-                whileTap={{ scale: 0.96 }}
-                onClick={() => handleBuy(pack.id, pack.stars)}
-                className="p-4 rounded-card bg-white border border-black/[0.06] shadow-card text-left"
-              >
-                <div className="flex items-center gap-1 mb-1">
-                  <Zap size={14} className="text-[#6C47FF]" fill="#6C47FF" strokeWidth={0} />
-                  <span className="text-[20px] font-bold text-[#1D1D1F]">{pack.credits}</span>
+              {/* Free vs Pro comparison */}
+              <div className="rounded-[20px] bg-white border border-black/[0.06] p-4">
+                <p className="text-[13px] font-bold text-[#1D1D1F] mb-3">Free vs Pro</p>
+                <div className="grid grid-cols-3 gap-x-2 text-[11px]">
+                  <div className="text-[#6E6E73] font-medium">Feature</div>
+                  <div className="text-center text-[#6E6E73] font-medium">Free</div>
+                  <div className="text-center font-bold" style={{ color: '#6C47FF' }}>Pro</div>
+                  {[
+                    ['Daily gens', '5', '50+'],
+                    ['HD upscale', '✗', '✓'],
+                    ['All styles', '✓', '✓'],
+                    ['Batch ×4', '✗', '✓'],
+                    ['Priority', '✗', '✓'],
+                  ].map(([feat, free, pro]) => (
+                    <>
+                      <div key={feat} className="py-1.5 border-t border-black/[0.04] text-[#1D1D1F]">{feat}</div>
+                      <div className={`py-1.5 border-t border-black/[0.04] text-center ${free === '✗' ? 'text-[#FF3B30]' : 'text-[#34C759]'}`}>{free}</div>
+                      <div className={`py-1.5 border-t border-black/[0.04] text-center font-bold ${pro === '✗' ? 'text-[#FF3B30]' : 'text-[#6C47FF]'}`}>{pro}</div>
+                    </>
+                  ))}
                 </div>
-                <p className="text-[11px] text-[#6E6E73]">generations</p>
-                <p className="mt-2 text-[13px] font-semibold text-[#6C47FF]">{pack.stars} ★</p>
-              </motion.button>
-            ))}
-          </div>
-        </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div key="packs"
+              initial={{ opacity: 0, x: 10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 10 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-4"
+            >
+              {/* Credit packs grid */}
+              <div className="grid grid-cols-2 gap-3">
+                {(shop?.packs ?? []).map((pack) => {
+                  const perCredit = Math.round(pack.stars / pack.credits)
+                  const meta = PACK_META[pack.id] ?? {}
+                  return (
+                    <motion.button
+                      key={pack.id}
+                      whileTap={{ scale: 0.96 }}
+                      onClick={() => handleBuy(pack.id, pack.stars)}
+                      className={`relative p-4 rounded-[20px] text-left overflow-hidden ${
+                        meta.highlight
+                          ? 'bg-gradient-to-br from-[#6C47FF] to-[#FF2D78] text-white'
+                          : 'bg-white border border-black/[0.06]'
+                      }`}
+                    >
+                      {meta.badge && (
+                        <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                          meta.highlight ? 'bg-white/20 text-white' : 'bg-[#6C47FF]/15 text-[#6C47FF]'
+                        }`}>
+                          {meta.badge}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <Zap size={15} className={meta.highlight ? 'text-white' : 'text-[#6C47FF]'}
+                          fill={meta.highlight ? 'white' : '#6C47FF'} strokeWidth={0} />
+                        <span className={`text-[26px] font-black leading-none ${meta.highlight ? 'text-white' : 'text-[#1D1D1F]'}`}>
+                          {pack.credits}
+                        </span>
+                      </div>
+                      <p className={`text-[11px] mb-2 ${meta.highlight ? 'text-white/80' : 'text-[#6E6E73]'}`}>
+                        generations
+                      </p>
+                      <p className={`text-[13px] font-bold ${meta.highlight ? 'text-white' : 'text-[#6C47FF]'}`}>
+                        {pack.stars}★
+                      </p>
+                      <p className={`text-[10px] ${meta.highlight ? 'text-white/70' : 'text-[#6E6E73]'}`}>
+                        {perCredit}★ per gen
+                      </p>
+                    </motion.button>
+                  )
+                })}
+              </div>
 
-        {/* Preset Packs */}
-        {(shop?.preset_packs ?? []).some((p) => !p.unlocked) && (
-          <div>
-            <p className="text-[13px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Preset Packs</p>
-            <div className="space-y-2">
-              {(shop?.preset_packs ?? []).filter((p) => !p.unlocked).map((pack) => (
-                <motion.button
-                  key={pack.id}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => handleBuy(pack.id, pack.stars)}
-                  className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#FF9500]/10 to-[#6C47FF]/10 border border-[#FF9500]/20"
-                >
-                  <span className="text-2xl">{pack.emoji}</span>
-                  <div className="flex-1 text-left">
-                    <p className="text-[14px] font-semibold text-[#1D1D1F]">{pack.label}</p>
-                    <p className="text-[11px] text-[#6E6E73]">{pack.presets_count} presets · one-time unlock</p>
+              {/* Value tip */}
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-[12px] bg-[#6C47FF]/8 border border-[#6C47FF]/15">
+                <span className="text-[18px]">💡</span>
+                <p className="text-[12px] text-[#1D1D1F]">
+                  <span className="font-bold">100-pack saves 40%</span> vs buying 10 at a time
+                </p>
+              </div>
+
+              {/* Style packs */}
+              {(shop?.style_packs ?? []).some((p) => !p.unlocked) && (
+                <div>
+                  <p className="text-[12px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Style Packs</p>
+                  <div className="space-y-2">
+                    {(shop?.style_packs ?? []).filter((p) => !p.unlocked).map((pack) => (
+                      <motion.button
+                        key={pack.id}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => handleBuy(pack.id, pack.stars)}
+                        className="w-full flex items-center gap-3 p-4 rounded-[16px] bg-white border border-black/[0.06]"
+                      >
+                        <div className="w-10 h-10 rounded-[12px] bg-gradient-to-br from-[#6C47FF] to-[#FF2D78] flex items-center justify-center">
+                          <Crown size={18} className="text-white" />
+                        </div>
+                        <div className="flex-1 text-left">
+                          <p className="text-[14px] font-semibold text-[#1D1D1F]">{pack.label}</p>
+                          <p className="text-[11px] text-[#6E6E73]">{pack.styles_count} exclusive styles · one-time</p>
+                        </div>
+                        <div className="flex items-center gap-1 text-[#6C47FF] font-bold text-[13px]">
+                          <Star size={12} fill="#6C47FF" strokeWidth={0} />
+                          {pack.stars}
+                        </div>
+                      </motion.button>
+                    ))}
                   </div>
-                  <span className="text-[14px] font-bold text-[#6C47FF]">{pack.stars}★</span>
-                </motion.button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Power-ups */}
-        <div>
-          <p className="text-[13px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Power-Ups</p>
-          <div className="space-y-2">
-            {/* Style Pack */}
-            {shop && !(user?.unlocked_packs ?? []).includes('premium_pack_1') && (
-              <motion.button
-                whileTap={{ scale: 0.98 }}
-                onClick={() => handleBuy('premium_pack_1', shop?.style_packs?.find(p => p.id === 'premium_pack_1')?.stars ?? 490)}
-                className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#6C47FF]/10 to-[#FF2D78]/10 border border-[#6C47FF]/20"
-              >
-                <span className="text-2xl">🎨</span>
-                <div className="flex-1 text-left">
-                  <p className="text-[14px] font-semibold text-[#1D1D1F]">Premium Style Pack</p>
-                  <p className="text-[11px] text-[#6E6E73]">15 exclusive styles · one-time unlock</p>
                 </div>
-                <span className="text-[14px] font-bold text-[#6C47FF]">{shop?.style_packs?.find(p => p.id === 'premium_pack_1')?.stars ?? 490}★</span>
-              </motion.button>
-            )}
+              )}
 
-            {/* Age Pack */}
-            {shop && !user?.age_pack && (
-              <motion.button
-                whileTap={{ scale: 0.98 }}
-                onClick={() => handleBuy('age_pack', shop?.style_packs?.find(p => p.id === 'age_pack')?.stars ?? 290)}
-                className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#FF9500]/10 to-[#FF2D78]/10 border border-[#FF9500]/20"
-              >
-                <span className="text-2xl">🎭</span>
-                <div className="flex-1 text-left">
-                  <p className="text-[14px] font-semibold text-[#1D1D1F]">Age Magic Pack</p>
-                  <p className="text-[11px] text-[#6E6E73]">Young/Old filters · 4 styles · one-time</p>
+              {/* Preset packs */}
+              {(shop?.preset_packs ?? []).some((p) => !p.unlocked) && (
+                <div>
+                  <p className="text-[12px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Preset Packs</p>
+                  <div className="space-y-2">
+                    {(shop?.preset_packs ?? []).filter((p) => !p.unlocked).map((pack) => (
+                      <motion.button
+                        key={pack.id}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => handleBuy(pack.id, pack.stars)}
+                        className="w-full flex items-center gap-3 p-4 rounded-[16px] bg-gradient-to-r from-[#FF9500]/8 to-[#6C47FF]/8 border border-[#FF9500]/20"
+                      >
+                        <span className="text-[26px]">{pack.emoji}</span>
+                        <div className="flex-1 text-left">
+                          <p className="text-[14px] font-semibold text-[#1D1D1F]">{pack.label}</p>
+                          <p className="text-[11px] text-[#6E6E73]">{pack.presets_count} presets · one-time unlock</p>
+                        </div>
+                        <span className="text-[13px] font-bold text-[#6C47FF]">{pack.stars}★</span>
+                      </motion.button>
+                    ))}
+                  </div>
                 </div>
-                <span className="text-[14px] font-bold text-[#FF9500]">{shop?.style_packs?.find(p => p.id === 'age_pack')?.stars ?? 290}★</span>
-              </motion.button>
-            )}
+              )}
 
-            {/* Feature info */}
-            <div className="flex gap-2">
-              <div className="flex-1 p-3 rounded-card bg-[#F5F5F7]">
-                <p className="text-[13px] font-semibold text-[#1D1D1F]">🎯 Batch ×4</p>
-                <p className="text-[11px] text-[#6E6E73] mt-0.5">3 credits → 4 variations</p>
-                <p className="text-[11px] text-[#34C759] mt-1 font-medium">Free feature</p>
+              {/* Free features */}
+              <div className="rounded-[16px] bg-white border border-black/[0.06] p-4">
+                <p className="text-[13px] font-bold text-[#1D1D1F] mb-2">✓ Always free</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    { icon: '🎯', label: 'Batch ×4', sub: '3 credits → 4 photos' },
+                    { icon: '💎', label: 'HD Upscale', sub: '+2 credits per photo' },
+                    { icon: '🎁', label: 'Daily bonus', sub: '+1 gen every day' },
+                    { icon: '👥', label: 'Referrals', sub: '+3 per friend' },
+                  ].map(({ icon, label, sub }) => (
+                    <div key={label} className="flex items-start gap-2 p-2.5 rounded-[12px] bg-[#F5F5F7]">
+                      <span className="text-[16px] mt-0.5">{icon}</span>
+                      <div>
+                        <p className="text-[12px] font-semibold text-[#1D1D1F]">{label}</p>
+                        <p className="text-[10px] text-[#6E6E73]">{sub}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="flex-1 p-3 rounded-card bg-[#F5F5F7]">
-                <p className="text-[13px] font-semibold text-[#1D1D1F]">💎 HD Upscale</p>
-                <p className="text-[11px] text-[#6E6E73] mt-0.5">+2 credits per photo</p>
-                <p className="text-[11px] text-[#34C759] mt-1 font-medium">Free feature</p>
-              </div>
-            </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Referral CTA */}
+        <motion.button
+          whileTap={{ scale: 0.98 }}
+          onClick={() => {
+            const link = `https://t.me/share/url?url=https://t.me/imodelbot?start=ref_${user?.uid}&text=AI+photo+generator!`
+            tg?.openLink(link)
+            track('referral_share_tapped', { source: 'shop' })
+          }}
+          className="w-full flex items-center gap-3 p-4 rounded-[16px] bg-white border border-black/[0.06]"
+        >
+          <span className="text-[26px]">🎁</span>
+          <div className="flex-1 text-left">
+            <p className="text-[14px] font-semibold text-[#1D1D1F]">Invite Friends — Get 3 Free Gens</p>
+            <p className="text-[11px] text-[#6E6E73]">They get 3 free gens too · no limit</p>
           </div>
-        </div>
-
-        {/* Referral */}
-        <div className="p-4 rounded-card bg-[#F5F5F7]">
-          <p className="text-[15px] font-semibold text-[#1D1D1F]">🎁 Invite Friends</p>
-          <p className="text-[12px] text-[#6E6E73] mt-1">Get 3 free generations per friend</p>
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            onClick={() => {
-              const link = `https://t.me/share/url?url=https://t.me/imodelbot?start=ref_${user?.uid}&text=AI+photo+generator!`
-              tg?.openLink(link)
-            }}
-            className="mt-3 w-full py-2.5 rounded-pill bg-white border border-black/[0.08] text-[13px] font-medium text-[#1D1D1F]"
-          >
-            Share Invite Link
-          </motion.button>
-        </div>
+          <ChevronRight size={16} className="text-[#6E6E73]" />
+        </motion.button>
       </div>
     </div>
   )

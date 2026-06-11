@@ -88,6 +88,12 @@ export default function Studio() {
       if (isJobDone(job)) {
         tg?.HapticFeedback?.notificationOccurred('success')
 
+        // Variable reward toast
+        const jobAny = job as Generation & { bonus_credits?: number }
+        if (jobAny.bonus_credits && jobAny.bonus_credits > 0) {
+          toast.reward(`🎉 Bonus! +${jobAny.bonus_credits} free credits`, { sub: 'Lucky you — keep creating!' })
+        }
+
         // Handle multiple output_urls (tournament results)
         if (job.output_urls && job.output_urls.length > 1) {
           const pseudoJobs: Generation[] = job.output_urls.map((url, i) => ({
@@ -199,6 +205,21 @@ export default function Studio() {
         <SelfieUploader />
         <ModeSelector />
 
+        {/* Streak at risk banner */}
+        {user?.last_gen_at && (Date.now() / 1000 - user.last_gen_at) > 20 * 3600 && (user?.streak ?? 0) > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-2.5 px-4 py-3 rounded-card bg-orange-50 border border-orange-200"
+          >
+            <Flame size={18} className="text-orange-500 flex-shrink-0" fill="currentColor" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-bold text-orange-700">Streak at risk! 🔥 {streak} days</p>
+              <p className="text-[11px] text-orange-500">Generate now to keep your streak alive</p>
+            </div>
+          </motion.div>
+        )}
+
         {/* Daily Challenge Badge */}
         {challenge && (
           <motion.button
@@ -219,7 +240,14 @@ export default function Studio() {
             <span className="text-2xl">⚡</span>
             <div className="flex-1 text-left">
               <p className="text-[13px] font-semibold text-[#1D1D1F]">Trend today: {challenge.label}</p>
-              <p className="text-[11px] text-[#6E6E73]">+{challenge.bonus_credits} bonus credits</p>
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] text-[#6E6E73]">+{challenge.bonus_credits} bonus credits</p>
+                {challenge.participants_today && (
+                  <p className="text-[10px] font-semibold text-[#FF9500]">
+                    · {challenge.participants_today} creators today
+                  </p>
+                )}
+              </div>
             </div>
             <span className="text-[12px] font-medium text-[#FF9500]">Try →</span>
           </motion.button>

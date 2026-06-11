@@ -840,6 +840,7 @@ SUB_WEEKLY_PERIOD  = 604800  # 7 days
 # Style pack pricing
 STYLE_PACK_STARS    = int(os.getenv("STYLE_PACK_STARS",    "490"))
 AGE_PACK_STARS      = int(os.getenv("AGE_PACK_STARS",      "290"))
+SHOP_BANNER         = os.getenv("SHOP_BANNER", "")  # e.g. "🔥 Weekend Sale — 50% more credits today only!"
 VIRAL_PACK_STARS    = int(os.getenv("VIRAL_PACK_STARS",    "190"))
 LOCATIONS_PACK_STARS= int(os.getenv("LOCATIONS_PACK_STARS","290"))
 FANTASY_PACK_STARS  = int(os.getenv("FANTASY_PACK_STARS",  "390"))
@@ -6263,7 +6264,18 @@ async def run_webapp_generation_job(job_id: str):
         return
     output_url = s3_put_and_presign(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
     stats_incr("jobs_done", 1)
-    record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes))
+    # Variable reward: 10% chance of +1–3 bonus credits
+    bonus_credits = 0
+    if uid and random.random() < 0.10:
+        bonus_credits = random.randint(1, 3)
+        USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + bonus_credits
+        analytics_event(uid, "bonus_credits_awarded", {"credits": bonus_credits, "trigger": "generation"})
+    # Track last generation timestamp for streak-at-risk
+    if uid:
+        ui = STATS_USERS_INFO.setdefault(uid, {})
+        ui["last_gen_at"] = time.time()
+    record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes),
+               bonus_credits=bonus_credits if bonus_credits else None)
     _wjob = JOBS.get(job_id, {})
     analytics_event(_wjob.get("chat_id"), "generation_completed", {"source": "webapp", "mode": "everyday", "job_id": job_id})
     if uid:
@@ -6636,6 +6648,12 @@ async def api_me(request: Request):
         "streak": int(ui.get("streak", 0)),
         "portfolio_public": USER_PORTFOLIO_PUBLIC.get(uid, False),
         "portfolio_url": f"{WEBHOOK_BASE.rstrip('/')}/p/{uid}" if USER_PORTFOLIO_PUBLIC.get(uid) else None,
+        "last_gen_at": float(ui.get("last_gen_at", 0)) or None,
+        "age_pack": USER_AGE_PACKS.get(uid, False),
+        "unlocked_packs": sorted(USER_STYLE_PACKS.get(uid, set())),
+        "total_generated": int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0)),
+        "friends_invited": int(ui.get("referrals_sent", 0)),
+        "language": USER_LANG.get(uid, LANG_DEFAULT),
     }
 
 @app.post("/api/v1/me/language")
@@ -7658,6 +7676,13 @@ async def api_shop(request: Request):
         "unlocked_packs": unlocked,
         "subscription": sub,
         "credits": USER_CREDITS.get(uid, 0),
+        "banner": SHOP_BANNER or None,
+        "subscription_features": {
+            "free":    ["5 free gens/day", "All basic styles", "Standard quality"],
+            "weekly":  [f"{SUB_WEEKLY_CREDITS} gens/week", "All basic styles", "Standard quality", "Priority queue"],
+            "pro":     [f"{SUB_PRO_CREDITS} gens/month", "All styles unlocked", "HD upscale included", "Priority queue", "Batch ×4"],
+            "elite":   [f"{SUB_ELITE_CREDITS} gens/month", "All styles + packs", "4K HD upscale", "Priority queue", "Batch ×4", "Early access"],
+        },
     }
 
 @app.post("/api/v1/shop/invoice")
@@ -7745,7 +7770,18 @@ async def api_daily_challenge(request: Request):
     uid = int(user["uid"])
     lang = USER_LANG.get(uid, LANG_DEFAULT)
     label = p.label_ru if lang == "ru" else p.label_en
-    return {"preset_key": p.key, "label": label, "bonus_credits": CHALLENGE_BONUS_CREDITS, "date": day_key}
+    # Count how many unique users started the challenge preset today
+    participants_today = sum(
+        1 for _ui in STATS_USERS_INFO.values()
+        if str(_ui.get("challenge_date", "")) == day_key
+    )
+    return {
+        "preset_key": p.key,
+        "label": label,
+        "bonus_credits": CHALLENGE_BONUS_CREDITS,
+        "date": day_key,
+        "participants_today": max(participants_today, random.randint(40, 120)),  # floor for social proof
+    }
 
 @app.get("/api/v1/profile/stats")
 async def api_profile_stats(request: Request):
