@@ -1,17 +1,90 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Download, RefreshCw, Star, Images } from 'lucide-react'
+import { X, Download, RefreshCw, Star, Images, Trophy } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { getGallery, getCachedGallery, setCachedGallery, requestHD } from '../api/generations'
+import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
+import { track } from '../api/analytics'
 import type { Generation } from '../types'
 
 const tg = window.Telegram?.WebApp
+
+const MEDALS = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟']
+
+function LeaderboardModal({ data, onClose }: { data: LeaderboardData; onClose: () => void }) {
+  const period = data.period === '7d' ? 'This week' : 'All time'
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex flex-col bg-black/80"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+        className="mt-auto bg-[#1C1C1E] rounded-t-[24px] pb-safe"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Handle */}
+        <div className="flex justify-center pt-3 pb-1">
+          <div className="w-8 h-1 bg-white/20 rounded-full" />
+        </div>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+          <div>
+            <h2 className="text-[17px] font-bold text-white">🏆 Leaderboard</h2>
+            <p className="text-[12px] text-white/50 mt-0.5">{period} · top generators</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
+            <X size={16} className="text-white/70" />
+          </button>
+        </div>
+        {/* Entries */}
+        <div className="px-4 py-3 space-y-1 max-h-[60vh] overflow-y-auto">
+          {data.entries.map((e) => (
+            <motion.div
+              key={e.rank}
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: e.rank * 0.04 }}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-[12px] ${
+                e.is_me ? 'bg-[#6C47FF]/20 border border-[#6C47FF]/40' : 'bg-white/5'
+              }`}
+            >
+              <span className="text-[20px] w-7 text-center">{MEDALS[e.rank - 1] ?? `#${e.rank}`}</span>
+              <span className={`flex-1 text-[14px] font-medium ${e.is_me ? 'text-[#A88FFF]' : 'text-white'}`}>
+                {e.display_name}{e.is_me ? ' · you' : ''}
+              </span>
+              <span className="text-[13px] text-white/60 font-semibold">{e.gens}⚡</span>
+            </motion.div>
+          ))}
+          {data.my_rank && data.my_rank > 10 && (
+            <div className="flex items-center gap-3 px-3 py-2.5 rounded-[12px] bg-[#6C47FF]/10 border border-[#6C47FF]/20 mt-3">
+              <span className="text-[20px] w-7 text-center">#{data.my_rank}</span>
+              <span className="flex-1 text-[14px] font-medium text-[#A88FFF]">You</span>
+              <span className="text-[13px] text-white/60 font-semibold">{data.my_gens}⚡</span>
+            </div>
+          )}
+        </div>
+        <div className="px-4 pb-4 pt-2">
+          <p className="text-[11px] text-white/30 text-center">Generate more photos to climb the ranks ✦</p>
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
 
 export default function Gallery() {
   const gallery = useAppStore((s) => s.gallery)
   const setGallery = useAppStore((s) => s.setGallery)
   const [lightbox, setLightbox] = useState<Generation | null>(null)
   const [hdLoading, setHdLoading] = useState(false)
+  const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
+  const [showLeaderboard, setShowLeaderboard] = useState(false)
 
   useEffect(() => {
     const cached = getCachedGallery()
@@ -21,6 +94,10 @@ export default function Gallery() {
       setCachedGallery(items)
     }).catch(() => null)
   }, [setGallery])
+
+  useEffect(() => {
+    getLeaderboard().then(setLeaderboard).catch(() => null)
+  }, [])
 
   async function handleHD(job: Generation) {
     setHdLoading(true)
@@ -35,14 +112,59 @@ export default function Gallery() {
     }
   }
 
+  function openLeaderboard() {
+    tg?.HapticFeedback?.impactOccurred('light')
+    setShowLeaderboard(true)
+    track('leaderboard_viewed', { source: 'webapp' })
+  }
+
+  const top3 = leaderboard?.entries.slice(0, 3) ?? []
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 pt-4 pb-3">
         <h1 className="text-[22px] font-bold text-[#1D1D1F]">🖼 Gallery</h1>
-        {gallery.length > 0 && (
-          <span className="text-[13px] text-[#6E6E73]">{gallery.length} photos</span>
-        )}
+        <div className="flex items-center gap-2">
+          {gallery.length > 0 && (
+            <span className="text-[13px] text-[#6E6E73]">{gallery.length} photos</span>
+          )}
+          {leaderboard && (
+            <motion.button
+              whileTap={{ scale: 0.92 }}
+              onClick={openLeaderboard}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#FFD700]/15 border border-[#FFD700]/30"
+            >
+              <Trophy size={12} className="text-[#B8860B]" />
+              <span className="text-[11px] font-semibold text-[#B8860B]">Top</span>
+            </motion.button>
+          )}
+        </div>
       </div>
+
+      {/* Leaderboard strip — shown when gallery has content */}
+      {leaderboard && top3.length > 0 && gallery.length > 0 && (
+        <motion.button
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={openLeaderboard}
+          className="mx-4 mb-3 flex items-center gap-0 px-3 py-2.5 rounded-[14px] bg-gradient-to-r from-[#FFD700]/10 to-[#6C47FF]/10 border border-[#FFD700]/20"
+        >
+          <div className="flex items-center gap-1 flex-1">
+            {top3.map((e, i) => (
+              <span key={i} className="text-[13px]">{MEDALS[i]}</span>
+            ))}
+            <span className="text-[12px] text-[#1D1D1F] font-medium ml-1.5">
+              {top3[0]?.display_name} leads with {top3[0]?.gens} gens
+            </span>
+          </div>
+          {leaderboard.my_rank && (
+            <span className="text-[11px] text-[#6E6E73] ml-2 shrink-0">
+              You #{leaderboard.my_rank}
+            </span>
+          )}
+        </motion.button>
+      )}
 
       {gallery.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-4 px-8 text-center">
@@ -53,6 +175,15 @@ export default function Gallery() {
             <p className="text-[17px] font-semibold text-[#1D1D1F]">No photos yet</p>
             <p className="text-[14px] text-[#6E6E73] mt-1">Generate your first AI photo in Studio</p>
           </div>
+          {leaderboard && top3.length > 0 && (
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={openLeaderboard}
+              className="mt-2 px-4 py-2 rounded-full bg-[#FFD700]/15 border border-[#FFD700]/30 text-[13px] font-medium text-[#B8860B]"
+            >
+              🏆 See who's winning this week
+            </motion.button>
+          )}
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto px-4">
@@ -104,7 +235,6 @@ export default function Gallery() {
             </div>
 
             <motion.div
-              layoutId={`gallery-${lightbox.job_id}`}
               className="flex-1 flex items-center justify-center p-4"
               onClick={(e) => e.stopPropagation()}
             >
@@ -137,6 +267,13 @@ export default function Gallery() {
               </button>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Leaderboard modal */}
+      <AnimatePresence>
+        {showLeaderboard && leaderboard && (
+          <LeaderboardModal data={leaderboard} onClose={() => setShowLeaderboard(false)} />
         )}
       </AnimatePresence>
     </div>

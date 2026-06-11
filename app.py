@@ -4469,6 +4469,34 @@ async def cmd_gallery(m: Message):
                 cap = "🖼 Галерея" if i == 0 else None
                 await safe_answer_photo(m, BufferedInputFile(b, filename=f"g{i}.jpg"), caption=cap)
 
+@dp.message(Command("top"))
+async def cmd_top(m: Message):
+    uid = m.chat.id
+    lang_code = USER_LANG.get(uid, LANG_DEFAULT)
+    top = _weekly_top_generators(10)
+    if not top:
+        return await safe_answer(m, "📊 Not enough data yet — generate more photos!")
+    period_label = "this week" if top[0].get("period") == "7d" else "all time"
+    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+    lines = [f"🏆 *Top generators ({period_label})*\n"]
+    my_rank_line = None
+    for i, entry in enumerate(top):
+        name = _leaderboard_display_name(entry["uid"], entry["username"])
+        is_me = entry["uid"] == uid
+        suffix = " ← you" if is_me else ""
+        line = f"{medals[i]} {name} — {entry['gens']} gens{suffix}"
+        lines.append(line)
+        if is_me:
+            my_rank_line = i + 1
+    if my_rank_line is None:
+        # Not in top 10
+        my_ui = STATS_USERS_INFO.get(uid) or {}
+        my_gens = int(my_ui.get("gens_ok", 0))
+        lines.append(f"\n_You: #{len(top)+1}+ — {my_gens} gens_")
+    text = "\n".join(lines)
+    await safe_answer(m, text, parse_mode="Markdown")
+    analytics_event(uid, "leaderboard_viewed", {"source": "bot"})
+
 @dp.message(Command("refer"))
 async def cmd_refer(m: Message):
     if not BOT_USERNAME_GLOBAL:
@@ -5413,6 +5441,7 @@ async def on_startup():
             BotCommand(command="lang",    description="Сменить язык"),
             BotCommand(command="gallery", description="Моя галерея"),
             BotCommand(command="refer",   description="Реферальная ссылка"),
+            BotCommand(command="top",     description="Топ генераций недели"),
             BotCommand(command="pricing", description="Тарифы"),
             BotCommand(command="copy",    description="Скопировать фото"),
             BotCommand(command="app",     description="Mini App"),
@@ -5937,6 +5966,95 @@ async def api_me(request: Request):
         "role": role_for_user(uid, username),
         "grants": sorted(grants_for_user(uid, username)),
         "bot_link": f"https://t.me/{BOT_USERNAME_GLOBAL}" if BOT_USERNAME_GLOBAL else None,
+    }
+
+def _weekly_top_generators(n: int = 10) -> List[Dict[str, Any]]:
+    """Return top-N users by generation_completed events in the last 7 days.
+    Falls back to lifetime STATS_USERS_INFO gens when DB is unavailable."""
+    now = time.time()
+    if DB_READY:
+        try:
+            cutoff = _date_key(now - 7 * 86400)
+            rows = _db_fetchall(
+                "SELECT uid, COUNT(*) AS gens FROM imodel_events "
+                "WHERE event='generation_completed' AND day >= %s "
+                "GROUP BY uid ORDER BY gens DESC LIMIT %s",
+                (cutoff, n),
+            )
+            result = []
+            for uid, gens in rows:
+                uid = int(uid)
+                ui = STATS_USERS_INFO.get(uid) or {}
+                uname = str(ui.get("username") or "")
+                result.append({"uid": uid, "username": uname, "gens": int(gens), "period": "7d"})
+            return result
+        except Exception as e:
+            print(f"[leaderboard] db error: {str(e)[:120]}")
+    # Fallback: use lifetime counts from in-memory stats
+    items = []
+    for uid, ui in STATS_USERS_INFO.items():
+        gens = int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0))
+        if gens > 0:
+            items.append({"uid": uid, "username": str(ui.get("username") or ""), "gens": gens, "period": "all"})
+    items.sort(key=lambda x: x["gens"], reverse=True)
+    return items[:n]
+
+def _leaderboard_display_name(uid: int, username: str) -> str:
+    """Anonymised name: @user if available, else 'User #NNN' (deterministic short id)."""
+    if username:
+        # Show first 2 chars + *** to preserve some identity without full dox
+        visible = username[:3] if len(username) >= 3 else username
+        return f"@{visible}***"
+    return f"User #{uid % 10000:04d}"
+
+@app.get("/api/v1/leaderboard")
+async def api_leaderboard(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    caller_uid = int(user["uid"])
+    top = _weekly_top_generators(10)
+    # Determine caller's rank
+    caller_rank: Optional[int] = None
+    caller_gens = 0
+    for i, entry in enumerate(top):
+        if entry["uid"] == caller_uid:
+            caller_rank = i + 1
+            caller_gens = entry["gens"]
+            break
+    if caller_rank is None:
+        # Caller not in top 10 — compute their own weekly count
+        if DB_READY:
+            try:
+                cutoff = _date_key(time.time() - 7 * 86400)
+                rows = _db_fetchall(
+                    "SELECT COUNT(*) FROM imodel_events WHERE event='generation_completed' AND uid=%s AND day>=%s",
+                    (caller_uid, cutoff),
+                )
+                caller_gens = int(rows[0][0]) if rows else 0
+            except Exception:
+                pass
+        else:
+            ui = STATS_USERS_INFO.get(caller_uid) or {}
+            caller_gens = int(ui.get("gens_ok", 0))
+        # Approximate rank
+        caller_rank = len(top) + 1 if caller_gens < (top[-1]["gens"] if top else 0) else None
+    entries = [
+        {
+            "rank": i + 1,
+            "display_name": _leaderboard_display_name(e["uid"], e["username"]),
+            "gens": e["gens"],
+            "is_me": e["uid"] == caller_uid,
+        }
+        for i, e in enumerate(top)
+    ]
+    period = top[0]["period"] if top else "7d"
+    return {
+        "entries": entries,
+        "period": period,
+        "my_rank": caller_rank,
+        "my_gens": caller_gens,
+        "updated_at": int(time.time()),
     }
 
 @app.get("/api/v1/gallery")
