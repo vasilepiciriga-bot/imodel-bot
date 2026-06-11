@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Download, Share2, RefreshCw, Sparkles, Star, Send } from 'lucide-react'
+import { saveImageToPhone } from '../../lib/saveImage'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { useAppStore } from '../../store/appStore'
 import { track } from '../../api/analytics'
@@ -63,6 +64,7 @@ async function buildStoryBlob(imageUrl: string): Promise<Blob | null> {
 
 export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Props) {
   const [shareLoading, setShareLoading] = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
   const user = useAppStore((s) => s.user) as ({ bot_link?: string } | null)
   const botLink = (user as { bot_link?: string } | null)?.bot_link ?? 'https://t.me/imodelapp_bot'
   const outputUrl = job.hd_url ?? job.output_url ?? ''
@@ -141,14 +143,23 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
             : <Share2 size={15} />}
           Story
         </motion.button>
-        <motion.a
+        <motion.button
           whileTap={{ scale: 0.96 }}
-          href={outputUrl}
-          download="imodel-result.jpg"
-          className="flex items-center justify-center gap-2 py-3.5 rounded-card bg-[#F5F5F7] text-[#1D1D1F] text-[13px] font-medium"
+          disabled={saveLoading}
+          onClick={async () => {
+            setSaveLoading(true)
+            tg?.HapticFeedback?.impactOccurred('medium')
+            try {
+              await saveImageToPhone(outputUrl)
+            } catch {
+              /* fallback: open in tab */
+              window.open(outputUrl, '_blank')
+            } finally { setSaveLoading(false) }
+          }}
+          className="flex items-center justify-center gap-2 py-3.5 rounded-card bg-[#F5F5F7] text-[#1D1D1F] text-[13px] font-medium disabled:opacity-50"
         >
-          <Download size={15} /> Save
-        </motion.a>
+          <Download size={15} /> {saveLoading ? 'Saving…' : 'Save'}
+        </motion.button>
       </div>
 
       {/* Secondary actions: Forward + Regen + HD */}

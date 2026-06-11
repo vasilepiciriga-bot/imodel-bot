@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Download, RefreshCw, Star, Images, Trophy, Share2,
-  Pencil, Copy, Check, ChevronLeft, ChevronRight,
+  Pencil, Copy, Check, ChevronLeft, ChevronRight, Trash2,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
-import { getGallery, getCachedGallery, setCachedGallery, requestHD } from '../api/generations'
+import { getGallery, getCachedGallery, setCachedGallery, requestHD, deletePhoto } from '../api/generations'
+import { saveImageToPhone } from '../lib/saveImage'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { getMe } from '../api/session'
@@ -289,6 +290,8 @@ export default function Gallery() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [swipeDir, setSwipeDir] = useState(0)
   const [hdLoading, setHdLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [showLeaderboard, setShowLeaderboard] = useState(false)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
@@ -328,7 +331,13 @@ export default function Gallery() {
     tg?.HapticFeedback?.impactOccurred('light')
     const idx = sorted.findIndex((s) => s.job_id === item.job_id)
     setSwipeDir(0)
+    setConfirmDelete(false)
     setLightboxIndex(idx >= 0 ? idx : null)
+  }
+
+  function closeLightbox() {
+    setLightboxIndex(null)
+    setConfirmDelete(false)
   }
 
   function navigate(dir: number) {
@@ -336,8 +345,21 @@ export default function Gallery() {
     const next = lightboxIndex + dir
     if (next < 0 || next >= sorted.length) return
     setSwipeDir(dir)
+    setConfirmDelete(false)
     tg?.HapticFeedback?.impactOccurred('light')
     setLightboxIndex(next)
+  }
+
+  async function handleDelete(jobId: string) {
+    try {
+      await deletePhoto(jobId)
+      setGallery(gallery.filter((i) => i.job_id !== jobId))
+      closeLightbox()
+      tg?.HapticFeedback?.notificationOccurred('success')
+    } catch {
+      toast.error('Could not delete photo')
+      setConfirmDelete(false)
+    }
   }
 
   async function handleReact(jobId: string, emoji: string) {
@@ -567,9 +589,9 @@ export default function Gallery() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 bg-black/92 flex flex-col"
-            onClick={() => setLightboxIndex(null)}
+            onClick={closeLightbox}
           >
-            {/* Header: counter + close */}
+            {/* Header: counter + trash + close */}
             <div
               className="flex items-center justify-between px-4 pb-3"
               style={{ paddingTop: 'calc(var(--tg-safe-top, env(safe-area-inset-top, 0px)) + 12px)' }}
@@ -577,10 +599,48 @@ export default function Gallery() {
               <span className="text-white/55 text-[13px] font-medium tabular-nums">
                 {(lightboxIndex ?? 0) + 1} / {sorted.length}
               </span>
-              <button onClick={() => setLightboxIndex(null)}>
-                <X size={24} className="text-white" />
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDelete(true) }}
+                  className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center"
+                >
+                  <Trash2 size={16} className="text-white/70" />
+                </button>
+                <button onClick={closeLightbox}>
+                  <X size={24} className="text-white" />
+                </button>
+              </div>
             </div>
+
+            {/* Delete confirmation strip */}
+            <AnimatePresence>
+              {confirmDelete && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="mx-4 mb-2 flex items-center justify-between px-3 py-2.5 rounded-[12px] bg-[#FF3B30]/20 border border-[#FF3B30]/40 overflow-hidden"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span className="text-[13px] text-white/90">Delete this photo?</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setConfirmDelete(false)}
+                      className="px-3 py-1 rounded-full bg-white/10 text-[12px] text-white/70"
+                    >
+                      Cancel
+                    </button>
+                    <motion.button
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => handleDelete(lightbox.job_id)}
+                      className="px-3 py-1 rounded-full bg-[#FF3B30] text-[12px] text-white font-semibold"
+                    >
+                      Delete
+                    </motion.button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Swipeable image area */}
             <div
@@ -650,13 +710,22 @@ export default function Gallery() {
               style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
               onClick={(e) => e.stopPropagation()}
             >
-              <a
-                href={lightbox.hd_url ?? lightbox.output_url}
-                download
-                className="flex items-center justify-center gap-1.5 py-3 bg-white/10 rounded-card text-white text-[13px] font-medium"
+              <motion.button
+                whileTap={{ scale: 0.96 }}
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true)
+                  tg?.HapticFeedback?.impactOccurred('medium')
+                  try {
+                    await saveImageToPhone(lightbox.hd_url ?? lightbox.output_url ?? '')
+                  } catch {
+                    toast.error('Could not save', { sub: 'Long-press the photo to save manually' })
+                  } finally { setSaving(false) }
+                }}
+                className="flex items-center justify-center gap-1.5 py-3 bg-white/10 rounded-card text-white text-[13px] font-medium disabled:opacity-50"
               >
-                <Download size={14} /> Save
-              </a>
+                <Download size={14} /> {saving ? 'Saving…' : 'Save'}
+              </motion.button>
               <button className="flex items-center justify-center gap-1.5 py-3 bg-white/10 rounded-card text-white text-[13px] font-medium">
                 <RefreshCw size={14} /> Redo
               </button>

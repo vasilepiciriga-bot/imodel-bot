@@ -46,3 +46,6 @@ export function getCachedGallery(): Generation[] | null {
 export function setCachedGallery(items: Generation[]) {
   localStorage.setItem(GALLERY_KEY, JSON.stringify({ ts: Date.now(), data: items }))
 }
+
+export const deletePhoto = (jobId: string) =>
+  api.delete<{ ok: boolean }>(`/api/v1/gallery/${jobId}`)

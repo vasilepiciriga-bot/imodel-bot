@@ -1,1 +1,0 @@
-import{c as e}from"./index-BJEotuRk.js";var t=()=>e.get(`/api/v1/shop`),n=t=>e.post(`/api/v1/shop/invoice`,{item_id:t});export{t as n,n as t};
