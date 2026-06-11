@@ -62,6 +62,8 @@ export interface Generation {
   credit_cost?: number
   created_at: string
   original_url?: string
+  candidates_done?: number
+  candidates_total?: number
 }
 
 export type GenerationMode = 'portrait' | 'copy_scene' | 'copy_image'

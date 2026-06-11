@@ -13,6 +13,7 @@ const HINTS = [
 
 const STEP_LABEL_MAP: Record<string, string> = {
   analyzing:       'Analyzing selfie...',
+  identity_scan:   'Reading your features...',
   crafting_prompt: 'Building your prompt...',
   selecting:       'Selecting best shots...',
   upscaling:       'Enhancing quality...',
@@ -22,27 +23,34 @@ const STEP_LABEL_MAP: Record<string, string> = {
 function humanizeStepLabel(stepLabel: string): string {
   if (stepLabel.startsWith('generating_')) {
     const parts = stepLabel.split('_')
-    if (parts.length === 4) return `Creating variation ${parts[1]} of ${parts[3]}...`
+    if (parts.length === 4) {
+      const cur = parseInt(parts[1], 10)
+      const total = parseInt(parts[3], 10)
+      if (cur === 0) return 'Starting generation...'
+      return `Creating variation ${cur} of ${total}...`
+    }
     return 'Generating...'
   }
   return STEP_LABEL_MAP[stepLabel] ?? 'Processing...'
 }
 
 function stepToProgress(stepLabel: string): number {
-  if (stepLabel === 'analyzing' || stepLabel === 'crafting_prompt') return 0.1
+  if (stepLabel === 'analyzing') return 0.05
+  if (stepLabel === 'identity_scan') return 0.10
+  if (stepLabel === 'crafting_prompt') return 0.15
   if (stepLabel.startsWith('generating_')) {
     const parts = stepLabel.split('_')
     if (parts.length === 4) {
       const cur = parseInt(parts[1], 10)
       const total = parseInt(parts[3], 10)
-      if (total > 0) return 0.1 + (cur / total) * 0.6
+      if (total > 0) return 0.15 + (cur / total) * 0.60
     }
-    return 0.4
+    return 0.40
   }
-  if (stepLabel === 'selecting') return 0.75
-  if (stepLabel === 'upscaling') return 0.9
+  if (stepLabel === 'selecting') return 0.78
+  if (stepLabel === 'upscaling') return 0.90
   if (stepLabel === 'ready') return 1.0
-  return 0.5
+  return 0.50
 }
 
 interface Props {

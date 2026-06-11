@@ -6949,35 +6949,51 @@ async def run_photoshoot_tournament_job(job_id: str):
     style_variant: str = str(job.get("style_variant") or "")
     effective_prompt = apply_prompt_layer(base_prompt, mode_key, style_variant=style_variant)
 
-    candidates: List[tuple] = []  # List of (score, img_bytes)
+    # ── Phase 3: Parallel generation with concurrency limit ─────────────────
+    _MAX_PAR = min(n_gen, int(os.getenv("TOURNAMENT_MAX_PARALLEL", "4")))
+    _par_sem = asyncio.Semaphore(_MAX_PAR)
+    _progress: Dict[str, int] = {"done": 0}
+    record_job(job_id, step_label=f"generating_0_of_{n_gen}",
+               candidates_done=0, candidates_total=n_gen)
+    job_event(job_id, "tournament_parallel_start", n_gen=n_gen, max_parallel=_MAX_PAR)
 
-    for i in range(n_gen):
-        step = f"generating_{i + 1}_of_{n_gen}"
-        record_job(job_id, step_label=step)
-        job_event(job_id, "tournament_step", step=i + 1, total=n_gen)
-        try:
-            # Pass job_id=None to avoid inner call overwriting tournament job status
-            result_bytes = await asyncio.to_thread(
-                generate_image_from_bytes,
-                img_bytes,
-                effective_prompt,
-                lang,
-                False,   # strict
-                None,    # style_bytes
-                False,   # lock_scene
-                uid,
-                None,    # job_id=None — critical: prevent inner call clobbering outer job
-            )
-            if result_bytes:
+    async def _gen_one(idx: int) -> Optional[tuple]:
+        async with _par_sem:
+            try:
+                result_bytes = await asyncio.to_thread(
+                    generate_image_from_bytes,
+                    img_bytes,
+                    effective_prompt,
+                    lang,
+                    False,  # strict
+                    None,   # style_bytes
+                    False,  # lock_scene
+                    uid,
+                    None,   # job_id=None — critical: prevent clobbering outer job
+                )
+            except Exception as _ex:
+                job_event(job_id, "candidate_failed", index=idx + 1, error=str(_ex)[:120])
+                return None
+            if not result_bytes:
+                job_event(job_id, "candidate_empty", index=idx + 1)
+                return None
+            try:
                 score = await asyncio.to_thread(
                     _judge_candidate_vision, result_bytes, img_bytes, mode_key
                 )
-                candidates.append((score, result_bytes))
-                job_event(job_id, "candidate_ok", index=i + 1, score=round(score, 1), size=len(result_bytes))
-            else:
-                job_event(job_id, "candidate_empty", index=i + 1)
-        except Exception as e:
-            job_event(job_id, "candidate_failed", index=i + 1, error=str(e)[:120])
+            except Exception:
+                score = float(len(result_bytes)) / 5000.0
+        _progress["done"] += 1
+        record_job(job_id,
+                   step_label=f"generating_{_progress['done']}_of_{n_gen}",
+                   candidates_done=_progress["done"])
+        job_event(job_id, "candidate_ok", index=idx + 1,
+                  score=round(score, 1), size=len(result_bytes))
+        return (score, result_bytes)
+
+    _gen_results = await asyncio.gather(*[_gen_one(i) for i in range(n_gen)])
+    candidates: List[tuple] = [r for r in _gen_results if r is not None]
+    # ─────────────────────────────────────────────────────────────────────────
 
     if not candidates:
         await _refund_credits_n(uid, get_mode_credit_cost(mode_key), username)
@@ -7021,7 +7037,19 @@ async def run_photoshoot_tournament_job(job_id: str):
     )
     stats_incr("tournament_done", 1)
     _uadd(uid, "photoshoot_count", 1)
-    analytics_event(uid, "generation_completed", {"source": "webapp", "mode": mode_key, "results": len(output_urls), "job_id": job_id})
+    _best_score = round(best[0][0], 1) if best else 0
+    _avg_score = round(sum(s for s, _ in candidates) / len(candidates), 1) if candidates else 0
+    analytics_event(uid, "generation_completed", {
+        "source": "webapp",
+        "mode": mode_key,
+        "results": len(output_urls),
+        "job_id": job_id,
+        "candidates_ok": len(candidates),
+        "candidates_total": n_gen,
+        "best_score": _best_score,
+        "avg_score": _avg_score,
+        "parallel_factor": _MAX_PAR,
+    })
 
     # Deliver results to Telegram for tg_photoshoot jobs
     if job.get("kind") == "tg_photoshoot" and uid:
