@@ -591,9 +591,14 @@ export default function Gallery() {
             className="fixed inset-0 z-50 bg-black/92 flex flex-col"
             onClick={closeLightbox}
           >
+            {/* Top gradient scrim for button visibility */}
+            <div
+              className="absolute inset-x-0 top-0 pointer-events-none z-0"
+              style={{ height: 110, background: 'linear-gradient(to bottom, rgba(0,0,0,0.72) 0%, transparent 100%)' }}
+            />
             {/* Header: counter + trash + close */}
             <div
-              className="flex items-center justify-between px-4 pb-3"
+              className="relative z-10 flex items-center justify-between px-4 pb-3"
               style={{ paddingTop: 'calc(var(--tg-safe-top, env(safe-area-inset-top, 0px)) + 12px)' }}
             >
               <span className="text-white/55 text-[13px] font-medium tabular-nums">

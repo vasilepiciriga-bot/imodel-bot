@@ -10,4 +10,6 @@ __pycache__/
 .venv/
 venv/
 data/
+!data/preset-thumbs/
+!data/preset-thumbs/*.webp
 *.log

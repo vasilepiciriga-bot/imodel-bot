@@ -2917,8 +2917,7 @@ STRICT_NEGATIVE = (
 # Negative prompt for InstantID/PhotoMaker — concise, model-appropriate
 INSTANTID_NEGATIVE = (
     "deformed, ugly, bad anatomy, disfigured, mutation, extra limbs, extra fingers, "
-    "blurry, low quality, lowres, watermark, text, logo, cartoon, anime, painting, "
-    "airbrushed skin, plastic skin, over-retouched skin, skin smoothing, beauty filter"
+    "blurry, low quality, lowres, watermark, text, logo, cartoon, anime, painting"
 )
 
 def enforce_safe_prompt(user_text: str) -> str:
@@ -3864,11 +3863,11 @@ def generate_image_from_bytes(
     if strict and lock_scene:
         refined = f"{refined}. {SCENE_LOCK}. Exact same background, composition, lighting, color grading; only replace the face."
 
-    # Quality suffix — natural skin only; retouching is reserved for the HD upscale button
+    # Beauty + quality suffix fed to InstantID for naturally beautiful skin/lighting
     QUALITY_SUFFIX = (
-        "sharp focus, natural skin texture, realistic skin pores, authentic complexion, "
-        "bright eyes, beautiful lighting, professional photography, 8k resolution, "
-        "award-winning photograph"
+        "sharp focus, flawless complexion, professional skin retouching, "
+        "perfect skin, bright eyes, beautiful lighting, "
+        "professional photography, 8k resolution, award-winning photograph"
     )
     refined = f"{refined}. {QUALITY_SUFFIX}"
 
@@ -4036,6 +4035,9 @@ def generate_image_from_bytes(
     stats_incr("generation_latency_count", 1)
     record_job(job_id, status="generated")
     job_event(job_id, "generation_done", latency_ms=latency_ms, output_bytes=len(nano_bytes))
+    # Professional face retouch: CodeFormer (fidelity=0.8 → subtle, identity-preserving)
+    # falls back to GFPGAN, then original on any error
+    nano_bytes = enhance_face_codeformer(nano_bytes, fidelity=0.8)
     return nano_bytes
 
 # ======= Автопост «до/после» (опционально) ===========
@@ -6367,6 +6369,15 @@ async def run_webapp_generation_job(job_id: str):
         img_bytes = job.get("image_bytes")
         style_bytes = job.get("style_bytes")
 
+        # Mirror bot behavior: derive scene description from reference when prompt is empty
+        if mode == "copy_scene" and style_bytes and not prompt:
+            try:
+                prompt = await asyncio.to_thread(craft_mj_prompt_from_image, style_bytes) or ""
+                if not prompt:
+                    prompt = await asyncio.to_thread(craft_scene_spec_from_image, style_bytes) or "person, same scene and style"
+            except Exception:
+                prompt = "person, same scene and style"
+
         # Inject Age Pack prompt if applicable
         age_key = str(job.get("age_key") or "")
         if age_key:
@@ -7006,6 +7017,15 @@ async def api_proxy_image(url: str, request: Request):
         data = await asyncio.to_thread(_download_with_retries, url)
         if not data:
             return JSONResponse({"error": "download_failed"}, status_code=502)
+        # Validate content is actually an image (reject HTML pages, etc.)
+        _is_img = (
+            (len(data) > 3  and data[:3] == b"\xff\xd8\xff") or          # JPEG
+            (len(data) > 8  and data[:8] == b"\x89PNG\r\n\x1a\n") or     # PNG
+            (len(data) > 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP") or  # WEBP
+            (len(data) > 6  and data[:6] in (b"GIF87a", b"GIF89a"))       # GIF
+        )
+        if not _is_img:
+            return JSONResponse({"error": "not_an_image"}, status_code=400)
         ct = "image/jpeg"
         if len(data) > 12:
             if data[:8] == b"\x89PNG\r\n\x1a\n":

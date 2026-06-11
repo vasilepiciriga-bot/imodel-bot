@@ -157,7 +157,8 @@ export default function Studio() {
         preset_key: activePreset?.key,
         mode: mode === 'copy_image' ? 'copy_scene' : mode,
         style_b64: mode === 'copy_image' ? (refB64 ?? undefined) : undefined,
-        photoshoot_mode: photoshootMode,
+        // copy_image must go through the everyday path — tournament job drops style_bytes
+        photoshoot_mode: mode === 'copy_image' ? 'everyday' : photoshootMode,
         custom_desc: photoshootMode === 'custom' ? customDesc : undefined,
       }
 
@@ -204,7 +205,11 @@ export default function Studio() {
       const res = await fetch(proxyUrl, {
         headers: { Authorization: `tma ${(tg as unknown as { initData?: string })?.initData ?? ''}` },
       })
-      if (!res.ok) throw new Error('proxy ' + res.status)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        if ((body as { error?: string }).error === 'not_an_image') throw new Error('not_an_image')
+        throw new Error('proxy ' + res.status)
+      }
       const blob = await res.blob()
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
@@ -214,8 +219,12 @@ export default function Studio() {
       })
       setRefPreview(dataUrl)
       setRefB64(dataUrl.split(',')[1])
-    } catch {
-      toast.error('Не удалось загрузить изображение')
+    } catch (e) {
+      if (e instanceof Error && e.message === 'not_an_image') {
+        toast.error('Это не прямая ссылка на фото — нажми на фото → «Копировать адрес изображения»')
+      } else {
+        toast.error('Не удалось загрузить изображение')
+      }
     } finally {
       setRefLoading(false)
     }
