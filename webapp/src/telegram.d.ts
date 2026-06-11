@@ -26,6 +26,8 @@ interface TelegramWebApp {
     notificationOccurred(type: 'error' | 'success' | 'warning'): void
     selectionChanged(): void
   }
+  addToHomeScreen?(): void
+  checkHomeScreenStatus?(callback: (status: 'unsupported' | 'unknown' | 'added' | 'missed') => void): void
 }
 
 interface Window {

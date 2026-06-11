@@ -8,6 +8,7 @@ import { setPortfolioVisibility } from '../api/portfolio'
 import { createGift } from '../api/gift'
 import { getQuests, claimQuest, getAchievements, setLanguage } from '../api/quests'
 import { AchievementPopup } from '../components/shared/AchievementPopup'
+import { HomeScreenModal } from '../components/HomeScreenModal'
 import { hap } from '../lib/haptics'
 import type { ReferralData } from '../api/session'
 import type { QuestItem, Achievement } from '../types'
@@ -24,10 +25,14 @@ function formatCountdown(secs: number): string {
   return `${m}m`
 }
 
-function QuestCard({ quest, onClaim }: { quest: QuestItem; onClaim: (id: string) => void }) {
+function QuestCard({ quest, onClaim, onTap }: { quest: QuestItem; onClaim: (id: string) => void; onTap?: () => void }) {
   const pct = Math.min(1, quest.progress / quest.target)
+  const Wrapper = onTap && !quest.claimed && !quest.claimable ? 'button' : 'div'
   return (
-    <div className="flex items-center gap-3 py-3 border-b border-black/[0.04] last:border-0">
+    <Wrapper
+      className={`flex items-center gap-3 py-3 border-b border-black/[0.04] last:border-0 w-full text-left${onTap && !quest.claimed && !quest.claimable ? ' active:opacity-70' : ''}`}
+      onClick={onTap && !quest.claimed && !quest.claimable ? onTap : undefined}
+    >
       <span className="text-[22px] w-8 text-center flex-shrink-0">{quest.icon}</span>
       <div className="flex-1 min-w-0">
         <p className="text-[13px] font-semibold text-[#1D1D1F] truncate">{quest.title}</p>
@@ -46,17 +51,19 @@ function QuestCard({ quest, onClaim }: { quest: QuestItem; onClaim: (id: string)
       {quest.claimable ? (
         <motion.button
           whileTap={{ scale: 0.94 }}
-          onClick={() => { hap.success(); onClaim(quest.id) }}
+          onClick={(e) => { e.stopPropagation(); hap.success(); onClaim(quest.id) }}
           className="flex-shrink-0 px-3 py-1.5 rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white text-[11px] font-bold"
         >
           +{quest.reward}⚡
         </motion.button>
       ) : quest.claimed ? (
         <span className="flex-shrink-0 text-[11px] font-semibold text-[#34C759]">✓ Done</span>
+      ) : onTap ? (
+        <span className="flex-shrink-0 text-[11px] font-semibold text-[#6C47FF]">Tap →</span>
       ) : (
         <span className="flex-shrink-0 text-[11px] font-medium text-[#6E6E73]">+{quest.reward}⚡</span>
       )}
-    </div>
+    </Wrapper>
   )
 }
 
@@ -74,6 +81,7 @@ export default function Profile() {
   const [quests, setQuests] = useState<QuestItem[]>([])
   const [achievements, setAchievements] = useState<Achievement[]>([])
   const [newAchievement, setNewAchievement] = useState<Achievement | null>(null)
+  const [homeScreenOpen, setHomeScreenOpen] = useState(false)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
   const challenge = useAppStore((s) => s.challenge)
@@ -355,7 +363,12 @@ export default function Profile() {
                 </div>
                 <div className="px-4 pb-2">
                   {quests.filter((q) => q.type !== 'daily').map((q) => (
-                    <QuestCard key={q.id} quest={q} onClaim={handleClaimQuest} />
+                    <QuestCard
+                      key={q.id}
+                      quest={q}
+                      onClaim={handleClaimQuest}
+                      onTap={q.id === 'add_to_home_screen' && !q.claimed ? () => { hap.medium(); setHomeScreenOpen(true) } : undefined}
+                    />
                   ))}
                 </div>
               </>
@@ -597,6 +610,24 @@ export default function Profile() {
           <button onClick={() => tg?.openLink('https://t.me/imodelbot')}>Terms</button>
         </div>
       </div>
+
+      {/* Home Screen quest modal */}
+      <AnimatePresence>
+        {homeScreenOpen && (
+          <HomeScreenModal
+            onClose={() => setHomeScreenOpen(false)}
+            onCompleted={() => {
+              setHomeScreenOpen(false)
+              getQuests().then(({ quests: q, claimable }) => {
+                setQuests(q)
+                useAppStore.getState().setProfileBadge(claimable)
+              }).catch(() => null)
+              if (user) getMe().then((u) => setUser(u)).catch(() => null)
+              confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }

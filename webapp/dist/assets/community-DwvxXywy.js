@@ -1,0 +1,1 @@
+import{c as e}from"./index-frlFZcy6.js";var t=(t,n)=>e.post(`/api/v1/community/share`,{job_id:t,label:n}),n=t=>e.post(`/api/v1/community/${t}/vote`);export{n,t};

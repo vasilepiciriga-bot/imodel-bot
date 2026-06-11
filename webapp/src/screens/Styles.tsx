@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Lock, TrendingUp, Check, X } from 'lucide-react'
+import { Lock, TrendingUp, Check, X, Heart } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { fetchPresets, getCachedPresets, setCachedPresets } from '../api/presets'
 import { createInvoice } from '../api/shop'
+import { voteForPreset } from '../api/community'
 import { useToast } from '../hooks/useToast'
 import { hap } from '../lib/haptics'
 import { PresetSkeleton } from '../components/shared/SkeletonLoader'
@@ -29,7 +30,7 @@ const CATEGORY_ACCENT: Record<string, string> = {
   challenge: '#FF9500',
 }
 
-const CATEGORIES = ['All', 'Studio', 'Cinematic', 'Outdoor', 'Lifestyle', 'Artistic', '★ Premium']
+const CATEGORIES = ['All', 'Studio', 'Cinematic', 'Outdoor', 'Lifestyle', 'Artistic', '★ Premium', '🌍 Community']
 
 function PresetCard({ preset, active, index, onTap, onLongPress }: {
   preset: Preset
@@ -153,6 +154,115 @@ function PresetCard({ preset, active, index, onTap, onLongPress }: {
   )
 }
 
+function CommunityCard({ preset, active, index, onTap, onLongPress }: {
+  preset: Preset
+  active: boolean
+  index: number
+  onTap: () => void
+  onLongPress: () => void
+}) {
+  const [votes, setVotes] = useState(preset.votes ?? 0)
+  const [myVote, setMyVote] = useState(preset.my_vote ?? false)
+  const [thumbError, setThumbError] = useState(false)
+  const isNew = (preset.created_at ?? 0) > Date.now() / 1000 - 86400
+  const isHot = votes >= 10
+
+  let longPressTimer: ReturnType<typeof setTimeout>
+
+  async function handleVote(e: React.MouseEvent) {
+    e.stopPropagation()
+    hap.light()
+    const next = !myVote
+    setMyVote(next)
+    setVotes((v) => next ? v + 1 : Math.max(0, v - 1))
+    try {
+      const res = await voteForPreset(preset.key)
+      setVotes(res.votes)
+      setMyVote(res.my_vote)
+    } catch {
+      setMyVote(!next)
+      setVotes((v) => next ? Math.max(0, v - 1) : v + 1)
+    }
+  }
+
+  return (
+    <motion.button
+      initial={{ opacity: 0, scale: 0.92 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ delay: index * 0.03, type: 'spring', stiffness: 360, damping: 28 }}
+      whileTap={{ scale: 0.95 }}
+      onClick={onTap}
+      onTouchStart={() => { longPressTimer = setTimeout(onLongPress, 480) }}
+      onTouchEnd={() => clearTimeout(longPressTimer)}
+      onTouchMove={() => clearTimeout(longPressTimer)}
+      className="relative rounded-[20px] overflow-hidden flex flex-col"
+      style={{
+        boxShadow: active
+          ? '0 0 0 2.5px #6C47FF, 0 4px 24px #6C47FF44'
+          : '0 2px 12px rgba(0,0,0,0.18)',
+      }}
+    >
+      <div className="aspect-[3/4] relative overflow-hidden bg-[#1a1a2e]">
+        {preset.thumbnail_url && !thumbError ? (
+          <img
+            src={preset.thumbnail_url}
+            alt={preset.label}
+            loading="lazy"
+            className="w-full h-full object-cover"
+            onError={() => setThumbError(true)}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-[48px]">✨</div>
+        )}
+
+        {/* Hot / New badges */}
+        {(isHot || isNew) && (
+          <div className="absolute top-2 left-2">
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${isHot ? 'animate-pulse' : ''}`}
+              style={{ background: isHot ? 'rgba(255,80,0,0.85)' : 'rgba(108,71,255,0.85)', color: '#fff' }}>
+              {isHot ? '🔥 Hot' : '⭐ New'}
+            </span>
+          </div>
+        )}
+
+        {/* Vote pill */}
+        <motion.button
+          whileTap={{ scale: 0.85 }}
+          onClick={handleVote}
+          className="absolute top-2 right-2 flex items-center gap-0.5 px-2 py-1 rounded-full text-[11px] font-bold"
+          style={{
+            background: myVote ? 'rgba(255,45,120,0.90)' : 'rgba(0,0,0,0.55)',
+            color: '#fff',
+          }}
+        >
+          <Heart size={10} fill={myVote ? '#fff' : 'none'} strokeWidth={2.5} />
+          <motion.span key={votes} initial={{ scale: 1.4 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500 }}>
+            {votes}
+          </motion.span>
+        </motion.button>
+
+        {/* Bottom: label + creator */}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent pt-8 pb-2.5 px-2.5">
+          <p className="text-[12px] font-bold text-white leading-tight truncate">{preset.label}</p>
+          <span className="text-[9px] text-white/55">@{preset.creator_name}</span>
+        </div>
+
+        {/* Active checkmark */}
+        {active && (
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            className="absolute top-2 right-10 w-6 h-6 rounded-full flex items-center justify-center bg-[#6C47FF]"
+          >
+            <Check size={12} strokeWidth={3} className="text-white" />
+          </motion.div>
+        )}
+      </div>
+    </motion.button>
+  )
+}
+
+
 function PreviewModal({ preset, onClose, onSelect }: {
   preset: Preset
   onClose: () => void
@@ -200,7 +310,11 @@ function PreviewModal({ preset, onClose, onSelect }: {
             <span className="text-[24px]">{preset.emoji}</span>
             <div>
               <h3 className="text-[18px] font-bold text-white">{preset.label}</h3>
-              <span className="text-[12px] font-semibold" style={{ color: accent }}>{preset.category}</span>
+              {preset.category === 'community' ? (
+                <span className="text-[12px] text-white/50">by @{preset.creator_name} · ❤️ {preset.votes ?? 0}</span>
+              ) : (
+                <span className="text-[12px] font-semibold" style={{ color: accent }}>{preset.category}</span>
+              )}
             </div>
           </div>
           {preset.prompt && (
@@ -252,9 +366,11 @@ export default function Styles() {
   }, [])
 
   const filtered = category === 'All'
-    ? presets
+    ? presets.filter((p) => p.category !== 'community')
     : category === '★ Premium'
     ? presets.filter((p) => p.is_premium)
+    : category === '🌍 Community'
+    ? presets.filter((p) => p.category === 'community')
     : presets.filter((p) => p.category.toLowerCase() === category.toLowerCase())
 
   const trending = presets.filter((p) => !p.is_premium && !p.locked).slice(0, 6)
@@ -359,7 +475,17 @@ export default function Styles() {
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 pb-4">
-            {filtered.map((preset, i) => (
+            {filtered.map((preset, i) =>
+              preset.category === 'community' ? (
+                <CommunityCard
+                  key={preset.key}
+                  preset={preset}
+                  active={activePreset?.key === preset.key}
+                  index={i}
+                  onTap={() => handlePreset(preset)}
+                  onLongPress={() => { hap.medium(); setPreview(preset) }}
+                />
+              ) : (
               <PresetCard
                 key={preset.key}
                 preset={preset}

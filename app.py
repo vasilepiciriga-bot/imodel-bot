@@ -311,6 +311,26 @@ def db_init():
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_imodel_events_uid   ON imodel_events(uid)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_imodel_events_event ON imodel_events(event, day)")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_community_presets (
+                        key TEXT PRIMARY KEY,
+                        creator_uid BIGINT NOT NULL,
+                        creator_name TEXT,
+                        label TEXT NOT NULL,
+                        prompt TEXT NOT NULL,
+                        output_s3_key TEXT,
+                        votes INTEGER NOT NULL DEFAULT 0,
+                        created_at DOUBLE PRECISION NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_community_votes (
+                        uid BIGINT NOT NULL,
+                        preset_key TEXT NOT NULL,
+                        PRIMARY KEY (uid, preset_key)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_community_votes ON imodel_community_presets(votes DESC)")
         DB_READY = True
         log_event("db_ready", backend="postgres")
     except Exception as e:
@@ -1058,6 +1078,53 @@ try:
 except Exception:
     pass
 
+# Community presets — user-generated styles shared by the community
+_COMMUNITY_FILE = os.path.join(_DATA_DIR, "community_presets.json")
+COMMUNITY_PRESETS: list = []   # [{key, creator_uid, creator_name, label, prompt, output_s3_key, votes, created_at}]
+COMMUNITY_VOTES: set = set()   # "{uid}_{key}" strings for no-DB mode
+
+try:
+    if os.path.exists(_COMMUNITY_FILE):
+        with open(_COMMUNITY_FILE) as _cf:
+            COMMUNITY_PRESETS = json.load(_cf)
+except Exception:
+    pass
+
+
+def _save_community_file():
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        with open(_COMMUNITY_FILE, "w") as _cf:
+            json.dump(COMMUNITY_PRESETS, _cf, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _has_community_vote(uid: int, key: str) -> bool:
+    if DB_READY:
+        rows = _db_fetchall("SELECT 1 FROM imodel_community_votes WHERE uid=%s AND preset_key=%s LIMIT 1", (uid, key))
+        return bool(rows)
+    return f"{uid}_{key}" in COMMUNITY_VOTES
+
+
+def _load_community_presets_for_api(uid: int, sort: str = "top", limit: int = 100) -> list:
+    if DB_READY:
+        order = "votes DESC, created_at DESC" if sort != "new" else "created_at DESC"
+        rows = _db_fetchall(
+            f"SELECT key, creator_uid, creator_name, label, prompt, output_s3_key, votes, created_at "
+            f"FROM imodel_community_presets ORDER BY {order} LIMIT %s",
+            (limit,),
+        )
+        return [
+            {"key": r[0], "creator_uid": r[1], "creator_name": r[2], "label": r[3],
+             "prompt": r[4], "output_s3_key": r[5], "votes": r[6], "created_at": r[7]}
+            for r in rows
+        ]
+    # No-DB: use in-memory list
+    key_fn = (lambda x: -x.get("votes", 0)) if sort != "new" else (lambda x: -x.get("created_at", 0))
+    return sorted(COMMUNITY_PRESETS, key=key_fn)[:limit]
+
+
 # Gallery JSON-lines cache — persists completed jobs when DB is unavailable
 import json as _json
 _GALLERY_CACHE_FILE = os.path.join(_DATA_DIR, "gallery_cache.jsonl")
@@ -1514,7 +1581,8 @@ QUESTS_CONFIG = [
     {"id": "share_photo",  "title": "Share a photo",            "target": 1,  "reward": 2,  "icon": "📤", "type": "daily"},
     {"id": "streak_7",     "title": "Reach 7-day streak",       "target": 7,  "reward": 7,  "icon": "🏆", "type": "milestone"},
     {"id": "gen_50",       "title": "50 total generations",     "target": 50, "reward": 10, "icon": "💫", "type": "lifetime"},
-    {"id": "invite_1",     "title": "Invite your first friend", "target": 1,  "reward": 5,  "icon": "👥", "type": "lifetime"},
+    {"id": "invite_1",          "title": "Invite your first friend",  "target": 1,  "reward": 5,  "icon": "👥", "type": "lifetime"},
+    {"id": "add_to_home_screen","title": "Add app to home screen",   "target": 1,  "reward": 5,  "icon": "🏠", "type": "lifetime"},
 ]
 # uid → {quest_id: count}  (daily quests reset each UTC day)
 USER_QUEST_PROGRESS: Dict[int, Dict[str, int]] = {}
@@ -7155,6 +7223,173 @@ async def api_gallery_reactions(job_id: str, request: Request):
     return {"reactions": reactions, "my_reaction": my_reaction}
 
 
+# ===================== COMMUNITY PRESETS =====================
+
+@app.post("/api/v1/community/share")
+async def api_community_share(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+
+    job_id = str(body.get("job_id") or "").strip()
+    label = str(body.get("label") or "").strip()[:40] or "My Style"
+    if not job_id:
+        return JSONResponse({"error": "job_id_required"}, status_code=400)
+
+    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if not job or int(job.get("chat_id") or 0) != uid:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if job.get("status") != "ready":
+        return JSONResponse({"error": "job_not_ready"}, status_code=400)
+
+    prompt = str(job.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"error": "no_prompt"}, status_code=400)
+
+    s3_key = job.get("output_s3_key")
+    cp_key = f"cp_{job_id[:12]}"
+
+    # Check duplicate
+    if DB_READY:
+        existing = _db_fetchall("SELECT key FROM imodel_community_presets WHERE key=%s LIMIT 1", (cp_key,))
+        if existing:
+            return {"ok": True, "key": cp_key, "already_shared": True}
+    else:
+        if any(p.get("key") == cp_key for p in COMMUNITY_PRESETS):
+            return {"ok": True, "key": cp_key, "already_shared": True}
+
+    creator_name = user.get("username") or user.get("first_name") or "anonymous"
+    now = time.time()
+
+    if DB_READY:
+        _db_execute(
+            "INSERT INTO imodel_community_presets(key, creator_uid, creator_name, label, prompt, output_s3_key, votes, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, 0, %s) ON CONFLICT (key) DO NOTHING",
+            (cp_key, uid, creator_name, label, prompt, s3_key, now),
+        )
+    else:
+        COMMUNITY_PRESETS.append({
+            "key": cp_key, "creator_uid": uid, "creator_name": creator_name,
+            "label": label, "prompt": prompt, "output_s3_key": s3_key,
+            "votes": 0, "created_at": now,
+        })
+        _save_community_file()
+
+    # +5 bonus credits for sharing
+    USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + 5
+    analytics_event(uid, "community_share", {"key": cp_key, "label": label})
+    return {"ok": True, "key": cp_key, "already_shared": False}
+
+
+@app.get("/api/v1/community")
+async def api_community_list(request: Request, sort: str = "top"):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    items = _load_community_presets_for_api(uid, sort=sort, limit=100)
+    result = []
+    for cp in items:
+        thumb = s3_presign_key(cp["output_s3_key"]) if cp.get("output_s3_key") else None
+        result.append({
+            "key": cp["key"],
+            "label": cp["label"],
+            "emoji": "✨",
+            "category": "community",
+            "is_premium": False,
+            "locked": False,
+            "prompt": cp["prompt"],
+            "thumbnail_url": thumb or "",
+            "votes": cp["votes"],
+            "creator_name": cp.get("creator_name") or "anonymous",
+            "creator_uid": cp["creator_uid"],
+            "my_vote": _has_community_vote(uid, cp["key"]),
+            "created_at": cp["created_at"],
+        })
+    return {"presets": result}
+
+
+@app.post("/api/v1/community/{key}/vote")
+async def api_community_vote(key: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+
+    already_voted = _has_community_vote(uid, key)
+
+    if DB_READY:
+        if already_voted:
+            _db_execute("DELETE FROM imodel_community_votes WHERE uid=%s AND preset_key=%s", (uid, key))
+            _db_execute("UPDATE imodel_community_presets SET votes = GREATEST(0, votes - 1) WHERE key=%s", (key,))
+        else:
+            _db_execute("INSERT INTO imodel_community_votes(uid, preset_key) VALUES(%s,%s) ON CONFLICT DO NOTHING", (uid, key))
+            _db_execute("UPDATE imodel_community_presets SET votes = votes + 1 WHERE key=%s", (key,))
+        rows = _db_fetchall("SELECT votes, creator_uid FROM imodel_community_presets WHERE key=%s LIMIT 1", (key,))
+        if not rows:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        new_votes, creator_uid = int(rows[0][0]), int(rows[0][1])
+    else:
+        vote_key = f"{uid}_{key}"
+        cp = next((p for p in COMMUNITY_PRESETS if p["key"] == key), None)
+        if not cp:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if already_voted:
+            COMMUNITY_VOTES.discard(vote_key)
+            cp["votes"] = max(0, cp["votes"] - 1)
+        else:
+            COMMUNITY_VOTES.add(vote_key)
+            cp["votes"] = cp["votes"] + 1
+        _save_community_file()
+        new_votes = cp["votes"]
+        creator_uid = cp["creator_uid"]
+
+    # Milestone notifications
+    if not already_voted and new_votes in (10, 50, 100):
+        try:
+            asyncio.create_task(
+                bot.send_message(creator_uid, f"🔥 Твой стиль набрал {new_votes} голосов в сообществе! Продолжай творить ✨")
+            )
+        except Exception:
+            pass
+
+    return {"votes": new_votes, "my_vote": not already_voted}
+
+
+@app.delete("/api/v1/community/{key}")
+async def api_community_delete(key: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    is_admin = _check_admin_auth(request)
+
+    if DB_READY:
+        rows = _db_fetchall("SELECT creator_uid FROM imodel_community_presets WHERE key=%s LIMIT 1", (key,))
+        if not rows:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if int(rows[0][0]) != uid and not is_admin:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        _db_execute("DELETE FROM imodel_community_votes WHERE preset_key=%s", (key,))
+        _db_execute("DELETE FROM imodel_community_presets WHERE key=%s", (key,))
+    else:
+        cp = next((p for p in COMMUNITY_PRESETS if p["key"] == key), None)
+        if not cp:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if cp["creator_uid"] != uid and not is_admin:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        COMMUNITY_PRESETS[:] = [p for p in COMMUNITY_PRESETS if p["key"] != key]
+        COMMUNITY_VOTES.discard(f"{uid}_{key}")
+        _save_community_file()
+
+    return {"ok": True}
+
+
 def _s3_key_from_url(url: str) -> Optional[str]:
     """Extract S3 object key from a presigned URL."""
     try:
@@ -7681,6 +7916,25 @@ async def api_presets(request: Request):
                 "prompt": p["prompt"],
                 "thumbnail_url": _thumb_url(p["key"]),
             })
+    # Community presets (top 50 by votes)
+    for cp in _load_community_presets_for_api(uid, sort="top", limit=50):
+        thumb = s3_presign_key(cp["output_s3_key"]) if cp.get("output_s3_key") else ""
+        result.append({
+            "key": cp["key"],
+            "label": cp["label"],
+            "emoji": "✨",
+            "category": "community",
+            "is_premium": False,
+            "locked": False,
+            "prompt": cp["prompt"],
+            "thumbnail_url": thumb,
+            "votes": cp["votes"],
+            "creator_name": cp.get("creator_name") or "anonymous",
+            "creator_uid": cp["creator_uid"],
+            "my_vote": _has_community_vote(uid, cp["key"]),
+            "created_at": cp["created_at"],
+        })
+
     trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
     return {"presets": result, "trending": trending_keys}
 
@@ -8211,6 +8465,8 @@ async def api_analytics_event(request: Request):
                     ui["presets_used"] = (used + [preset_key])[-50:]
         elif event == "share_tapped":
             _quest_incr_daily(uid, "share_photo", _today)
+        elif event == "home_screen_added":
+            USER_QUEST_PROGRESS.setdefault(uid, {})["add_to_home_screen"] = 1
         _check_and_unlock_achievements(uid)
     except Exception:
         pass

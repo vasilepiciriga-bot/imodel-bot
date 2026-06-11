@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Download, RefreshCw, Star, Images, Trophy, Share2,
-  Pencil, Copy, Check, ChevronLeft, ChevronRight, Trash2,
+  Pencil, Copy, Check, ChevronLeft, ChevronRight, Trash2, Globe,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { getGallery, getCachedGallery, setCachedGallery, requestHD, deletePhoto } from '../api/generations'
@@ -15,6 +15,7 @@ import { generateCaption } from '../api/caption'
 import { reactToPhoto } from '../api/quests'
 import { track } from '../api/analytics'
 import { useToast } from '../hooks/useToast'
+import { CommunityShareModal } from '../components/CommunityShareModal'
 import type { Generation } from '../types'
 
 const EMOJIS = ['❤️', '🔥', '😍', '👏', '😮']
@@ -299,6 +300,7 @@ export default function Gallery() {
   const [captionLoading, setCaptionLoading] = useState(false)
   const [showCaptions, setShowCaptions] = useState(false)
   const [reactions, setReactions] = useState<Record<string, ReactionState>>({})
+  const [shareOpen, setShareOpen] = useState(false)
   const toast = useToast()
 
   // Sort newest first
@@ -756,6 +758,17 @@ export default function Gallery() {
                   <Pencil size={14} /> Caption
                 </button>
               </div>
+              {/* Share to Community */}
+              <div className="px-4 pb-1">
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setShareOpen(true) }}
+                  className="w-full py-3 flex items-center justify-center gap-2 rounded-card text-[13px] font-semibold border"
+                  style={{ background: 'rgba(108,71,255,0.15)', borderColor: 'rgba(108,71,255,0.30)', color: '#A88FFF' }}
+                >
+                  <Globe size={14} /> Share to Community
+                </motion.button>
+              </div>
             </div>
           </motion.div>
         )}
@@ -776,6 +789,17 @@ export default function Gallery() {
             loading={captionLoading}
             onClose={() => { setShowCaptions(false); setCaptions([]) }}
             onRegenerate={() => lightbox && regenerateCaption(lightbox)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Community share modal */}
+      <AnimatePresence>
+        {shareOpen && lightbox && (
+          <CommunityShareModal
+            job={lightbox}
+            onClose={() => setShareOpen(false)}
+            onShared={() => setShareOpen(false)}
           />
         )}
       </AnimatePresence>

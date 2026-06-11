@@ -37,6 +37,11 @@ export interface Preset {
   emoji: string
   prompt?: string
   thumbnail_url?: string
+  votes?: number
+  creator_name?: string
+  creator_uid?: number
+  my_vote?: boolean
+  created_at?: number
 }
 
 export interface Generation {
