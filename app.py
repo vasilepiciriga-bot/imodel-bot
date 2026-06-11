@@ -1005,6 +1005,7 @@ USER_LAST_JOB: Dict[int, str]      = {}
 USER_LAST_ACTIVE: Dict[int, float] = {}   # timestamp последней активности — для TTL cleanup
 USER_LAST_BONUS: Dict[int, float]  = {}   # timestamp последнего daily bonus
 USER_STREAK: Dict[int, int]        = {}   # streak day count
+USER_STREAK_REMINDED: Dict[int, float] = {}   # uid → timestamp of last streak-at-risk reminder sent
 USER_PORTFOLIO_PUBLIC: Dict[int, bool] = {}   # uid → portfolio is public (opt-in)
 
 # Persistent storage for credits
@@ -3371,6 +3372,60 @@ async def memory_cleanup_loop():
             print("[cleanup] error:", str(e)[:160])
         await asyncio.sleep(3600)
 
+async def streak_reminder_loop():
+    """Check every 30 min; remind users whose streak will expire if they don't generate today."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            now = time.time()
+            sent = 0
+            for uid, streak in list(USER_STREAK.items()):
+                if streak <= 0:
+                    continue
+                if NUDGE_INFO.get(uid, {}).get("blocked"):
+                    continue
+                last_bonus = USER_LAST_BONUS.get(uid, 0)
+                hours_since = (now - last_bonus) / 3600
+                # Window: 20-47h since last bonus (streak expires at 48h)
+                if hours_since < 20 or hours_since >= 47:
+                    continue
+                # Only send once per day: skip if reminded in the last 20h
+                last_reminded = USER_STREAK_REMINDED.get(uid, 0)
+                if now - last_reminded < 20 * 3600:
+                    continue
+                lang = USER_LANG.get(uid, LANG_DEFAULT)
+                if not _nudge_allowed_now(lang):
+                    continue
+                _msgs: Dict[str, str] = {
+                    "ru": f"🔥 Ваш стрик {streak} дней под угрозой! Сделайте фото сегодня, чтобы не потерять.",
+                    "en": f"🔥 Your {streak}-day streak is at risk! Generate a photo today to keep it.",
+                    "ro": f"🔥 Seria ta de {streak} zile e în pericol! Generează o poză azi ca s-o păstrezi.",
+                    "de": f"🔥 Dein {streak}-Tage-Streak ist in Gefahr! Erstelle heute ein Foto, um ihn zu bewahren.",
+                    "ar": f"🔥 سلسلة {streak} يوم في خطر! أنشئ صورة اليوم للحفاظ عليها.",
+                }
+                text = _msgs.get(lang, _msgs["en"])
+                webapp_url = f"{WEBHOOK_BASE}/webapp"
+                markup = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="📸 Generate now", web_app=WebAppInfo(url=webapp_url)),
+                ]])
+                try:
+                    await bot.send_message(uid, text, reply_markup=markup)
+                    USER_STREAK_REMINDED[uid] = now
+                    analytics_event(uid, "streak_reminder_sent", {"streak": streak, "hours_since": round(hours_since, 1)})
+                    sent += 1
+                    if NUDGE_SEND_DELAY > 0:
+                        await asyncio.sleep(NUDGE_SEND_DELAY)
+                except (TelegramForbiddenError, TelegramNotFound):
+                    NUDGE_INFO.setdefault(uid, {})["blocked"] = True
+                except Exception:
+                    pass
+            if sent:
+                print(f"[streak_reminder_loop] sent {sent} reminders")
+        except Exception as e:
+            print("streak_reminder_loop error:", str(e)[:200])
+        await asyncio.sleep(1800)
+
+
 async def nudge_loop():
     # Run hourly; send up to NUDGE_BATCH_LIMIT eligible nudges
     await asyncio.sleep(5)
@@ -5559,6 +5614,40 @@ async def cb_more(c: CallbackQuery):
     # credits hint via a fake Message-like context isn't possible here; skip
 
 
+@dp.callback_query(F.data.startswith("hd_notify:"))
+async def cb_hd_notify(c: CallbackQuery):
+    """HD upgrade button from completion notification."""
+    job_id = c.data.split(":", 1)[1]
+    uid = c.from_user.id
+    uname = getattr(c.from_user, "username", None)
+    await safe_cb_answer(c)
+    # 2 credits for HD
+    if not await _try_use_credits_n(uid, 2, uname):
+        lang = USER_LANG.get(uid, LANG_DEFAULT)
+        _insuff: Dict[str, str] = {
+            "ru": "⚡ Недостаточно кредитов для HD. Пополните баланс!",
+            "en": "⚡ Not enough credits for HD. Top up your balance!",
+            "ro": "⚡ Credite insuficiente pentru HD. Reîncarcă!",
+            "de": "⚡ Nicht genug Credits für HD. Lade auf!",
+            "ar": "⚡ رصيد غير كافٍ للـ HD. أعد الشحن!",
+        }
+        await c.message.answer(_insuff.get(lang, _insuff["en"]), reply_markup=kb_invite_buy(uid))
+        return
+    hd_job_id = f"{job_id}_hd_{int(time.time())}"
+    record_job(hd_job_id, status="pending", kind="hd", parent_job_id=job_id, chat_id=uid)
+    asyncio.create_task(_run_hd_upscale_job(hd_job_id, job_id))
+    lang = USER_LANG.get(uid, LANG_DEFAULT)
+    _hd_started: Dict[str, str] = {
+        "ru": "⬆️ HD апскейл запущен! Пришлём результат через минуту.",
+        "en": "⬆️ HD upscale started! We'll send the result in a minute.",
+        "ro": "⬆️ HD pornit! Îți trimitem rezultatul în câteva minute.",
+        "de": "⬆️ HD-Upscale gestartet! Wir senden das Ergebnis gleich.",
+        "ar": "⬆️ بدأ تحسين الدقة! سنرسل النتيجة خلال دقيقة.",
+    }
+    await c.message.answer(_hd_started.get(lang, _hd_started["en"]))
+    analytics_event(uid, "hd_from_notif", {"job_id": job_id})
+
+
 async def ensure_webhook():
     """Ensure Telegram points to this deployment.
 
@@ -5677,6 +5766,9 @@ async def on_startup():
             t = asyncio.create_task(nudge_loop(), name="nudge_loop")
             t.add_done_callback(_bg_task_error_handler)
             print("Nudge loop started")
+            t = asyncio.create_task(streak_reminder_loop(), name="streak_reminder_loop")
+            t.add_done_callback(_bg_task_error_handler)
+            print("Streak reminder loop started")
         if GROUP_POSTS_ENABLED:
             t = asyncio.create_task(group_posts_loop(), name="group_posts_loop")
             t.add_done_callback(_bg_task_error_handler)
@@ -5770,6 +5862,51 @@ def public_job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
     hidden = {"image_bytes", "style_bytes"}
     return {k: v for k, v in job.items() if k not in hidden and not isinstance(v, (bytes, bytearray))}
 
+async def _notify_webapp_completion(
+    uid: int,
+    job_id: str,
+    output_urls: List[str],
+    mode_key: str,
+    lang: str,
+) -> None:
+    """Push the first result photo to the user's Telegram chat after a webapp generation finishes."""
+    if not uid or not output_urls:
+        return
+    if NUDGE_INFO.get(uid, {}).get("blocked"):
+        return
+    try:
+        first_url = output_urls[0]
+        img_dl = await asyncio.to_thread(_download_with_retries, first_url)
+        if not img_dl:
+            return
+        mode_label = get_mode_label(mode_key, lang)
+        _msgs: Dict[str, str] = {
+            "ru": f"✨ {mode_label} готово! Посмотрите результат:",
+            "en": f"✨ {mode_label} ready! Your photo is here:",
+            "ro": f"✨ {mode_label} gata! Fotografia ta este aici:",
+            "de": f"✨ {mode_label} fertig! Dein Foto ist bereit:",
+            "ar": f"✨ {mode_label} جاهز! صورتك هنا:",
+        }
+        caption = _msgs.get(lang, _msgs["en"])
+        if len(output_urls) > 1:
+            caption += f" ({len(output_urls)} photos)"
+        webapp_url = f"{WEBHOOK_BASE}/webapp"
+        markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔄 Generate again", web_app=WebAppInfo(url=webapp_url)),
+            InlineKeyboardButton(text="⬆️ HD upgrade", callback_data=f"hd_notify:{job_id}"),
+        ]])
+        await bot.send_photo(
+            uid,
+            types.BufferedInputFile(img_dl, filename="result.jpg"),
+            caption=caption,
+            reply_markup=markup,
+        )
+        analytics_event(uid, "completion_notif_sent", {"job_id": job_id, "mode": mode_key})
+    except (TelegramForbiddenError, TelegramNotFound):
+        NUDGE_INFO.setdefault(uid, {})["blocked"] = True
+    except Exception as e:
+        log_event("completion_notif_error", uid=uid, job_id=job_id, error=str(e)[:200])
+
 async def run_webapp_generation_job(job_id: str):
     job = JOBS.get(job_id)
     if not job:
@@ -5820,6 +5957,9 @@ async def run_webapp_generation_job(job_id: str):
     record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes))
     _wjob = JOBS.get(job_id, {})
     analytics_event(_wjob.get("chat_id"), "generation_completed", {"source": "webapp", "mode": "everyday", "job_id": job_id})
+    if uid:
+        _lang = str(job.get("lang") or LANG_DEFAULT)
+        asyncio.create_task(_notify_webapp_completion(uid, job_id, [output_url], mode, _lang))
 
 
 async def _run_hd_upscale_job(hd_job_id: str, parent_job_id: str):
@@ -5983,6 +6123,9 @@ async def run_photoshoot_tournament_job(job_id: str):
                     )
         except Exception as e:
             log_event("tournament_delivery_error", job_id=job_id, error=str(e)[:200])
+    elif uid:
+        # Webapp-initiated tournament job: push first result as Telegram notification
+        asyncio.create_task(_notify_webapp_completion(uid, job_id, output_urls, mode_key, lang))
 
 
 async def _process_telegram_update(data: Dict[str, Any], received_at: float):
