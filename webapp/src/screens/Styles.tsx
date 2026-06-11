@@ -70,6 +70,7 @@ function PresetCard({ preset, active, index, onTap, onLongPress }: {
             alt={preset.label}
             loading="lazy"
             className="w-full h-full object-cover"
+            style={preset.locked ? { filter: 'blur(8px)', transform: 'scale(1.1)' } : undefined}
             onError={() => setThumbError(true)}
           />
         ) : (
@@ -124,14 +125,15 @@ function PresetCard({ preset, active, index, onTap, onLongPress }: {
 
         {/* Lock overlay */}
         {preset.locked && (
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px] flex flex-col items-center justify-center gap-1.5">
+          <div className="absolute inset-0 bg-black/35 flex flex-col items-center justify-center gap-1">
             <div
-              className="w-9 h-9 rounded-full flex items-center justify-center"
-              style={{ background: `${accent}33`, border: `1.5px solid ${accent}` }}
+              className="w-10 h-10 rounded-full flex items-center justify-center shadow-lg"
+              style={{ background: `${accent}55`, border: `1.5px solid ${accent}99` }}
             >
-              <Lock size={15} style={{ color: accent }} />
+              <Lock size={16} className="text-white" />
             </div>
-            <span className="text-[10px] font-bold text-white">Unlock</span>
+            <span className="text-[10px] font-bold text-white tracking-wide">Unlock</span>
+            <span className="text-[9px] text-white/65">Tap to buy</span>
           </div>
         )}
 

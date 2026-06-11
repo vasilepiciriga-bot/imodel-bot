@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Grid2X2, Diamond, Check, Download } from 'lucide-react'
+import { Flame, Grid2X2, Diamond, Check, Download, Upload } from 'lucide-react'
 import { SelfieUploader } from '../components/studio/SelfieUploader'
 import { ModeSelector } from '../components/studio/ModeSelector'
 import { GenerateButton } from '../components/studio/GenerateButton'
@@ -37,6 +37,10 @@ export default function Studio() {
   const [showModePicker, setShowModePicker] = useState(false)
   const [photoshootModes, setPhotoshootModes] = useState<PhotoshootMode[]>([])
   const [showPaywall, setShowPaywall] = useState(false)
+  const [refUrl, setRefUrl] = useState('')
+  const [refB64, setRefB64] = useState<string | null>(null)
+  const [refPreview, setRefPreview] = useState<string | null>(null)
+  const [refLoading, setRefLoading] = useState(false)
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -64,6 +68,14 @@ export default function Studio() {
   useEffect(() => {
     if (activePreset) setPrompt('')
   }, [activePreset])
+
+  useEffect(() => {
+    if (mode !== 'copy_image') {
+      setRefB64(null)
+      setRefPreview(null)
+      setRefUrl('')
+    }
+  }, [mode])
 
   const modeConfig = photoshootModes.find((m) => m.key === photoshootMode)
   const baseCost = modeConfig?.credits ?? (photoshootMode === 'everyday' ? 1 : 1)
@@ -143,7 +155,8 @@ export default function Studio() {
         image_b64: selfieB64,
         prompt: activePreset?.prompt ?? prompt,
         preset_key: activePreset?.key,
-        mode,
+        mode: mode === 'copy_image' ? 'copy_scene' : mode,
+        style_b64: mode === 'copy_image' ? (refB64 ?? undefined) : undefined,
         photoshoot_mode: photoshootMode,
         custom_desc: photoshootMode === 'custom' ? customDesc : undefined,
       }
@@ -180,6 +193,50 @@ export default function Studio() {
     const shareText = encodeURIComponent('I made this with AI in seconds 🤩 Try it free →')
     const shareUrl = encodeURIComponent(botLink)
     tg?.openLink(`https://t.me/share/url?url=${shareUrl}&text=${shareText}`)
+  }
+
+  async function loadRefFromUrl() {
+    if (!refUrl.trim()) return
+    setRefLoading(true)
+    tg?.HapticFeedback?.impactOccurred('light')
+    try {
+      const proxyUrl = `/api/v1/proxy-image?url=${encodeURIComponent(refUrl.trim())}`
+      const res = await fetch(proxyUrl, {
+        headers: { Authorization: `tma ${(tg as unknown as { initData?: string })?.initData ?? ''}` },
+      })
+      if (!res.ok) throw new Error('proxy ' + res.status)
+      const blob = await res.blob()
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = reject
+        reader.readAsDataURL(blob)
+      })
+      setRefPreview(dataUrl)
+      setRefB64(dataUrl.split(',')[1])
+    } catch {
+      toast.error('Не удалось загрузить изображение')
+    } finally {
+      setRefLoading(false)
+    }
+  }
+
+  function handleRefFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setRefLoading(true)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      setRefPreview(dataUrl)
+      setRefB64(dataUrl.split(',')[1])
+      setRefLoading(false)
+    }
+    reader.onerror = () => {
+      toast.error('Ошибка загрузки файла')
+      setRefLoading(false)
+    }
+    reader.readAsDataURL(file)
   }
 
   async function handleHD() {
@@ -223,6 +280,77 @@ export default function Studio() {
       <div className="flex-1 px-4 pb-4 space-y-3">
         <SelfieUploader />
         <ModeSelector />
+
+        {/* Copy Image reference panel */}
+        <AnimatePresence mode="wait">
+          {mode === 'copy_image' && (
+            <motion.div
+              key="copy-image-panel"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              className="rounded-card bg-[#F5F5F7] p-4 space-y-3"
+            >
+              <div>
+                <p className="text-[13px] font-semibold text-[#1D1D1F]">📎 Референс-фото</p>
+                <p className="text-[11px] text-[#6E6E73] mt-0.5">Загрузи фото образа, который хочешь повторить</p>
+              </div>
+
+              {refPreview ? (
+                <div className="relative rounded-[12px] overflow-hidden" style={{ aspectRatio: '1/1', maxHeight: 180 }}>
+                  <img src={refPreview} alt="reference" className="w-full h-full object-cover" />
+                  <button
+                    onClick={() => { setRefPreview(null); setRefB64(null); setRefUrl('') }}
+                    className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/60 flex items-center justify-center text-white text-[12px] font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      value={refUrl}
+                      onChange={(e) => setRefUrl(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadRefFromUrl() } }}
+                      placeholder="Вставь ссылку (Pinterest, Instagram…)"
+                      className="flex-1 px-3 py-2.5 rounded-[10px] bg-white border border-[#E5E5EA] text-[13px] text-[#1D1D1F] placeholder-[#C7C7CC] outline-none focus:border-[#6C47FF]/40"
+                    />
+                    <button
+                      onClick={loadRefFromUrl}
+                      disabled={!refUrl.trim() || refLoading}
+                      className="px-3.5 py-2.5 rounded-[10px] bg-[#6C47FF] text-white text-[12px] font-semibold disabled:opacity-40 min-w-[44px] flex items-center justify-center"
+                    >
+                      {refLoading ? <span className="animate-pulse">…</span> : <Download size={14} />}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-px bg-[#E5E5EA]" />
+                    <span className="text-[11px] text-[#AEAEB2]">или</span>
+                    <div className="flex-1 h-px bg-[#E5E5EA]" />
+                  </div>
+
+                  <label
+                    htmlFor="ref-upload"
+                    className="flex items-center justify-center gap-2 py-2.5 rounded-[10px] bg-white border border-[#E5E5EA] text-[13px] font-medium text-[#1D1D1F] cursor-pointer active:bg-[#F5F5F7]"
+                  >
+                    <Upload size={14} className="text-[#6C47FF]" />
+                    Загрузить с телефона
+                  </label>
+                  <input
+                    id="ref-upload"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleRefFile}
+                  />
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Streak at risk banner */}
         {user?.last_gen_at && (Date.now() / 1000 - user.last_gen_at) > 20 * 3600 && (user?.streak ?? 0) > 0 && (
@@ -298,8 +426,8 @@ export default function Studio() {
           </motion.div>
         )}
 
-        {/* Prompt (not for custom mode) */}
-        {!activePreset && photoshootMode !== 'custom' && (
+        {/* Prompt (not for custom mode or copy_image) */}
+        {!activePreset && photoshootMode !== 'custom' && mode !== 'copy_image' && (
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -346,7 +474,7 @@ export default function Studio() {
           </motion.div>
         )}
 
-        <GenerateButton onClick={generate} loading={loading && (!currentJob || !isJobDone(currentJob))} disabled={!selfieB64} cost={cost} />
+        <GenerateButton onClick={generate} loading={loading && (!currentJob || !isJobDone(currentJob))} disabled={!selfieB64 || (mode === 'copy_image' && !refB64)} cost={cost} />
 
         {/* Progress */}
         <AnimatePresence>

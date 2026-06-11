@@ -6973,6 +6973,50 @@ async def api_gallery_delete(job_id: str, request: Request):
     _cache_delete_job(job_id)
     return {"ok": True}
 
+@app.get("/api/v1/proxy-image")
+async def api_proxy_image(url: str, request: Request):
+    """
+    Same-origin image proxy so the frontend can fetch Replicate/S3 images as blobs
+    without CORS issues inside Telegram's WKWebView.
+    """
+    from fastapi.responses import Response as _Resp
+    from urllib.parse import urlparse as _urlparse
+    import ipaddress as _ipaddress
+
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    url = (url or "").strip()
+    if not url.startswith("https://"):
+        return JSONResponse({"error": "https_only"}, status_code=400)
+    # Basic SSRF guard: block loopback and private network hosts
+    try:
+        _host = _urlparse(url).hostname or ""
+        if _host in ("localhost", "127.0.0.1", "::1"):
+            return JSONResponse({"error": "blocked"}, status_code=400)
+        try:
+            _addr = _ipaddress.ip_address(_host)
+            if _addr.is_private or _addr.is_loopback:
+                return JSONResponse({"error": "blocked"}, status_code=400)
+        except ValueError:
+            pass  # hostname — fine
+    except Exception:
+        pass
+    try:
+        data = await asyncio.to_thread(_download_with_retries, url)
+        if not data:
+            return JSONResponse({"error": "download_failed"}, status_code=502)
+        ct = "image/jpeg"
+        if len(data) > 12:
+            if data[:8] == b"\x89PNG\r\n\x1a\n":
+                ct = "image/png"
+            elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+                ct = "image/webp"
+        return _Resp(content=data, media_type=ct,
+                     headers={"Cache-Control": "private, max-age=3600"})
+    except Exception as _pe:
+        return JSONResponse({"error": str(_pe)[:80]}, status_code=502)
+
 ALLOWED_REACTIONS = ["❤️", "🔥", "😍", "👏", "😮"]
 # job_id → {emoji: count}
 PHOTO_REACTIONS: Dict[str, Dict[str, int]] = {}

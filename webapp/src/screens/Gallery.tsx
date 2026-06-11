@@ -663,7 +663,7 @@ export default function Gallery() {
                     if (info.offset.x < -60 || info.velocity.x < -250) navigate(1)
                     else if (info.offset.x > 60 || info.velocity.x > 250) navigate(-1)
                   }}
-                  className="absolute inset-0 flex items-center justify-center p-4"
+                  className="absolute inset-0 flex items-center justify-center p-2"
                 >
                   <img
                     src={lightbox.hd_url ?? lightbox.output_url}
@@ -694,56 +694,63 @@ export default function Gallery() {
               )}
             </div>
 
-            {/* Reactions */}
-            <div className="px-4 pb-2" onClick={(e) => e.stopPropagation()}>
-              <ReactionRow
-                jobId={lightbox.job_id}
-                state={reactions[lightbox.job_id] ?? { counts: {}, mine: null }}
-                compact={false}
-                onReact={handleReact}
-              />
-            </div>
-
-            {/* Action buttons */}
+            {/* Bottom panel: reactions + actions on a solid dark surface */}
             <div
-              className="grid grid-cols-2 gap-2 px-4 pt-3"
-              style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
+              className="bg-black/60 border-t border-white/[0.08]"
               onClick={(e) => e.stopPropagation()}
             >
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                disabled={saving}
-                onClick={async () => {
-                  setSaving(true)
-                  tg?.HapticFeedback?.impactOccurred('medium')
-                  try {
-                    await saveImageToPhone(lightbox.hd_url ?? lightbox.output_url ?? '')
-                  } catch {
-                    toast.error('Could not save', { sub: 'Long-press the photo to save manually' })
-                  } finally { setSaving(false) }
-                }}
-                className="flex items-center justify-center gap-1.5 py-3 bg-white/10 rounded-card text-white text-[13px] font-medium disabled:opacity-50"
+              {/* Reactions */}
+              <div className="px-4 pt-3 pb-2">
+                <ReactionRow
+                  jobId={lightbox.job_id}
+                  state={reactions[lightbox.job_id] ?? { counts: {}, mine: null }}
+                  compact={false}
+                  onReact={handleReact}
+                />
+              </div>
+
+              {/* Action buttons */}
+              <div
+                className="grid grid-cols-2 gap-2 px-4 pb-3 pt-1"
+                style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
               >
-                <Download size={14} /> {saving ? 'Saving…' : 'Save'}
-              </motion.button>
-              <button className="flex items-center justify-center gap-1.5 py-3 bg-white/10 rounded-card text-white text-[13px] font-medium">
-                <RefreshCw size={14} /> Redo
-              </button>
-              <button
-                onClick={() => handleHD(lightbox)}
-                disabled={!!lightbox.hd_url || hdLoading}
-                className={`flex items-center justify-center gap-1.5 py-3 rounded-card text-[13px] font-medium ${
-                  lightbox.hd_url ? 'bg-[#34C759]/30 text-[#34C759]' : 'bg-[#6C47FF]/30 text-[#A88FFF]'
-                }`}
-              >
-                <Star size={14} /> {lightbox.hd_url ? 'HD ✓' : 'HD · 2⚡'}
-              </button>
-              <button
-                onClick={() => handleCaption(lightbox)}
-                className="flex items-center justify-center gap-1.5 py-3 bg-[#FF9500]/20 rounded-card text-[#FF9500] text-[13px] font-medium"
-              >
-                <Pencil size={14} /> Caption
-              </button>
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
+                  disabled={saving}
+                  onClick={async () => {
+                    setSaving(true)
+                    tg?.HapticFeedback?.impactOccurred('medium')
+                    try {
+                      await saveImageToPhone(lightbox.hd_url ?? lightbox.output_url ?? '')
+                    } catch {
+                      toast.error('Не удалось сохранить', { sub: 'Попробуйте зажать фото' })
+                    } finally { setSaving(false) }
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-3 bg-white/[0.18] border border-white/[0.12] rounded-card text-white text-[13px] font-medium disabled:opacity-50"
+                >
+                  <Download size={14} /> {saving ? 'Сохраняю…' : 'Сохранить'}
+                </motion.button>
+                <button className="flex items-center justify-center gap-1.5 py-3 bg-white/[0.18] border border-white/[0.12] rounded-card text-white text-[13px] font-medium">
+                  <RefreshCw size={14} /> Redo
+                </button>
+                <button
+                  onClick={() => handleHD(lightbox)}
+                  disabled={!!lightbox.hd_url || hdLoading}
+                  className={`flex items-center justify-center gap-1.5 py-3 rounded-card text-[13px] font-medium border ${
+                    lightbox.hd_url
+                      ? 'bg-[#34C759]/25 border-[#34C759]/30 text-[#34C759]'
+                      : 'bg-[#6C47FF]/30 border-[#6C47FF]/40 text-[#A88FFF]'
+                  }`}
+                >
+                  <Star size={14} /> {lightbox.hd_url ? 'HD ✓' : 'HD · 2⚡'}
+                </button>
+                <button
+                  onClick={() => handleCaption(lightbox)}
+                  className="flex items-center justify-center gap-1.5 py-3 bg-[#FF9500]/25 border border-[#FF9500]/30 rounded-card text-[#FF9500] text-[13px] font-medium"
+                >
+                  <Pencil size={14} /> Caption
+                </button>
+              </div>
             </div>
           </motion.div>
         )}

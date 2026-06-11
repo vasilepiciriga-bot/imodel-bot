@@ -56,7 +56,7 @@ export interface Generation {
   original_url?: string
 }
 
-export type GenerationMode = 'portrait' | 'copy_scene' | 'face_swap'
+export type GenerationMode = 'portrait' | 'copy_scene' | 'copy_image'
 
 export type PhotoshootModeKey =
   | 'everyday' | 'premium' | 'vogue' | 'ceo' | 'dating' | 'luxury' | 'custom'

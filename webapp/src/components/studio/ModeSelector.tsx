@@ -5,7 +5,7 @@ import type { GenerationMode } from '../../types'
 const MODES: { id: GenerationMode; label: string; emoji: string }[] = [
   { id: 'portrait', label: 'Portrait', emoji: '✦' },
   { id: 'copy_scene', label: 'Scene', emoji: '🎬' },
-  { id: 'face_swap', label: 'Face Swap', emoji: '🔄' },
+  { id: 'copy_image', label: 'Copy Image', emoji: '🖼️' },
 ]
 
 const tg = window.Telegram?.WebApp
