@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Flame, Users, Camera, CheckCircle2, Copy, Share2 } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
-import { claimDaily, getChallenge, getReferral } from '../api/session'
+import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
+import { setPortfolioVisibility } from '../api/portfolio'
 import type { Challenge } from '../types'
 import type { ReferralData } from '../api/session'
 
@@ -307,6 +308,47 @@ export default function Profile() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Portfolio visibility */}
+        <div className="p-4 rounded-card bg-[#F5F5F7]">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[14px] font-semibold text-[#1D1D1F]">🔗 Public Portfolio</p>
+              <p className="text-[11px] text-[#6E6E73] mt-0.5">Share your AI photos with a link</p>
+            </div>
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={async () => {
+                const next = !user?.portfolio_public
+                try {
+                  await setPortfolioVisibility(next)
+                  const updated = await getMe()
+                  setUser(updated)
+                } catch { /* noop */ }
+              }}
+              className={`w-12 h-6 rounded-full transition-colors ${user?.portfolio_public ? 'bg-[#34C759]' : 'bg-[#D1D1D6]'}`}
+            >
+              <motion.div
+                animate={{ x: user?.portfolio_public ? 24 : 2 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                className="w-5 h-5 rounded-full bg-white shadow-sm"
+              />
+            </motion.button>
+          </div>
+          {user?.portfolio_public && user?.portfolio_url && (
+            <motion.button
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              onClick={() => {
+                const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(user.portfolio_url!)}&text=${encodeURIComponent('My AI portfolio ✨')}`
+                tg?.openLink(shareUrl)
+              }}
+              className="mt-3 w-full py-2 rounded-[10px] bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-semibold"
+            >
+              Share portfolio →
+            </motion.button>
+          )}
         </div>
 
         {/* Links */}

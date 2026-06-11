@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Download, RefreshCw, Star, Images, Trophy } from 'lucide-react'
+import { X, Download, RefreshCw, Star, Images, Trophy, Share2 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { getGallery, getCachedGallery, setCachedGallery, requestHD } from '../api/generations'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
+import { setPortfolioVisibility } from '../api/portfolio'
+import { getMe } from '../api/session'
 import { track } from '../api/analytics'
 import type { Generation } from '../types'
 
@@ -81,10 +83,13 @@ function LeaderboardModal({ data, onClose }: { data: LeaderboardData; onClose: (
 export default function Gallery() {
   const gallery = useAppStore((s) => s.gallery)
   const setGallery = useAppStore((s) => s.setGallery)
+  const user = useAppStore((s) => s.user)
+  const setUser = useAppStore((s) => s.setUser)
   const [lightbox, setLightbox] = useState<Generation | null>(null)
   const [hdLoading, setHdLoading] = useState(false)
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [showLeaderboard, setShowLeaderboard] = useState(false)
+  const [portfolioLoading, setPortfolioLoading] = useState(false)
 
   useEffect(() => {
     const cached = getCachedGallery()
@@ -118,6 +123,26 @@ export default function Gallery() {
     track('leaderboard_viewed', { source: 'webapp' })
   }
 
+  async function handleSharePortfolio() {
+    tg?.HapticFeedback?.impactOccurred('medium')
+    setPortfolioLoading(true)
+    try {
+      let url = user?.portfolio_url ?? null
+      if (!user?.portfolio_public) {
+        const res = await setPortfolioVisibility(true)
+        url = res.portfolio_url
+        const updated = await getMe()
+        setUser(updated)
+      }
+      if (!url) return
+      track('portfolio_shared', { source: 'gallery' })
+      const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent('Check out my AI portraits! ✨')}`
+      tg?.openLink(shareUrl)
+    } catch { /* noop */ } finally {
+      setPortfolioLoading(false)
+    }
+  }
+
   const top3 = leaderboard?.entries.slice(0, 3) ?? []
 
   return (
@@ -127,6 +152,19 @@ export default function Gallery() {
         <div className="flex items-center gap-2">
           {gallery.length > 0 && (
             <span className="text-[13px] text-[#6E6E73]">{gallery.length} photos</span>
+          )}
+          {gallery.length > 0 && (
+            <motion.button
+              whileTap={{ scale: 0.92 }}
+              onClick={handleSharePortfolio}
+              disabled={portfolioLoading}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#6C47FF]/15 border border-[#6C47FF]/30"
+            >
+              <Share2 size={12} className="text-[#6C47FF]" />
+              <span className="text-[11px] font-semibold text-[#6C47FF]">
+                {user?.portfolio_public ? 'Share' : 'Portfolio'}
+              </span>
+            </motion.button>
           )}
           {leaderboard && (
             <motion.button

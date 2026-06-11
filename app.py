@@ -431,6 +431,14 @@ def _db_load_job(job_id: str) -> Optional[Dict[str, Any]]:
     )
     return _db_job_to_dict(rows[0]) if rows else None
 
+def _db_load_user_jobs(uid: int, limit: int = 20) -> List[Dict[str, Any]]:
+    rows = _db_fetchall(
+        "SELECT job_id, kind, status, chat_id, username, prompt, model, timeline_json, result_json, error, created_at, updated_at "
+        "FROM imodel_jobs WHERE chat_id = %s AND status = 'ready' ORDER BY updated_at DESC LIMIT %s",
+        (uid, int(limit)),
+    )
+    return [_db_job_to_dict(row) for row in rows]
+
 # ===== Persistent stats storage =====
 DATA_DIR = os.getenv("DATA_DIR", "data")
 STATS_TOTALS_FILE = os.path.join(DATA_DIR, "stats_totals.json")
@@ -997,6 +1005,7 @@ USER_LAST_JOB: Dict[int, str]      = {}
 USER_LAST_ACTIVE: Dict[int, float] = {}   # timestamp последней активности — для TTL cleanup
 USER_LAST_BONUS: Dict[int, float]  = {}   # timestamp последнего daily bonus
 USER_STREAK: Dict[int, int]        = {}   # streak day count
+USER_PORTFOLIO_PUBLIC: Dict[int, bool] = {}   # uid → portfolio is public (opt-in)
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -6173,6 +6182,8 @@ async def api_me(request: Request):
         "gens_ok": int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0)),
         "payments": int(ui.get("payments", 0)),
         "streak": int(ui.get("streak", 0)),
+        "portfolio_public": USER_PORTFOLIO_PUBLIC.get(uid, False),
+        "portfolio_url": f"{WEBHOOK_BASE.rstrip('/')}/p/{uid}" if USER_PORTFOLIO_PUBLIC.get(uid) else None,
     }
 
 def _weekly_top_generators(n: int = 10) -> List[Dict[str, Any]]:
@@ -6293,6 +6304,222 @@ async def api_gallery(request: Request):
         if int(j.get("chat_id") or 0) == uid and j.get("status") == "ready"
     ][-20:]
     return {"items": items}
+
+def _s3_key_from_url(url: str) -> Optional[str]:
+    """Extract S3 object key from a presigned URL."""
+    try:
+        from urllib.parse import urlparse, unquote
+        parsed = urlparse(url)
+        path = unquote(parsed.path).lstrip("/")
+        # path-style: /{bucket}/{key}  →  strip bucket prefix
+        bucket = str(S3_BUCKET or "")
+        if bucket and path.startswith(bucket + "/"):
+            return path[len(bucket) + 1:]
+        # virtual-host-style: bucket.endpoint/{key}  →  path IS the key
+        if path:
+            return path
+    except Exception:
+        pass
+    return None
+
+def _s3_fetch_bytes(s3_key: str) -> Optional[bytes]:
+    """Fetch raw bytes for an S3 object key."""
+    if not (_s3 and S3_BUCKET and s3_key):
+        return None
+    try:
+        obj = _s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        return obj["Body"].read()
+    except Exception:
+        return None
+
+def _portfolio_photos(uid: int, limit: int = 12) -> List[Dict[str, Any]]:
+    """Return ready jobs for a user, newest first."""
+    if DB_READY:
+        jobs = _db_load_user_jobs(uid, limit)
+    else:
+        jobs = sorted(
+            [j for j in JOBS.values() if int(j.get("chat_id") or 0) == uid and j.get("status") == "ready"],
+            key=lambda j: float(j.get("updated_at", 0)),
+            reverse=True,
+        )[:limit]
+    return [public_job_snapshot(j) for j in jobs if j.get("output_url")]
+
+@app.get("/portfolio-photo/{uid}/{job_id}")
+async def serve_portfolio_photo(uid: int, job_id: str):
+    """Permanent proxy for portfolio photos — bypasses presigned URL expiry."""
+    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if not job or int(job.get("chat_id") or 0) != uid or job.get("status") != "ready":
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    output_url = str(job.get("output_url") or "")
+    s3_key = _s3_key_from_url(output_url)
+    if s3_key:
+        img_bytes = await asyncio.to_thread(_s3_fetch_bytes, s3_key)
+        if img_bytes:
+            from starlette.responses import Response as StarletteResponse
+            return StarletteResponse(
+                content=img_bytes,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=604800", "X-Robots-Tag": "noindex"},
+            )
+    # Fallback: redirect to original (may be expired)
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url=output_url, status_code=302)
+
+@app.get("/api/v1/portfolio/{uid}")
+async def api_portfolio_public(uid: int, request: Request):
+    """Public portfolio data — no auth required."""
+    if not USER_PORTFOLIO_PUBLIC.get(uid):
+        return JSONResponse({"error": "portfolio_private"}, status_code=404)
+    ui = STATS_USERS_INFO.get(uid) or {}
+    username = str(ui.get("username") or "")
+    display = f"@{username}" if username else f"User #{uid}"
+    gens_ok = int(ui.get("gens_ok", 0))
+    photos = _portfolio_photos(uid, limit=12)
+    base = str(WEBHOOK_BASE).rstrip("/")
+    items = []
+    for j in photos:
+        items.append({
+            "job_id": j.get("job_id"),
+            "photo_url": f"{base}/portfolio-photo/{uid}/{j.get('job_id')}",
+            "prompt": str(j.get("prompt") or "")[:120],
+            "created_at": j.get("updated_at"),
+        })
+    bot_link = f"https://t.me/{BOT_USERNAME_GLOBAL}" if BOT_USERNAME_GLOBAL else ""
+    return {
+        "uid": uid,
+        "display": display,
+        "total_generated": gens_ok,
+        "items": items,
+        "bot_link": bot_link,
+        "portfolio_url": f"{base}/p/{uid}",
+    }
+
+@app.post("/api/v1/portfolio/visibility")
+async def api_portfolio_visibility(request: Request):
+    """Toggle portfolio public/private."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    data = await request.json()
+    public = bool(data.get("public", True))
+    USER_PORTFOLIO_PUBLIC[uid] = public
+    analytics_event(uid, "portfolio_visibility_changed", {"public": public})
+    base = str(WEBHOOK_BASE).rstrip("/")
+    return {"public": public, "portfolio_url": f"{base}/p/{uid}" if public else None}
+
+@app.get("/p/{uid}")
+async def portfolio_page(uid: int, request: Request):
+    """Public portfolio page — server-rendered, shareable."""
+    if not USER_PORTFOLIO_PUBLIC.get(uid):
+        return HTMLResponse(
+            '<html><body style="font:16px sans-serif;text-align:center;padding:80px;background:#0f1115;color:#aaa">'
+            '<p>This portfolio is private.</p></body></html>',
+            status_code=404,
+        )
+    ui = STATS_USERS_INFO.get(uid) or {}
+    username = str(ui.get("username") or "")
+    display = html_lib.escape(f"@{username}" if username else f"User #{uid}")
+    gens_ok = int(ui.get("gens_ok", 0))
+    photos = _portfolio_photos(uid, limit=12)
+    base = str(WEBHOOK_BASE).rstrip("/")
+    bot_link = html_lib.escape(f"https://t.me/{BOT_USERNAME_GLOBAL}" if BOT_USERNAME_GLOBAL else "https://t.me/imodelapp_bot")
+    portfolio_url = html_lib.escape(f"{base}/p/{uid}")
+
+    # OG image: first photo or empty
+    og_image = ""
+    if photos:
+        og_image = html_lib.escape(f"{base}/portfolio-photo/{uid}/{photos[0].get('job_id')}")
+
+    photo_grid = ""
+    for j in photos:
+        job_id = j.get("job_id", "")
+        photo_url = html_lib.escape(f"{base}/portfolio-photo/{uid}/{job_id}")
+        prompt = html_lib.escape(str(j.get("prompt") or "")[:80])
+        photo_grid += f"""
+        <div class="photo-card" onclick="revealPhoto(this, '{photo_url}')">
+          <div class="blur-overlay">
+            <img src="{photo_url}" alt="{prompt}" loading="lazy">
+            <div class="tap-hint">Tap to reveal</div>
+          </div>
+          <p class="prompt-text">{prompt or "AI Portrait"}</p>
+        </div>"""
+
+    return HTMLResponse(f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{display}'s AI Portfolio — iModel</title>
+  <meta name="description" content="{display} has generated {gens_ok} AI portraits. Create yours!">
+  <meta property="og:title" content="{display}'s AI Portfolio">
+  <meta property="og:description" content="{gens_ok} AI-generated portraits — create yours with iModel">
+  {"<meta property='og:image' content='" + og_image + "'>" if og_image else ""}
+  <meta property="og:type" content="profile">
+  <meta name="twitter:card" content="summary_large_image">
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d0d12;color:#e6edf3;min-height:100vh}}
+    .hero{{padding:40px 20px 24px;text-align:center;background:linear-gradient(180deg,#1a0a2e 0%,#0d0d12 100%)}}
+    .avatar{{width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#6c47ff,#ff2d78);display:inline-flex;align-items:center;justify-content:center;font-size:32px;margin-bottom:14px}}
+    .username{{font-size:24px;font-weight:700;color:#fff}}
+    .stats{{font-size:14px;color:#9aa4b2;margin-top:6px}}
+    .stat-pill{{display:inline-block;background:#1b2030;border:1px solid #2a3556;border-radius:20px;padding:4px 12px;font-size:13px;color:#7aa2f7;margin-top:8px}}
+    .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;padding:20px}}
+    .photo-card{{border-radius:12px;overflow:hidden;background:#151922;cursor:pointer;transition:transform .15s}}
+    .photo-card:hover{{transform:scale(1.02)}}
+    .blur-overlay{{position:relative}}
+    .blur-overlay img{{width:100%;aspect-ratio:1;object-fit:cover;display:block;filter:blur(14px);transition:filter .3s}}
+    .blur-overlay.revealed img{{filter:none}}
+    .tap-hint{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:rgba(255,255,255,.7);font-weight:600;pointer-events:none;transition:opacity .3s}}
+    .blur-overlay.revealed .tap-hint{{opacity:0}}
+    .prompt-text{{font-size:11px;color:#9aa4b2;padding:6px 10px 8px;line-height:1.4;max-height:42px;overflow:hidden}}
+    .cta{{text-align:center;padding:32px 20px 48px}}
+    .cta-btn{{display:inline-block;padding:14px 32px;background:linear-gradient(135deg,#6c47ff,#ff2d78);border-radius:50px;color:#fff;font-size:16px;font-weight:700;text-decoration:none}}
+    .cta-sub{{font-size:13px;color:#9aa4b2;margin-top:12px}}
+    .share-bar{{display:flex;justify-content:center;gap:10px;padding:0 20px 20px}}
+    .share-btn{{flex:1;max-width:200px;padding:10px;background:#1b2030;border:1px solid #2a3556;border-radius:10px;color:#7aa2f7;font-size:13px;font-weight:600;cursor:pointer;text-align:center}}
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <div class="avatar">✨</div>
+    <div class="username">{display}</div>
+    <div class="stats">AI Portrait Studio</div>
+    <span class="stat-pill">🖼 {gens_ok} generations created</span>
+  </div>
+
+  <div class="share-bar">
+    <button class="share-btn" onclick="copyLink()">🔗 Copy link</button>
+    <a class="share-btn" href="https://t.me/share/url?url={portfolio_url}&text=Check+out+my+AI+portraits!" target="_blank">📨 Share to Telegram</a>
+  </div>
+
+  <div class="grid">
+    {photo_grid if photo_grid else '<p style="color:#9aa4b2;text-align:center;padding:40px">No photos yet.</p>'}
+  </div>
+
+  <div class="cta">
+    <a class="cta-btn" href="{bot_link}">✨ Create your AI portfolio →</a>
+    <p class="cta-sub">Free to start · Powered by iModel AI</p>
+  </div>
+
+  <script>
+  function revealPhoto(card, url) {{
+    const overlay = card.querySelector('.blur-overlay');
+    if (overlay.classList.contains('revealed')) return;
+    overlay.classList.add('revealed');
+  }}
+  async function copyLink() {{
+    try {{
+      await navigator.clipboard.writeText('{portfolio_url}');
+      alert('Portfolio link copied!');
+    }} catch(e) {{
+      prompt('Copy this link:', '{portfolio_url}');
+    }}
+  }}
+  </script>
+</body>
+</html>""")
 
 def _decode_b64_image(b64: str) -> Optional[bytes]:
     try:

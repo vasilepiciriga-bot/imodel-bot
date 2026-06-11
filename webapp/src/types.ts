@@ -21,6 +21,8 @@ export interface UserProfile {
   bot_link?: string
   gens_ok?: number
   payments?: number
+  portfolio_public?: boolean
+  portfolio_url?: string
 }
 
 export interface Preset {
