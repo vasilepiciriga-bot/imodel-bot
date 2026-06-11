@@ -116,6 +116,13 @@ export default function Studio() {
         if (credits <= 0) {
           setTimeout(() => setShowPaywall(true), 1800) // let user see result first
         }
+      } else {
+        const errMsg = job.error === 'selfie_quality' ? 'Photo rejected — try a clearer selfie'
+          : job.error === 'blocked' ? 'Content blocked. Try a different style.'
+          : job.error === 'no_credits' ? 'Not enough credits'
+          : 'Generation failed — tap Generate to retry'
+        toast.error(errMsg)
+        tg?.HapticFeedback?.notificationOccurred('error')
       }
     }
   })

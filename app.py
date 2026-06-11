@@ -6231,6 +6231,10 @@ def webapp_user_from_request(request: Request) -> Optional[Dict[str, Any]]:
         payload = parse_webapp_token(auth.split(" ", 1)[1].strip())
         if payload:
             return payload
+    if auth.lower().startswith("tma "):
+        validated = validate_webapp_init_data(auth.split(" ", 1)[1].strip())
+        if validated:
+            return {"uid": validated["uid"], "username": validated.get("username", "")}
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     validated = validate_webapp_init_data(init_data)
     if validated:
@@ -6736,7 +6740,7 @@ async def api_set_language(request: Request):
         lang = str(data.get("language") or "").strip().lower()[:8]
     except Exception:
         return JSONResponse({"error": "invalid body"}, status_code=400)
-    allowed = {"en", "ru", "ro", "de"}
+    allowed = {"en", "ru", "ro", "de", "ar"}
     if lang not in allowed:
         return JSONResponse({"error": "unsupported language"}, status_code=400)
     USER_LANG[uid] = lang
@@ -7026,7 +7030,7 @@ async def api_gift_create(request: Request):
     user = webapp_user_from_request(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
-    uid = int(user["id"])
+    uid = int(user["uid"])
     try:
         data = await request.json()
     except Exception:
@@ -7063,7 +7067,7 @@ async def api_caption_generate(request: Request):
     user = webapp_user_from_request(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
-    uid = int(user["id"])
+    uid = int(user["uid"])
     try:
         data = await request.json()
     except Exception:

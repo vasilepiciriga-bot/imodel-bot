@@ -46,6 +46,7 @@ export interface Generation {
   output_urls?: string[]
   hd_url?: string
   hd_job_id?: string
+  error?: string
   preset_key?: string
   mode?: string
   photoshoot_mode?: string
