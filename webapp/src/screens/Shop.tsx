@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, Zap, Crown, Star, Check, ChevronRight } from 'lucide-react'
+import { CheckCircle2, Zap, Crown, Star, Check, ChevronRight, RotateCw } from 'lucide-react'
 import confetti from 'canvas-confetti'
-import { getShop, createInvoice, type ShopData } from '../api/shop'
+import { getShop, createInvoice, setAutoRecharge, type ShopData } from '../api/shop'
 import { getMe } from '../api/session'
 import { useAppStore } from '../store/appStore'
 import { track } from '../api/analytics'
@@ -32,10 +32,12 @@ function fireConfetti() {
 }
 
 const SUB_META: Record<string, { color: string; label: string; emoji: string; badge?: string }> = {
-  sub_weekly:  { color: '#34C759',  label: 'Weekly',   emoji: '⚡' },
-  sub_pro:     { color: '#6C47FF',  label: 'Pro',      emoji: '🚀', badge: 'Most Popular' },
-  sub_creator: { color: '#FF2D78',  label: 'Creator',  emoji: '🔥', badge: 'Best Value' },
-  sub_elite:   { color: '#FF9500',  label: 'Elite',    emoji: '👑' },
+  sub_weekly:          { color: '#34C759',  label: 'Weekly',        emoji: '⚡' },
+  sub_pro:             { color: '#6C47FF',  label: 'Pro',           emoji: '🚀', badge: 'Most Popular' },
+  sub_creator:         { color: '#FF2D78',  label: 'Creator',       emoji: '🔥', badge: 'Best Value' },
+  sub_elite:           { color: '#FF9500',  label: 'Elite',         emoji: '👑' },
+  sub_pro_annual:      { color: '#6C47FF',  label: 'Pro Annual',    emoji: '🚀', badge: 'Save 20%' },
+  sub_creator_annual:  { color: '#FF2D78',  label: 'Creator Annual',emoji: '🔥', badge: 'Best Deal ✓' },
 }
 
 const PACK_META: Record<string, { badge?: string; highlight?: boolean }> = {
@@ -100,6 +102,8 @@ function BundleCard({ bundle, onBuy }: { bundle: NonNullable<ShopData['bundle']>
 export default function Shop() {
   const [shop, setShop] = useState<ShopData | null>(null)
   const [activeSubTab, setActiveSubTab] = useState<'monthly' | 'packs'>('monthly')
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly')
+  const [autoRechargeEnabled, setAutoRechargeEnabled] = useState(false)
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
   const updateCredits = useAppStore((s) => s.updateCredits)
@@ -132,6 +136,20 @@ export default function Shop() {
       toast.error(msg)
     }
   }, [setUser, updateCredits, toast])
+
+  const handleAutoRechargeToggle = useCallback(async () => {
+    const next = !autoRechargeEnabled
+    setAutoRechargeEnabled(next)
+    hap.select()
+    try {
+      await setAutoRecharge('pack_30', 5, next)
+      toast.success(next ? 'Auto-recharge enabled' : 'Auto-recharge disabled', {
+        sub: next ? 'We\'ll remind you when credits run low' : undefined,
+      })
+    } catch {
+      setAutoRechargeEnabled(!next)
+    }
+  }, [autoRechargeEnabled, toast])
 
   const credits = user?.credits ?? 0
   const activePlan = shop?.subscription
@@ -213,8 +231,31 @@ export default function Shop() {
               transition={{ duration: 0.15 }}
               className="space-y-3"
             >
+              {/* Monthly / Annual billing toggle */}
+              {(shop?.annual_subscriptions ?? []).length > 0 && (
+                <div className="flex rounded-[12px] bg-[#E8E8ED] p-1 gap-1">
+                  {(['monthly', 'annual'] as const).map((cycle) => (
+                    <button
+                      key={cycle}
+                      onClick={() => { hap.select(); setBillingCycle(cycle) }}
+                      className={`flex-1 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                        billingCycle === cycle ? 'bg-white text-[#1D1D1F] shadow-sm' : 'text-[#6E6E73]'
+                      }`}
+                    >
+                      {cycle === 'monthly' ? 'Monthly' : 'Annual'}
+                      {cycle === 'annual' && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-[#34C759] text-white text-[9px] font-bold">−20%</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* Subscription comparison cards */}
-              {(shop?.subscriptions ?? []).map((sub) => {
+              {((billingCycle === 'annual' && (shop?.annual_subscriptions ?? []).length > 0)
+                  ? (shop?.annual_subscriptions ?? [])
+                  : (shop?.subscriptions ?? [])
+              ).map((sub) => {
                 const meta = SUB_META[sub.id] ?? { color: '#6C47FF', label: sub.plan, emoji: '⚡' }
                 const isActive = activePlan?.plan === sub.plan
                 const features = shop?.subscription_features?.[sub.plan] ?? []
@@ -423,6 +464,30 @@ export default function Shop() {
                   </div>
                 </div>
               )}
+
+              {/* Auto-recharge toggle */}
+              <motion.button
+                whileTap={{ scale: 0.98 }}
+                onClick={handleAutoRechargeToggle}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-[16px] border transition-colors ${
+                  autoRechargeEnabled
+                    ? 'bg-[#6C47FF]/8 border-[#6C47FF]/30'
+                    : 'bg-white border-black/[0.06]'
+                }`}
+              >
+                <RotateCw size={18} className={autoRechargeEnabled ? 'text-[#6C47FF]' : 'text-[#6E6E73]'} />
+                <div className="flex-1 text-left">
+                  <p className="text-[13px] font-semibold text-[#1D1D1F]">Auto-recharge</p>
+                  <p className="text-[11px] text-[#6E6E73]">Get notified when credits drop below 5</p>
+                </div>
+                <div className={`w-11 h-6 rounded-full transition-colors relative ${autoRechargeEnabled ? 'bg-[#6C47FF]' : 'bg-[#D1D1D6]'}`}>
+                  <motion.div
+                    animate={{ x: autoRechargeEnabled ? 22 : 2 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                    className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm"
+                  />
+                </div>
+              </motion.button>
 
               {/* Free features */}
               <div className="rounded-[16px] bg-white border border-black/[0.06] p-4">

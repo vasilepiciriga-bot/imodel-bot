@@ -373,7 +373,11 @@ export default function Styles() {
     ? presets.filter((p) => p.category === 'community')
     : presets.filter((p) => p.category.toLowerCase() === category.toLowerCase())
 
-  const trending = presets.filter((p) => !p.is_premium && !p.locked).slice(0, 6)
+  // Sort by real usage_7d if available, fallback to first 6 free presets
+  const trending = [...presets]
+    .filter((p) => !p.is_premium && !p.locked)
+    .sort((a, b) => ((b as Preset & { usage_7d?: number }).usage_7d ?? 0) - ((a as Preset & { usage_7d?: number }).usage_7d ?? 0))
+    .slice(0, 8)
 
   async function handlePreset(preset: Preset) {
     if (preset.locked && preset.pack_id) {
@@ -416,6 +420,7 @@ export default function Styles() {
             {trending.map((p) => {
               const [g1, g2] = CATEGORY_GRADIENT[p.category] ?? ['#1a1a2e', '#2a2a3e']
               const isActive = activePreset?.key === p.key
+              const usage = (p as Preset & { usage_7d?: number }).usage_7d ?? 0
               return (
                 <motion.button
                   key={p.key}
@@ -438,6 +443,11 @@ export default function Styles() {
                     {isActive && (
                       <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
                         <Check size={16} strokeWidth={3} className="text-white" />
+                      </div>
+                    )}
+                    {usage > 50 && !isActive && (
+                      <div className="absolute bottom-0 left-0 right-0 bg-[#FF2D78] text-white text-[8px] font-bold text-center py-0.5">
+                        🔥 {usage}
                       </div>
                     )}
                   </div>

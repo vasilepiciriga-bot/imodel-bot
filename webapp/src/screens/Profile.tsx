@@ -6,6 +6,7 @@ import { useAppStore } from '../store/appStore'
 import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { createGift } from '../api/gift'
+import { createGiftSub } from '../api/shop'
 import { getQuests, claimQuest, getAchievements, setLanguage } from '../api/quests'
 import { getLeaderboard } from '../api/leaderboard'
 import { AchievementPopup } from '../components/shared/AchievementPopup'
@@ -171,6 +172,15 @@ export default function Profile() {
     const text = encodeURIComponent('Try AI photoshoots — turns your selfie into stunning photos!')
     const url = encodeURIComponent(referral.link)
     tg?.openLink(`https://t.me/share/url?url=${url}&text=${text}`)
+  }
+
+  async function handleGiftSub() {
+    hap.medium()
+    try {
+      const { share_link, gift_days } = await createGiftSub()
+      const text = encodeURIComponent(`🎁 I'm gifting you ${gift_days} days of iModel Pro — AI portraits for free!`)
+      tg?.openLink(`https://t.me/share/url?url=${encodeURIComponent(share_link)}&text=${text}`)
+    } catch { /* noop */ }
   }
 
   async function handleSendGift(credits: number) {
@@ -598,7 +608,7 @@ export default function Profile() {
               <div className="flex items-center gap-2 px-3 py-2 bg-[#F5F5F7] rounded-[10px] mb-2">
                 <span className="flex-1 text-[11px] text-[#6E6E73] truncate">{referral.link}</span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 mb-2">
                 <motion.button whileTap={{ scale: 0.96 }} onClick={handleCopyLink}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-[10px] bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-semibold">
                   <Copy size={13} />
@@ -610,6 +620,14 @@ export default function Profile() {
                   Share
                 </motion.button>
               </div>
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={handleGiftSub}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-[10px] bg-gradient-to-r from-[#FF9500]/15 to-[#FF2D78]/10 border border-[#FF9500]/25 text-[#FF9500] text-[12px] font-semibold"
+              >
+                <Gift size={13} />
+                🎁 Gift your friend 7 days of Pro →
+              </motion.button>
             </div>
           </div>
         )}

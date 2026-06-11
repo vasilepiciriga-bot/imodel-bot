@@ -1,7 +1,10 @@
 import { api } from './client'
 
+export interface SubItem { id: string; label?: string; plan: string; stars: number; credits: number; period: string; active: boolean }
+
 export interface ShopData {
-  subscriptions: Array<{ id: string; label?: string; plan: string; stars: number; credits: number; period: string; active: boolean }>
+  subscriptions: SubItem[]
+  annual_subscriptions?: SubItem[]
   packs: Array<{ id: string; label: string; stars: number; credits: number; badge?: string | null }>
   style_packs: Array<{ id: string; label: string; stars: number; styles_count: number; unlocked: boolean }>
   preset_packs: Array<{ id: string; label: string; emoji: string; stars: number; presets_count: number; unlocked: boolean }>
@@ -20,6 +23,12 @@ export interface ShopData {
     expires_at: number
   }
 }
+
+export const setAutoRecharge = (pack: string, threshold: number, enabled: boolean) =>
+  api.post<{ ok: boolean }>('/api/v1/auto-recharge', { pack, threshold, enabled })
+
+export const createGiftSub = () =>
+  api.post<{ ok: boolean; share_link: string; gift_days: number; gifter_bonus: number }>('/api/v1/gift/sub')
 
 export const getShop = () => api.get<ShopData>('/api/v1/shop')
 

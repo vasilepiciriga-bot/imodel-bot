@@ -993,6 +993,17 @@ BUNDLE_CREDITS      = int(os.getenv("BUNDLE_CREDITS", "150"))
 PRO_TRIAL_CREDITS   = int(os.getenv("PRO_TRIAL_CREDITS", "15"))
 PRO_TRIAL_DAYS      = int(os.getenv("PRO_TRIAL_DAYS",    "3"))
 
+# Annual subscription plans (save ~16-20% vs monthly)
+SUB_PRO_ANNUAL_STARS    = int(os.getenv("SUB_PRO_ANNUAL_STARS",    "4900"))   # ≈€63.7/yr
+SUB_PRO_ANNUAL_CREDITS  = int(os.getenv("SUB_PRO_ANNUAL_CREDITS",  "1200"))   # 100/mo × 12
+SUB_CREATOR_ANNUAL_STARS    = int(os.getenv("SUB_CREATOR_ANNUAL_STARS",    "9900"))
+SUB_CREATOR_ANNUAL_CREDITS  = int(os.getenv("SUB_CREATOR_ANNUAL_CREDITS",  "3840"))
+SUB_ANNUAL_PERIOD = 365 * 86400
+
+# Sub-gift: one-tap 7-day Pro trial gift for a friend (gifter earns +5 credits when redeemed)
+SUB_GIFT_DAYS   = int(os.getenv("SUB_GIFT_DAYS",   "7"))
+SUB_GIFT_BONUS  = int(os.getenv("SUB_GIFT_BONUS",  "5"))  # credits gifter earns on redemption
+
 # Canonical payload → stars map used by pre_checkout validation and payment idempotency.
 # Must be kept in sync with ITEMS in api_shop_invoice and send_stars_invoice.
 def _build_payment_sku_map() -> Dict[str, int]:
@@ -1010,7 +1021,9 @@ def _build_payment_sku_map() -> Dict[str, int]:
         "viral_pack":          VIRAL_PACK_STARS,
         "locations_pack":      LOCATIONS_PACK_STARS,
         "fantasy_pack":        FANTASY_PACK_STARS,
-        "bundle_creator_week": BUNDLE_STARS,
+        "bundle_creator_week":  BUNDLE_STARS,
+        "sub_pro_annual":       SUB_PRO_ANNUAL_STARS,
+        "sub_creator_annual":   SUB_CREATOR_ANNUAL_STARS,
     }
 
 # In-memory set of already-processed telegram_payment_charge_ids (survive restarts via DB load).
@@ -1367,6 +1380,9 @@ USER_STREAK_REMINDED: Dict[int, float] = {}   # uid → timestamp of last streak
 USER_QUEST_REMINDED:  Dict[int, float] = {}   # uid → timestamp of last quest-expiry reminder sent
 USER_PORTFOLIO_PUBLIC: Dict[int, bool] = {}   # uid → portfolio is public (opt-in)
 USER_LAST_SHARE_REWARD: Dict[int, str] = {}  # uid → ISO date of last share-reward claim
+STATS_PRESET_USAGE:   Dict[str, int]   = {}  # preset_key → uses this week (resets weekly)
+_preset_usage_reset_at: float = time.time()
+USER_AUTO_RECHARGE: Dict[int, Dict]    = {}  # uid → {"pack": "pack_30", "threshold": 5, "enabled": bool}
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -1719,7 +1735,29 @@ async def _try_use_credits_n(uid: int, n: int, username: Optional[str] = None) -
             return False
         USER_CREDITS[uid] -= n
     _credits_save()
+    # Auto-recharge: if enabled and balance dropped to threshold, notify user
+    _ar = USER_AUTO_RECHARGE.get(uid)
+    if _ar and _ar.get("enabled") and USER_CREDITS.get(uid, 0) <= int(_ar.get("threshold", 5)):
+        asyncio.create_task(_send_auto_recharge_reminder(uid, str(_ar.get("pack", "pack_30"))))
     return True
+
+async def _send_auto_recharge_reminder(uid: int, pack_id: str):
+    try:
+        _sku_map = _build_payment_sku_map()
+        stars = _sku_map.get(pack_id, 490)
+        credits_added = {"pack_10": 10, "pack_30": 30, "pack_100": 100, "pack_300": 300}.get(pack_id, 30)
+        title = f"iModel — {credits_added} Generations"
+        inv_url = await bot.create_invoice_link(
+            title=title, description=f"{credits_added} AI portrait credits",
+            payload=pack_id, provider_token="", currency="XTR",
+            prices=[LabeledPrice(label=title, amount=stars)],
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"⚡ Recharge {credits_added} gens ({stars}★)", url=inv_url),
+        ]])
+        await bot.send_message(uid, f"⚡ Auto-recharge: your balance is running low. Tap to top up with {credits_added} gens:", reply_markup=kb)
+    except Exception:
+        pass
 
 async def _refund_credits_n(uid: int, n: int, username: Optional[str] = None):
     """Refund n credits after a failed tournament."""
@@ -4818,7 +4856,7 @@ async def got_payment(m: Message):
         log_event("payment_duplicate_skipped", uid=uid, charge_id=charge_id, payload=payload)
         return
 
-    is_sub = payload in ("sub_pro", "sub_elite", "sub_weekly", "sub_creator")
+    is_sub = payload in ("sub_pro", "sub_elite", "sub_weekly", "sub_creator", "sub_pro_annual", "sub_creator_annual")
     if is_sub:
         if payload == "sub_weekly":
             plan, credits_per_month, period = "weekly", SUB_WEEKLY_CREDITS, SUB_WEEKLY_PERIOD
@@ -4826,6 +4864,10 @@ async def got_payment(m: Message):
             plan, credits_per_month, period = "pro", SUB_PRO_CREDITS, SUB_PERIOD
         elif payload == "sub_creator":
             plan, credits_per_month, period = "creator", SUB_CREATOR_CREDITS, SUB_PERIOD
+        elif payload == "sub_pro_annual":
+            plan, credits_per_month, period = "pro", SUB_PRO_ANNUAL_CREDITS, SUB_ANNUAL_PERIOD
+        elif payload == "sub_creator_annual":
+            plan, credits_per_month, period = "creator", SUB_CREATOR_ANNUAL_CREDITS, SUB_ANNUAL_PERIOD
         else:
             plan, credits_per_month, period = "elite", SUB_ELITE_CREDITS, SUB_PERIOD
         add = credits_per_month
@@ -5209,6 +5251,48 @@ async def cmd_start(m: Message):
             return
 
     # prompt-share deep-link removed
+
+    # Deep-link: start=gift_sub_{uid} → claim 7-day Pro trial gifted by a friend
+    if len(parts) > 1 and parts[1].startswith("gift_sub_"):
+        try:
+            gifter_uid = int(parts[1][9:])
+        except ValueError:
+            gifter_uid = 0
+        recipient_uid = m.chat.id
+        if gifter_uid and gifter_uid != recipient_uid:
+            _gsub = get_active_sub(recipient_uid)
+            if not _gsub:  # only if recipient has no active sub
+                USER_SUBSCRIPTION[recipient_uid] = {
+                    "plan": "weekly_gift",
+                    "expires": time.time() + SUB_GIFT_DAYS * 86400,
+                    "credits_per_month": SUB_WEEKLY_CREDITS,
+                }
+                _subs_save()
+                async with _credits_lock:
+                    USER_CREDITS[recipient_uid] = USER_CREDITS.get(recipient_uid, FREE_QUOTA) + SUB_WEEKLY_CREDITS
+                _credits_save()
+                analytics_event(recipient_uid, "gift_sub_claimed", {"gifter_uid": gifter_uid})
+                # Reward gifter
+                gifter_ui = STATS_USERS_INFO.setdefault(gifter_uid, {})
+                if gifter_ui.get("pending_sub_gift") and not gifter_ui.get("sub_gift_reward_given"):
+                    gifter_ui["sub_gift_reward_given"] = True
+                    async with _credits_lock:
+                        USER_CREDITS[gifter_uid] = USER_CREDITS.get(gifter_uid, 0) + SUB_GIFT_BONUS
+                    _credits_save()
+                    try:
+                        await bot.send_message(gifter_uid, f"🎁 Your friend activated your gift! +{SUB_GIFT_BONUS}⚡ credits added to your balance.")
+                    except Exception:
+                        pass
+                _glang = USER_LANG.get(recipient_uid, LANG_DEFAULT)
+                _gsub_msgs: Dict[str, str] = {
+                    "ru": f"🎁 Твой друг подарил тебе {SUB_GIFT_DAYS} дней Pro! +{SUB_WEEKLY_CREDITS}⚡ кредитов добавлено.",
+                    "en": f"🎁 Your friend gifted you {SUB_GIFT_DAYS} days of Pro! +{SUB_WEEKLY_CREDITS}⚡ credits added.",
+                    "ro": f"🎁 Prietenul tău ți-a oferit {SUB_GIFT_DAYS} zile Pro! +{SUB_WEEKLY_CREDITS}⚡ credite adăugate.",
+                    "de": f"🎁 Dein Freund hat dir {SUB_GIFT_DAYS} Tage Pro geschenkt! +{SUB_WEEKLY_CREDITS}⚡ Credits hinzugefügt.",
+                }
+                await safe_answer(m, _gsub_msgs.get(_glang, _gsub_msgs["en"]))
+                USER_ONBOARDED.add(recipient_uid)
+                return
 
     # Deep-link: start=gift_XXXXXXXX → claim gift credits
     if len(parts) > 1 and parts[1].startswith("gift_"):
@@ -6912,6 +6996,12 @@ async def run_webapp_generation_job(job_id: str):
             _used = _ui.get("presets_used") if isinstance(_ui.get("presets_used"), list) else []
             if _preset_key not in _used:
                 _ui["presets_used"] = (_used + [_preset_key])[-50:]
+            # Weekly usage counter for trending
+            global _preset_usage_reset_at
+            if time.time() - _preset_usage_reset_at > 7 * 86400:
+                STATS_PRESET_USAGE.clear()
+                _preset_usage_reset_at = time.time()
+            STATS_PRESET_USAGE[_preset_key] = STATS_PRESET_USAGE.get(_preset_key, 0) + 1
         # Persist quest progress to DB
         _pj = USER_QUEST_PROGRESS.get(uid, {})
         for _qid in ("gen_daily_2", "gen_daily_5", "try_preset"):
@@ -8499,7 +8589,8 @@ async def api_presets(request: Request):
         elif lang == "de": label = p.label_de
         result.append({"key": p.key, "label": label, "category": _preset_category(p.key),
                         "is_premium": False, "locked": False, "emoji": getattr(p, "emoji", "✦"),
-                        "thumbnail_url": _thumb_url(p.key)})
+                        "thumbnail_url": _thumb_url(p.key),
+                        "usage_7d": STATS_PRESET_USAGE.get(p.key, 0)})
     for s in PREMIUM_STYLES:
         result.append({"key": s["key"], "label": s["label_en"], "emoji": s.get("emoji","✦"),
                         "category": s["category"], "is_premium": True,
@@ -8541,7 +8632,15 @@ async def api_presets(request: Request):
             "created_at": cp["created_at"],
         })
 
-    trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
+    # Build trending: top-10 by real usage_7d, fallback to env var list
+    _top_by_usage = sorted(
+        [(k, v) for k, v in STATS_PRESET_USAGE.items() if v > 0],
+        key=lambda x: x[1], reverse=True
+    )[:10]
+    if _top_by_usage:
+        trending_keys = [k for k, _ in _top_by_usage]
+    else:
+        trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
     return {"presets": result, "trending": trending_keys}
 
 @app.get("/api/v1/photoshoot-modes")
@@ -9001,6 +9100,14 @@ async def api_shop(request: Request):
              "credits": SUB_ELITE_CREDITS, "period": "month",
              "active": bool(sub and sub.get("plan") == "elite")},
         ],
+        "annual_subscriptions": [
+            {"id": "sub_pro_annual", "plan": "pro", "stars": SUB_PRO_ANNUAL_STARS,
+             "credits": SUB_PRO_ANNUAL_CREDITS, "period": "year",
+             "active": bool(sub and sub.get("plan") == "pro" and sub.get("expires", 0) - time.time() > 60 * 86400)},
+            {"id": "sub_creator_annual", "plan": "creator", "stars": SUB_CREATOR_ANNUAL_STARS,
+             "credits": SUB_CREATOR_ANNUAL_CREDITS, "period": "year",
+             "active": bool(sub and sub.get("plan") == "creator" and sub.get("expires", 0) - time.time() > 60 * 86400)},
+        ],
         "style_packs": [
             {"id": "premium_pack_1", "label": "Premium Collection",
              "styles_count": 15, "stars": STYLE_PACK_STARS, "unlocked": "premium_pack_1" in unlocked},
@@ -9061,6 +9168,8 @@ async def api_shop_invoice(request: Request):
         "locations_pack": ("iModel World Locations Pack", "6 exotic travel location presets", LOCATIONS_PACK_STARS, False),
         "fantasy_pack":        ("iModel Fantasy & Sci-Fi Pack", "6 fantasy and sci-fi scene presets", FANTASY_PACK_STARS, False),
         "bundle_creator_week": ("iModel Creator Bundle 🔥", f"{BUNDLE_CREDITS} gens + Viral Style Pack (limited offer)", BUNDLE_STARS, False),
+        "sub_pro_annual":      ("iModel Pro Annual", f"{SUB_PRO_ANNUAL_CREDITS} gens/year · save ~20%", SUB_PRO_ANNUAL_STARS, True),
+        "sub_creator_annual":  ("iModel Creator Annual", f"{SUB_CREATOR_ANNUAL_CREDITS} gens/year · save ~16%", SUB_CREATOR_ANNUAL_STARS, True),
     }
     if item_id not in ITEMS:
         return JSONResponse({"error": "invalid_item"}, status_code=400)
@@ -9071,7 +9180,12 @@ async def api_shop_invoice(request: Request):
         provider_token="", currency="XTR", prices=prices,
     )
     if is_sub:
-        period = SUB_WEEKLY_PERIOD if item_id == "sub_weekly" else SUB_PERIOD
+        if item_id == "sub_weekly":
+            period = SUB_WEEKLY_PERIOD
+        elif item_id in ("sub_pro_annual", "sub_creator_annual"):
+            period = SUB_ANNUAL_PERIOD
+        else:
+            period = SUB_PERIOD
         kwargs["subscription_period"] = period
     try:
         invoice_url = await bot.create_invoice_link(**kwargs)
@@ -9391,6 +9505,41 @@ async def api_referral(request: Request):
         "next_milestone_bonus": REFERRAL_MILESTONES.get(next_ms, 0) if next_ms else 0,
         "milestones": milestones,
     }
+
+@app.post("/api/v1/gift/sub")
+async def api_gift_sub(request: Request):
+    """Create a 7-day Pro trial gift link for a friend. Gifter earns +5 credits when redeemed."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    if not BOT_USERNAME_GLOBAL:
+        return JSONResponse({"error": "bot_not_ready"}, status_code=503)
+    ui = STATS_USERS_INFO.setdefault(uid, {})
+    ui["pending_sub_gift"] = True
+    share_link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=gift_sub_{uid}"
+    return {"ok": True, "share_link": share_link, "gift_days": SUB_GIFT_DAYS, "gifter_bonus": SUB_GIFT_BONUS}
+
+
+@app.post("/api/v1/auto-recharge")
+async def api_set_auto_recharge(request: Request):
+    """Enable or update auto-recharge settings for a user."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    data = await request.json()
+    enabled = bool(data.get("enabled", True))
+    pack = str(data.get("pack", "pack_30"))
+    threshold = int(data.get("threshold", 5))
+    if pack not in _build_payment_sku_map():
+        return JSONResponse({"error": "invalid_pack"}, status_code=400)
+    if enabled:
+        USER_AUTO_RECHARGE[uid] = {"pack": pack, "threshold": threshold, "enabled": True}
+    else:
+        USER_AUTO_RECHARGE.pop(uid, None)
+    return {"ok": True, "auto_recharge": USER_AUTO_RECHARGE.get(uid)}
+
 
 @app.get("/metrics")
 async def http_metrics(request: Request):
