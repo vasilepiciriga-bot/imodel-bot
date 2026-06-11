@@ -650,6 +650,13 @@ FACESWAP_MODEL    = os.getenv("FACESWAP_MODEL",   "codeplugtech/face-swap:278a81
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
 FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "3"))
 
+# Subscription tiers
+SUB_PRO_STARS   = int(os.getenv("SUB_PRO_STARS",   "299"))
+SUB_ELITE_STARS = int(os.getenv("SUB_ELITE_STARS", "999"))
+SUB_PRO_CREDITS   = int(os.getenv("SUB_PRO_CREDITS",   "50"))
+SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "200"))
+SUB_PERIOD = 2592000  # 30 days in seconds
+
 # Onboarding demo photo (Telegram file_id or public HTTPS URL; leave empty to skip)
 DEMO_PHOTO = os.getenv("DEMO_PHOTO", "")
 
@@ -893,6 +900,45 @@ def ensure_user_credit(uid: int):
 
 _credits_load()
 
+SUBS_FILE = os.getenv("SUBS_FILE", os.path.join(DATA_DIR, "subscriptions.json"))
+
+def _subs_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = SUBS_FILE + ".tmp"
+        payload = json.dumps({str(k): v for k, v in USER_SUBSCRIPTION.items()}, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, SUBS_FILE)
+        _s3_put_text(STATE_PREFIX + "subscriptions.json", payload)
+    except Exception as e:
+        print("[subs] save error:", str(e)[:160])
+
+def _subs_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "subscriptions.json")
+        if not txt and os.path.exists(SUBS_FILE):
+            with open(SUBS_FILE, "r", encoding="utf-8") as f:
+                txt = f.read()
+        if txt:
+            data = json.loads(txt)
+            for k, v in (data or {}).items():
+                try:
+                    USER_SUBSCRIPTION[int(k)] = v
+                except Exception:
+                    continue
+    except Exception as e:
+        print("[subs] load error:", str(e)[:160])
+
+_subs_load()
+
+def get_active_sub(uid: int) -> Optional[Dict]:
+    """Return subscription dict if active, else None."""
+    sub = USER_SUBSCRIPTION.get(uid)
+    if sub and sub.get("expires", 0) > time.time():
+        return sub
+    return None
+
 # Thread-safe credit operations (prevents double-spend on concurrent requests)
 _credits_lock = asyncio.Lock()
 
@@ -935,6 +981,9 @@ USER_COPY_PROMPT: Dict[int, str] = {}
 
 # Swap Mode (face swap into arbitrary target photo)
 USER_SWAP_MODE: Set[int]         = set()
+
+# Subscriptions: {uid: {"plan": "pro"|"elite", "expires": float, "credits_per_month": int}}
+USER_SUBSCRIPTION: Dict[int, Dict] = {}
 
 # Retouch Mode
  
@@ -1102,6 +1151,13 @@ T = {
         "buy_btn_100": "🔥  100 генераций — 1200★  (−40%)",
         "buy_btn_300": "💎  300 генераций — 2500★  (−58%)",
         "btn_upsell": "🔥 100 ген — 1200★",
+        "btn_sub": "📅 Подписка",
+        "sub_title": "📅 Подписка iModel\n\nАвтопродление каждый месяц. Отменить — в настройках Telegram.",
+        "sub_pro_btn":   f"⚡ Pro — {SUB_PRO_STARS}★/мес · {SUB_PRO_CREDITS} ген",
+        "sub_elite_btn": f"💎 Elite — {SUB_ELITE_STARS}★/мес · {SUB_ELITE_CREDITS} ген",
+        "sub_bought":  "✅ Подписка {plan} активна! +{add} генераций. Баланс: {all}.",
+        "sub_renewed": "🔄 Подписка {plan} продлена. +{add} генераций. Баланс: {all}.",
+        "sub_active":  "📅 {plan} — активна до {date}",
         "bought": "✅ +{add} генераций. Баланс: {all}.",
         "promo_usage": "Использование: /promo КОД",
         "promo_ok": "Промокод: +{add}. Всего: {all}.",
@@ -1191,6 +1247,13 @@ T = {
         "buy_btn_100": "🔥  100 generations — 1200★  (−40%)",
         "buy_btn_300": "💎  300 generations — 2500★  (−58%)",
         "btn_upsell": "🔥 100 gens — 1200★",
+        "btn_sub": "📅 Subscription",
+        "sub_title": "📅 iModel Subscription\n\nAuto-renews monthly. Cancel anytime in Telegram settings.",
+        "sub_pro_btn":   f"⚡ Pro — {SUB_PRO_STARS}★/mo · {SUB_PRO_CREDITS} gens",
+        "sub_elite_btn": f"💎 Elite — {SUB_ELITE_STARS}★/mo · {SUB_ELITE_CREDITS} gens",
+        "sub_bought":  "✅ {plan} subscription active! +{add} generations. Balance: {all}.",
+        "sub_renewed": "🔄 {plan} subscription renewed. +{add} generations. Balance: {all}.",
+        "sub_active":  "📅 {plan} — active until {date}",
         "bought": "✅ +{add} generations. Balance: {all}.",
         "promo_usage": "Usage: /promo CODE",
         "promo_ok": "Promo applied: +{add}. Total: {all}.",
@@ -1276,6 +1339,13 @@ T = {
         "buy_btn_100": "🔥  100 gen — 1200★  (−40%)",
         "buy_btn_300": "💎  300 gen — 2500★  (−58%)",
         "btn_upsell": "🔥 100 gen — 1200★",
+        "btn_sub": "📅 Abonament",
+        "sub_title": "📅 Abonament iModel\n\nReînnoire automată lunară. Anulează din setările Telegram.",
+        "sub_pro_btn":   f"⚡ Pro — {SUB_PRO_STARS}★/lună · {SUB_PRO_CREDITS} gen",
+        "sub_elite_btn": f"💎 Elite — {SUB_ELITE_STARS}★/lună · {SUB_ELITE_CREDITS} gen",
+        "sub_bought":  "✅ Abonament {plan} activ! +{add} generații. Sold: {all}.",
+        "sub_renewed": "🔄 Abonament {plan} reînnoit. +{add} generații. Sold: {all}.",
+        "sub_active":  "📅 {plan} — activ până la {date}",
         "bought": "✅ +{add} generații. Sold: {all}.",
         "promo_usage": "Folosește: /promo COD",
         "promo_ok": "Promo: +{add}. Total: {all}.",
@@ -1365,6 +1435,13 @@ T = {
         "buy_btn_100": "🔥  100 Gen — 1200★  (−40%)",
         "buy_btn_300": "💎  300 Gen — 2500★  (−58%)",
         "btn_upsell": "🔥 100 Gen — 1200★",
+        "btn_sub": "📅 Abo",
+        "sub_title": "📅 iModel Abo\n\nAutomatische monatliche Verlängerung. Kündigung in Telegram-Einstellungen.",
+        "sub_pro_btn":   f"⚡ Pro — {SUB_PRO_STARS}★/Monat · {SUB_PRO_CREDITS} Gen",
+        "sub_elite_btn": f"💎 Elite — {SUB_ELITE_STARS}★/Monat · {SUB_ELITE_CREDITS} Gen",
+        "sub_bought":  "✅ {plan}-Abo aktiv! +{add} Generierungen. Guthaben: {all}.",
+        "sub_renewed": "🔄 {plan}-Abo verlängert. +{add} Generierungen. Guthaben: {all}.",
+        "sub_active":  "📅 {plan} — aktiv bis {date}",
         "bought": "✅ +{add} Generierungen. Guthaben: {all}.",
         "promo_usage": "Verwendung: /promo CODE",
         "promo_ok": "Promo angewendet: +{add}. Gesamt: {all}.",
@@ -2935,6 +3012,7 @@ def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
     invite_text = lang.get("btn_invite", "👥 Invite a friend (+{n} free)").format(n=REF_BONUS_REF)
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lang.get("btn_sub", "📅 Subscription"), callback_data="sub_open")],
         [InlineKeyboardButton(text=lang.get("buy_btn_10",  "✨ 10 gens — 200★"),  callback_data="buy_stars_10")],
         [InlineKeyboardButton(text=lang.get("buy_btn_30",  "⚡ 30 gens — 500★"),  callback_data="buy_stars_30")],
         [InlineKeyboardButton(text=lang.get("buy_btn_100", "🔥 100 gens — 1200★"), callback_data="buy_stars_100")],
@@ -2982,19 +3060,51 @@ async def send_stars_invoice(chat_id: int, title: str, desc: str, payload: str, 
         prices=prices,
     )
 
+async def send_subscription_invoice(chat_id: int, plan: str):
+    lang = L(chat_id)
+    if plan == "pro":
+        title = "iModel Pro"
+        desc = lang.get("sub_pro_btn", f"Pro — {SUB_PRO_STARS}★/мес · {SUB_PRO_CREDITS} ген")
+        payload = "sub_pro"
+        stars = SUB_PRO_STARS
+    else:
+        title = "iModel Elite"
+        desc = lang.get("sub_elite_btn", f"Elite — {SUB_ELITE_STARS}★/мес · {SUB_ELITE_CREDITS} ген")
+        payload = "sub_elite"
+        stars = SUB_ELITE_STARS
+    prices = [LabeledPrice(label=title, amount=stars)]
+    await bot.send_invoice(
+        chat_id=chat_id,
+        title=title,
+        description=desc,
+        payload=payload,
+        provider_token="",
+        currency="XTR",
+        prices=prices,
+        subscription_period=SUB_PERIOD,
+    )
+
 @dp.message(Command("buy"))
 async def cmd_buy(m: Message):
     lang = L(m.chat.id)
-    n = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
+    uid = m.chat.id
+    n = USER_CREDITS.get(uid, FREE_QUOTA)
     invite_text = lang.get("btn_invite", "👥 Invite a friend (+{n} free)").format(n=REF_BONUS_REF)
+    sub = get_active_sub(uid)
+    sub_btn_text = lang.get("btn_sub", "📅 Subscription")
+    if sub:
+        import datetime
+        exp_str = datetime.datetime.fromtimestamp(sub["expires"]).strftime("%d.%m.%Y")
+        sub_btn_text = lang.get("sub_active", "📅 {plan} — active until {date}").format(plan=sub["plan"].capitalize(), date=exp_str)
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=sub_btn_text, callback_data="sub_open")],
         [InlineKeyboardButton(text=lang["buy_btn_10"],  callback_data="buy_stars_10")],
         [InlineKeyboardButton(text=lang["buy_btn_30"],  callback_data="buy_stars_30")],
         [InlineKeyboardButton(text=lang["buy_btn_100"], callback_data="buy_stars_100")],
         [InlineKeyboardButton(text=lang.get("buy_btn_300", "💎 300 gens — 2500★"), callback_data="buy_stars_300")],
         [InlineKeyboardButton(text=invite_text, callback_data="refer_open")],
     ])
-    balance_line = f"\n\n🔋 Баланс: {n} ген." if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)) else ""
+    balance_line = f"\n\n🔋 Баланс: {n} ген." if not is_free_user(uid, getattr(m.from_user, "username", None)) else ""
     await safe_answer(m, lang["buy_title"] + balance_line, reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("buy_stars_"))
@@ -3012,26 +3122,86 @@ async def cb_buy_stars(c: CallbackQuery):
         await send_stars_invoice(c.message.chat.id, "iModel — 300 генераций", "300 профессиональных фото (−58%)", "pack_300", 2500)
     await safe_cb_answer(c, txt)
 
+@dp.callback_query(F.data == "sub_open")
+async def cb_sub_open(c: CallbackQuery):
+    lang = L(c.message.chat.id)
+    uid = c.message.chat.id
+    sub = get_active_sub(uid)
+    text = lang.get("sub_title", "📅 iModel Subscription\n\nAuto-renews monthly.")
+    if sub:
+        import datetime
+        exp_str = datetime.datetime.fromtimestamp(sub["expires"]).strftime("%d.%m.%Y")
+        active_line = "\n\n" + lang.get("sub_active", "📅 {plan} — active until {date}").format(
+            plan=sub["plan"].capitalize(), date=exp_str
+        )
+        text += active_line
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lang.get("sub_pro_btn",   f"⚡ Pro — {SUB_PRO_STARS}★/мес"),   callback_data="sub_buy_pro")],
+        [InlineKeyboardButton(text=lang.get("sub_elite_btn", f"💎 Elite — {SUB_ELITE_STARS}★/мес"), callback_data="sub_buy_elite")],
+    ])
+    await safe_cb_answer(c)
+    try:
+        await c.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        await c.message.answer(text, reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("sub_buy_"))
+async def cb_sub_plan(c: CallbackQuery):
+    plan = c.data.split("_")[-1]  # "pro" or "elite"
+    await safe_cb_answer(c)
+    try:
+        await send_subscription_invoice(c.message.chat.id, plan)
+    except Exception as e:
+        print(f"[sub invoice] error: {e}")
+        await c.message.answer("⚠️ Ошибка создания подписки. Попробуйте позже.")
+
 @dp.pre_checkout_query()
 async def process_pre_checkout_q(pcq: PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pcq.id, ok=True)
 
 @dp.message(F.successful_payment)
 async def got_payment(m: Message):
+    import datetime
     payload = m.successful_payment.invoice_payload
+    uid = m.chat.id
+    lang = L(uid)
     add = 0
-    if payload == "pack_10": add = 10
-    elif payload == "pack_30": add = 30
-    elif payload == "pack_100": add = 100
-    elif payload == "pack_300": add = 300
-    # ensure user is recorded with username for admin visibility
-    _touch_user(m.chat.id, getattr(m.from_user, "username", None))
-    USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
-    _credits_save()
-    await safe_answer(m, L(m.chat.id)["bought"].format(add=add, all=USER_CREDITS[m.chat.id]))
+    _touch_user(uid, getattr(m.from_user, "username", None))
+
+    is_sub = payload in ("sub_pro", "sub_elite")
+    if is_sub:
+        plan = "pro" if payload == "sub_pro" else "elite"
+        credits_per_month = SUB_PRO_CREDITS if plan == "pro" else SUB_ELITE_CREDITS
+        add = credits_per_month
+        # Record subscription with expiry 31 days from now
+        USER_SUBSCRIPTION[uid] = {
+            "plan": plan,
+            "expires": time.time() + SUB_PERIOD + 86400,  # +1 day buffer
+            "credits_per_month": credits_per_month,
+        }
+        _subs_save()
+        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
+        _credits_save()
+        is_first = True
+        try:
+            is_first = bool(getattr(m.successful_payment, "is_first_recurring", True))
+        except Exception:
+            pass
+        msg_key = "sub_bought" if is_first else "sub_renewed"
+        await safe_answer(m, lang.get(msg_key, "✅ Подписка активна! +{add} ген.").format(
+            plan=plan.capitalize(), add=add, all=USER_CREDITS[uid]
+        ))
+    else:
+        if payload == "pack_10": add = 10
+        elif payload == "pack_30": add = 30
+        elif payload == "pack_100": add = 100
+        elif payload == "pack_300": add = 300
+        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
+        _credits_save()
+        await safe_answer(m, lang["bought"].format(add=add, all=USER_CREDITS[uid]))
+
     stats_incr("payments", 1)
-    _uadd(m.chat.id, "payments", 1)
-    # Notify admins about the purchase
+    _uadd(uid, "payments", 1)
     try:
         uname = getattr(m.from_user, "username", None)
         name = getattr(m.from_user, "full_name", None) or getattr(m.from_user, "first_name", "")
@@ -3041,12 +3211,12 @@ async def got_payment(m: Message):
         except Exception:
             xtr = None
         await notify_admins_payment(
-            user_id=m.chat.id,
+            user_id=uid,
             username=("@" + uname) if uname else None,
             name=name,
             pack=payload,
             gens=add,
-            balance=USER_CREDITS.get(m.chat.id, 0),
+            balance=USER_CREDITS.get(uid, 0),
             stars=xtr,
         )
     except Exception as e:
@@ -3390,10 +3560,21 @@ async def cmd_promo(m: Message):
 
 @dp.message(Command("balance"))
 async def cmd_balance(m: Message):
-    free = L(m.chat.id)["balance_free"] if is_free_user(m.chat.id, getattr(m.from_user, "username", None)) else ""
-    n = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
-    await safe_answer(m, L(m.chat.id)["balance"].format(n=n, free=free))
-    if n <= 0 and not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+    import datetime
+    uid = m.chat.id
+    lang = L(uid)
+    free = lang["balance_free"] if is_free_user(uid, getattr(m.from_user, "username", None)) else ""
+    n = USER_CREDITS.get(uid, FREE_QUOTA)
+    text = lang["balance"].format(n=n, free=free)
+    sub = get_active_sub(uid)
+    if sub:
+        exp_str = datetime.datetime.fromtimestamp(sub["expires"]).strftime("%d.%m.%Y")
+        sub_line = "\n" + lang.get("sub_active", "📅 {plan} — active until {date}").format(
+            plan=sub["plan"].capitalize(), date=exp_str
+        )
+        text += sub_line
+    await safe_answer(m, text)
+    if n <= 0 and not is_free_user(uid, getattr(m.from_user, "username", None)):
         lang = L(m.chat.id)
         hint = lang.get("hint_refer_zero", "Invite a friend: /refer").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
         kb = InlineKeyboardMarkup(inline_keyboard=[
