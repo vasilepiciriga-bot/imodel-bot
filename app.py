@@ -657,6 +657,10 @@ SUB_PRO_CREDITS   = int(os.getenv("SUB_PRO_CREDITS",   "50"))
 SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "200"))
 SUB_PERIOD = 2592000  # 30 days in seconds
 
+# Daily bonus / streak
+DAILY_BONUS_BASE = int(os.getenv("DAILY_BONUS_BASE", "1"))
+DAILY_STREAK_MILESTONES: Dict[int, int] = {3: 2, 7: 3, 14: 5, 30: 7}  # day → bonus gens
+
 # Onboarding demo photo (Telegram file_id or public HTTPS URL; leave empty to skip)
 DEMO_PHOTO = os.getenv("DEMO_PHOTO", "")
 
@@ -844,6 +848,8 @@ USER_SEEN_TEXT: Set[int]           = set()
 USER_ONBOARDED: Set[int]           = set()
 USER_LAST_JOB: Dict[int, str]      = {}
 USER_LAST_ACTIVE: Dict[int, float] = {}   # timestamp последней активности — для TTL cleanup
+USER_LAST_BONUS: Dict[int, float]  = {}   # timestamp последнего daily bonus
+USER_STREAK: Dict[int, int]        = {}   # streak day count
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -933,11 +939,72 @@ def _subs_load():
 _subs_load()
 
 def get_active_sub(uid: int) -> Optional[Dict]:
-    """Return subscription dict if active, else None."""
     sub = USER_SUBSCRIPTION.get(uid)
     if sub and sub.get("expires", 0) > time.time():
         return sub
     return None
+
+# ---- Daily bonus persistence ----
+BONUS_FILE = os.getenv("BONUS_FILE", os.path.join(DATA_DIR, "bonus.json"))
+
+def _bonus_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = BONUS_FILE + ".tmp"
+        payload = json.dumps({
+            "last": {str(k): v for k, v in USER_LAST_BONUS.items()},
+            "streak": {str(k): v for k, v in USER_STREAK.items()},
+        }, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, BONUS_FILE)
+        _s3_put_text(STATE_PREFIX + "bonus.json", payload)
+    except Exception as e:
+        print("[bonus] save error:", str(e)[:160])
+
+def _bonus_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "bonus.json")
+        if not txt and os.path.exists(BONUS_FILE):
+            with open(BONUS_FILE, "r", encoding="utf-8") as f:
+                txt = f.read()
+        if txt:
+            data = json.loads(txt)
+            for k, v in (data.get("last") or {}).items():
+                try: USER_LAST_BONUS[int(k)] = float(v)
+                except Exception: pass
+            for k, v in (data.get("streak") or {}).items():
+                try: USER_STREAK[int(k)] = int(v)
+                except Exception: pass
+    except Exception as e:
+        print("[bonus] load error:", str(e)[:160])
+
+_bonus_load()
+
+DAILY_WINDOW = 86400  # 24h in seconds
+STREAK_RESET  = 172800  # 48h — miss a day = reset
+
+def _claim_daily_bonus(uid: int) -> Optional[tuple]:
+    """Try to claim daily bonus. Returns (gens_added, streak_day) or None if already claimed."""
+    now = time.time()
+    last = USER_LAST_BONUS.get(uid, 0)
+    elapsed = now - last
+    if elapsed < DAILY_WINDOW:
+        return None  # already claimed today
+    # Update streak
+    prev_streak = USER_STREAK.get(uid, 0)
+    if elapsed < STREAK_RESET:
+        streak = prev_streak + 1
+    else:
+        streak = 1  # reset
+    USER_STREAK[uid] = streak
+    USER_LAST_BONUS[uid] = now
+    # Determine bonus amount
+    add = DAILY_STREAK_MILESTONES.get(streak, DAILY_BONUS_BASE)
+    USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
+    _bonus_save()
+    _credits_save()
+    return (add, streak)
 
 # Thread-safe credit operations (prevents double-spend on concurrent requests)
 _credits_lock = asyncio.Lock()
@@ -1195,6 +1262,13 @@ T = {
         "swap_no_selfie": "Сначала отправьте своё селфи в обычном режиме.",
         "swap_done": "Готово ✅",
         "swap_fail": "Swap не удался. Попробуйте другое фото.",
+        "daily_claimed": "🎁 +{n} ген! День {streak} подряд.",
+        "daily_milestone_3":  "🔥 3 дня подряд! +{n} ген в подарок!",
+        "daily_milestone_7":  "⚡ Неделя подряд! +{n} ген в подарок!",
+        "daily_milestone_14": "💎 2 недели подряд! +{n} ген в подарок!",
+        "daily_milestone_30": "🏆 Месяц подряд! +{n} ген в подарок!",
+        "daily_already": "✅ Бонус уже получен. Следующий через {h}ч.",
+        "daily_cmd": "🔥 Серия: {streak} дн.\n🎁 Бонус: +{next_n} ген через {h}ч.",
     },
     "en": {
         "menu_lang": "🌐 Language",
@@ -1289,6 +1363,13 @@ T = {
         "swap_no_selfie": "Send a selfie in normal mode first.",
         "swap_done": "Done ✅",
         "swap_fail": "Swap failed. Try a different photo.",
+        "daily_claimed": "🎁 +{n} gen! Day {streak} in a row.",
+        "daily_milestone_3":  "🔥 3 days in a row! +{n} gens as a gift!",
+        "daily_milestone_7":  "⚡ One week in a row! +{n} gens as a gift!",
+        "daily_milestone_14": "💎 Two weeks in a row! +{n} gens as a gift!",
+        "daily_milestone_30": "🏆 One month in a row! +{n} gens as a gift!",
+        "daily_already": "✅ Already claimed today. Next bonus in {h}h.",
+        "daily_cmd": "🔥 Streak: {streak} days\n🎁 Bonus: +{next_n} gens in {h}h.",
     },
     "ro": {
         "menu_lang": "🌐 Limba",
@@ -1381,6 +1462,13 @@ T = {
         "swap_no_selfie": "Trimite mai întâi un selfie în modul normal.",
         "swap_done": "Gata ✅",
         "swap_fail": "Swap eșuat. Încearcă altă fotografie.",
+        "daily_claimed": "🎁 +{n} gen! Ziua {streak} la rând.",
+        "daily_milestone_3":  "🔥 3 zile la rând! +{n} gen cadou!",
+        "daily_milestone_7":  "⚡ O săptămână la rând! +{n} gen cadou!",
+        "daily_milestone_14": "💎 Două săptămâni la rând! +{n} gen cadou!",
+        "daily_milestone_30": "🏆 O lună la rând! +{n} gen cadou!",
+        "daily_already": "✅ Bonus primit azi. Următorul în {h}h.",
+        "daily_cmd": "🔥 Serie: {streak} zile\n🎁 Bonus: +{next_n} gen în {h}h.",
         "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
         "style_share_btn": "✨ În acest stil",
         "style_share_intro": "Stil încărcat ✅ Trimite un selfie — generez un rezultat similar.",
@@ -1479,6 +1567,13 @@ T = {
         "swap_no_selfie": "Sende zuerst ein Selfie im normalen Modus.",
         "swap_done": "Fertig ✅",
         "swap_fail": "Swap fehlgeschlagen. Versuche ein anderes Foto.",
+        "daily_claimed": "🎁 +{n} Gen! Tag {streak} in Folge.",
+        "daily_milestone_3":  "🔥 3 Tage in Folge! +{n} Gen als Geschenk!",
+        "daily_milestone_7":  "⚡ Eine Woche in Folge! +{n} Gen als Geschenk!",
+        "daily_milestone_14": "💎 Zwei Wochen in Folge! +{n} Gen als Geschenk!",
+        "daily_milestone_30": "🏆 Ein Monat in Folge! +{n} Gen als Geschenk!",
+        "daily_already": "✅ Bonus bereits erhalten. Nächster in {h}h.",
+        "daily_cmd": "🔥 Serie: {streak} Tage\n🎁 Bonus: +{next_n} Gen in {h}h.",
     }
 }
 
@@ -3583,6 +3678,35 @@ async def cmd_balance(m: Message):
         ])
         await safe_answer(m, hint, reply_markup=kb)
 
+@dp.message(Command("daily"))
+async def cmd_daily(m: Message):
+    import datetime
+    uid = m.chat.id
+    lang = L(uid)
+    if is_free_user(uid, getattr(m.from_user, "username", None)):
+        await safe_answer(m, lang.get("daily_already", "✅ Already claimed.").format(h=0))
+        return
+    result = _claim_daily_bonus(uid)
+    if result:
+        add, streak = result
+        milestone_key = f"daily_milestone_{streak}" if streak in DAILY_STREAK_MILESTONES else None
+        if milestone_key and milestone_key in lang:
+            txt = lang[milestone_key].format(n=add, streak=streak)
+        else:
+            txt = lang.get("daily_claimed", "🎁 +{n} gen! Day {streak} in a row.").format(n=add, streak=streak)
+        await safe_answer(m, txt)
+    else:
+        now = time.time()
+        last = USER_LAST_BONUS.get(uid, now)
+        streak = USER_STREAK.get(uid, 1)
+        next_h = max(0, int((last + DAILY_WINDOW - now) / 3600) + 1)
+        next_streak = streak + 1
+        next_n = DAILY_STREAK_MILESTONES.get(next_streak, DAILY_BONUS_BASE)
+        txt = lang.get("daily_cmd", "🔥 Streak: {streak} days\n🎁 Bonus: +{next_n} gens in {h}h.").format(
+            streak=streak, next_n=next_n, h=next_h
+        )
+        await safe_answer(m, txt)
+
 @dp.message(Command("clear"))
 async def cmd_clear(m: Message):
     USER_REFS.pop(m.chat.id, None)
@@ -3922,6 +4046,22 @@ async def _on_photo_inner(m: Message):
     STATS_USERS.add(m.chat.id)
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     _uadd(m.chat.id, "photos", 1)
+
+    # Auto-claim daily bonus (silent if free user)
+    if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)):
+        result = _claim_daily_bonus(m.chat.id)
+        if result:
+            add, streak = result
+            lang = L(m.chat.id)
+            milestone_key = f"daily_milestone_{streak}" if streak in DAILY_STREAK_MILESTONES else None
+            if milestone_key and milestone_key in lang:
+                txt = lang[milestone_key].format(n=add, streak=streak)
+            else:
+                txt = lang.get("daily_claimed", "🎁 +{n} gen! Day {streak} in a row.").format(n=add, streak=streak)
+            try:
+                await m.answer(txt)
+            except Exception:
+                pass
 
     # ----- Swap Mode (face swap selfie into target photo) -----
     if m.chat.id in USER_SWAP_MODE:
@@ -4401,6 +4541,7 @@ async def on_startup():
         commands=[
             BotCommand(command="start",   description="Начать"),
             BotCommand(command="buy",     description="Купить звёздами"),
+            BotCommand(command="daily",   description="Ежедневный бонус"),
             BotCommand(command="promo",   description="Промокод"),
             BotCommand(command="balance", description="Баланс"),
             BotCommand(command="presets", description="Идеи описаний"),
