@@ -1,0 +1,1 @@
+import{a as e}from"./index-Ck_1ybzV.js";var t=()=>e.get(`/api/v1/shop`),n=t=>e.post(`/api/v1/shop/invoice`,{item_id:t});export{t as n,n as t};

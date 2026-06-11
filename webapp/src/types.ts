@@ -18,6 +18,7 @@ export interface UserProfile {
   language: string
   unlocked_packs: string[]
   age_pack: boolean
+  bot_link?: string
 }
 
 export interface Preset {

@@ -870,7 +870,8 @@ if os.path.isdir(_WEBAPP_DIST):
     app.mount("/webapp", _SF(directory=_WEBAPP_DIST, html=True), name="webapp_static")
 
 USER_REFS: Dict[int, List[bytes]]  = {}   # 1–4 селфи (последние)
-USER_LAST_OUTPUT: Dict[int, bytes] = {}   # последний результат
+USER_LAST_OUTPUT: Dict[int, bytes] = {}     # последний результат
+USER_LAST_OUTPUT_URL: Dict[int, str] = {}   # S3 URL для share
 USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt (ввод пользователя/сцена)
 USER_LAST_REFINED_PROMPT: Dict[int, str] = {}  # фактический GPT-уточнённый промпт
 USER_LANG: Dict[int, str]          = {}   # язык
@@ -1437,6 +1438,7 @@ T = {
         "btn_balance": "Баланс",
         "btn_buy": "Купить",
         "btn_more": "Ещё вариант",
+        "btn_share": "Поделиться",
         "btn_publish": "Опубликовать",
         "btn_publish_group": "В группу",
         "published_recent": "Уже опубликовано недавно.",
@@ -1538,6 +1540,7 @@ T = {
         "btn_balance": "Balance",
         "btn_buy": "Buy",
         "btn_more": "More",
+        "btn_share": "Share",
         "btn_publish": "Publish",
         "btn_publish_group": "To group",
         "published_recent": "Already published recently.",
@@ -1639,6 +1642,7 @@ T = {
         "btn_balance": "Sold",
         "btn_buy": "Cumpără",
         "btn_more": "Încă una",
+        "btn_share": "Distribuie",
         "btn_publish": "Publică",
         "btn_publish_group": "În grup",
         "published_recent": "Deja publicat recent.",
@@ -1742,6 +1746,7 @@ T = {
         "btn_balance": "Guthaben",
         "btn_buy": "Kaufen",
         "btn_more": "Mehr",
+        "btn_share": "Teilen",
         "btn_publish": "Veröffentlichen",
         "btn_publish_group": "In Gruppe",
         "published_recent": "Kürzlich bereits veröffentlicht.",
@@ -3286,11 +3291,26 @@ async def post_before_after_to_channel(user_id: int):
 
 # ===================== UI ============================
 def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
+    from urllib.parse import quote as _q
     lang = L(chat_id)
+    user_lang = USER_LANG.get(chat_id, LANG_DEFAULT)
+    share_text = {
+        "ru": "Посмотри, что AI сделал из моего селфи! 🤩",
+        "en": "Look what AI made from my selfie! 🤩",
+        "ro": "Uită-te ce a făcut AI din selfie-ul meu! 🤩",
+        "de": "Schau, was KI aus meinem Selfie gemacht hat! 🤩",
+        "ar": "انظر ما صنعه الذكاء الاصطناعي من صورتي! 🤩",
+    }.get(user_lang, "Look what AI made from my selfie! 🤩")
+    bot_url = f"https://t.me/{BOT_USERNAME_GLOBAL}" if BOT_USERNAME_GLOBAL else "https://t.me/imodelapp_bot"
+    output_url = USER_LAST_OUTPUT_URL.get(chat_id)
+    if output_url:
+        share_url = f"https://t.me/share/url?url={_q(output_url)}&text={_q(share_text + ' → ' + bot_url)}"
+    else:
+        share_url = f"https://t.me/share/url?url={_q(bot_url)}&text={_q(share_text)}"
     rows = [
         [
+            InlineKeyboardButton(text="📤 " + lang.get("btn_share", "Share"),         url=share_url),
             InlineKeyboardButton(text="🔄 " + lang.get("btn_more", "More"),           callback_data="more"),
-            InlineKeyboardButton(text=lang.get("menu_swap", "💎 Swap"),               callback_data="swap_open"),
             InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"),      callback_data="pub_yes"),
         ],
         [
@@ -4559,6 +4579,12 @@ async def _on_photo_inner(m: Message):
             return
         USER_LAST_OUTPUT[uid] = result_bytes
         LAST_PHOTO[uid] = result_bytes
+        try:
+            _su = s3_put_and_presign(result_bytes, key_prefix=f"shares/tg/{uid}_swap_")
+            if _su:
+                USER_LAST_OUTPUT_URL[uid] = _su
+        except Exception:
+            pass
         stats_incr("gens_swap_ok", 1)
         _uadd(uid, "gens_swap_ok", 1)
         hist = USER_HISTORY.setdefault(uid, [])
@@ -4761,6 +4787,13 @@ async def _on_photo_inner(m: Message):
     USER_LAST_OUTPUT[m.chat.id] = final_bytes
     USER_LAST_PROMPT[m.chat.id] = caption
     LAST_PHOTO[m.chat.id] = final_bytes
+    # Upload to S3 for share URL (best-effort, non-blocking)
+    try:
+        _share_url = s3_put_and_presign(final_bytes, key_prefix=f"shares/tg/{m.chat.id}_")
+        if _share_url:
+            USER_LAST_OUTPUT_URL[m.chat.id] = _share_url
+    except Exception:
+        pass
     stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
 
@@ -5549,6 +5582,7 @@ async def api_me(request: Request):
         "credits": USER_CREDITS.get(uid, FREE_QUOTA),
         "role": role_for_user(uid, username),
         "grants": sorted(grants_for_user(uid, username)),
+        "bot_link": f"https://t.me/{BOT_USERNAME_GLOBAL}" if BOT_USERNAME_GLOBAL else None,
     }
 
 @app.get("/api/v1/gallery")
