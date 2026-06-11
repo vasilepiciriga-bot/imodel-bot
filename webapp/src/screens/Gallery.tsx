@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Download, RefreshCw, Star, Images, Trophy, Share2,
@@ -557,6 +558,7 @@ export default function Gallery() {
         </div>
       )}
 
+      {createPortal(<>
       {/* Lightbox */}
       <AnimatePresence>
         {lightbox && (
@@ -568,7 +570,10 @@ export default function Gallery() {
             onClick={() => setLightboxIndex(null)}
           >
             {/* Header: counter + close */}
-            <div className="flex items-center justify-between p-4">
+            <div
+              className="flex items-center justify-between px-4 pb-3"
+              style={{ paddingTop: 'calc(var(--tg-safe-top, env(safe-area-inset-top, 0px)) + 12px)' }}
+            >
               <span className="text-white/55 text-[13px] font-medium tabular-nums">
                 {(lightboxIndex ?? 0) + 1} / {sorted.length}
               </span>
@@ -640,7 +645,11 @@ export default function Gallery() {
             </div>
 
             {/* Action buttons */}
-            <div className="grid grid-cols-2 gap-2 p-4" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="grid grid-cols-2 gap-2 px-4 pt-3"
+              style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
+              onClick={(e) => e.stopPropagation()}
+            >
               <a
                 href={lightbox.hd_url ?? lightbox.output_url}
                 download
@@ -689,6 +698,7 @@ export default function Gallery() {
           />
         )}
       </AnimatePresence>
+      </>, document.body)}
     </div>
   )
 }
