@@ -130,4 +130,5 @@ export interface DailyBonusResult {
   credits: number
   next_at?: number
   milestone_bonus?: number
+  phase?: number  // 0=generous, 1=normal, 2=reduced, 3=minimal
 }

@@ -63,6 +63,8 @@ export default function Studio() {
       tg?.HapticFeedback?.notificationOccurred('success')
       if (result.milestone_bonus) {
         toast.success(`🔥 Day ${result.streak} streak! +${result.gens_added}⚡ milestone bonus!`, { icon: '🏆' })
+      } else if ((result.phase ?? 0) >= 2) {
+        toast.success(`+${result.gens_added}⚡ claimed! 💜 Subscribers always get +2/day`, { icon: '🎁', duration: 4000 })
       } else {
         toast.success(`+${result.gens_added}⚡ daily bonus claimed!`, { icon: '🎁' })
       }

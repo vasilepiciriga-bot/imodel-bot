@@ -1534,27 +1534,54 @@ _bonus_load()
 DAILY_WINDOW = 86400  # 24h in seconds
 STREAK_RESET  = 172800  # 48h — miss a day = reset
 
+def _get_bonus_phase(uid: int) -> tuple:
+    """Returns (credits_per_claim, claim_interval_days, phase_num 0-3).
+    Phase decays with account age to create natural credit pressure toward paid purchases.
+    Any purchase in the last 30 days resets to Phase 0 (reward for paying)."""
+    ui = STATS_USERS_INFO.get(uid, {})
+    first_seen = float(ui.get('first_seen', time.time()))
+    account_days = (time.time() - first_seen) / 86400
+    last_purchase = float(ui.get('last_purchase_at', 0))
+    if time.time() - last_purchase < 30 * 86400:
+        return (2, 1, 0)   # Phase 0: purchased recently — reward generosity
+    if account_days < 30:   return (2, 1, 0)   # Phase 0: onboarding (2/day)
+    if account_days < 90:   return (1, 1, 1)   # Phase 1: habit formation (1/day)
+    if account_days < 180:  return (1, 2, 2)   # Phase 2: pressure (1 every 2 days)
+    return (1, 3, 3)                            # Phase 3: conversion zone (1 every 3 days)
+
 def _claim_daily_bonus(uid: int) -> Optional[tuple]:
     """Try to claim daily bonus. Returns (gens_added, streak_day, milestone_bonus) or None if already claimed."""
+    # Soft credit cap: don't grant bonus if user already has 100+ credits
+    if USER_CREDITS.get(uid, 0) >= 100:
+        return None
+    credits_per_claim, interval_days, _phase = _get_bonus_phase(uid)
+    claim_interval = DAILY_WINDOW * interval_days
     now = time.time()
     last = USER_LAST_BONUS.get(uid, 0)
     elapsed = now - last
-    if elapsed < DAILY_WINDOW:
-        return None  # already claimed today
+    if elapsed < claim_interval:
+        return None  # already claimed
     # Update streak
     prev_streak = USER_STREAK.get(uid, 0)
     if elapsed < STREAK_RESET:
         streak = prev_streak + 1
     else:
         streak = 1  # reset
+    # Track streak cycles — DAILY_STREAK_MILESTONES bonus capped at 2 full cycles
+    ui = STATS_USERS_INFO.setdefault(uid, {})
+    if streak == 1 and prev_streak >= 30:
+        ui['streak_cycles'] = ui.get('streak_cycles', 0) + 1
+    streak_cycles = ui.get('streak_cycles', 0)
     USER_STREAK[uid] = streak
     USER_LAST_BONUS[uid] = now
-    # Determine bonus amount
-    add = DAILY_STREAK_MILESTONES.get(streak, DAILY_BONUS_BASE)
-    # Streak milestone bonus (one-time per milestone)
+    # Determine bonus amount — milestone day bonuses only in first 2 streak cycles
+    if streak_cycles < 2:
+        add = DAILY_STREAK_MILESTONES.get(streak, credits_per_claim)
+    else:
+        add = credits_per_claim
+    # Streak milestone bonus (one-time per milestone, lifetime)
     milestone_bonus = 0
     if streak in STREAK_MILESTONE_BONUSES:
-        ui = STATS_USERS_INFO.setdefault(uid, {})
         claimed_milestones = ui.get("streak_milestone_claimed", [])
         if streak not in claimed_milestones:
             milestone_bonus = STREAK_MILESTONE_BONUSES[streak]
@@ -1744,9 +1771,9 @@ USER_AGE_PACKS:   Dict[int, bool]     = {}  # uid → True if Age Magic Pack pur
 # ── Quests ──────────────────────────────────────────────────────────────────
 QUESTS_CONFIG = [
     {"id": "gen_daily_2",  "title": "Generate 2 photos",       "target": 2,  "reward": 2,  "icon": "📸", "type": "daily"},
-    {"id": "gen_daily_5",  "title": "Generate 5 photos",       "target": 5,  "reward": 5,  "icon": "🔥", "type": "daily"},
+    {"id": "gen_daily_5",  "title": "Generate 5 photos",       "target": 5,  "reward": 3,  "icon": "🔥", "type": "daily"},
     {"id": "try_preset",   "title": "Try a new style",          "target": 1,  "reward": 1,  "icon": "✨", "type": "daily"},
-    {"id": "share_photo",  "title": "Share a photo",            "target": 1,  "reward": 2,  "icon": "📤", "type": "daily"},
+    {"id": "share_photo",  "title": "Share a photo",            "target": 1,  "reward": 1,  "icon": "📤", "type": "weekly"},
     {"id": "streak_7",     "title": "Reach 7-day streak",       "target": 7,  "reward": 7,  "icon": "🏆", "type": "milestone"},
     {"id": "gen_50",       "title": "50 total generations",     "target": 50, "reward": 10, "icon": "💫", "type": "lifetime"},
     {"id": "invite_1",          "title": "Invite your first friend",  "target": 1,  "reward": 5,  "icon": "👥", "type": "lifetime"},
@@ -4790,6 +4817,8 @@ async def got_payment(m: Message):
 
     stats_incr("payments", 1)
     _uadd(uid, "payments", 1)
+    # Reset bonus phase: purchased users get Phase 0 bonuses for 30 days
+    STATS_USERS_INFO.setdefault(uid, {})['last_purchase_at'] = time.time()
     try:
         uname = getattr(m.from_user, "username", None)
         name = getattr(m.from_user, "full_name", None) or getattr(m.from_user, "first_name", "")
@@ -7196,6 +7225,11 @@ async def api_me(request: Request):
     if active_sub:
         import datetime as _dt
         _plan_expiry = _dt.datetime.utcfromtimestamp(active_sub["expires"]).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _bonus_credits, _bonus_interval, _bonus_phase = _get_bonus_phase(uid)
+    _bonus_interval_secs = DAILY_WINDOW * _bonus_interval
+    _next_streak = int(ui.get("streak", 0)) + 1
+    _streak_cycles = ui.get("streak_cycles", 0)
+    _next_daily = DAILY_STREAK_MILESTONES.get(_next_streak, _bonus_credits) if _streak_cycles < 2 else _bonus_credits
     return {
         "uid": uid,
         "chat_id": uid,
@@ -7212,8 +7246,8 @@ async def api_me(request: Request):
         "portfolio_public": USER_PORTFOLIO_PUBLIC.get(uid, False),
         "portfolio_url": f"{WEBHOOK_BASE.rstrip('/')}/p/{uid}" if USER_PORTFOLIO_PUBLIC.get(uid) else None,
         "last_gen_at": float(ui.get("last_gen_at", 0)) or None,
-        "can_claim_daily": (time.time() - USER_LAST_BONUS.get(uid, 0)) >= DAILY_WINDOW,
-        "next_daily_credits": DAILY_STREAK_MILESTONES.get(int(ui.get("streak", 0)) + 1, DAILY_BONUS_BASE),
+        "can_claim_daily": (time.time() - USER_LAST_BONUS.get(uid, 0)) >= _bonus_interval_secs and USER_CREDITS.get(uid, 0) < 100,
+        "next_daily_credits": _next_daily,
         "age_pack": USER_AGE_PACKS.get(uid, False),
         "unlocked_packs": sorted(USER_STYLE_PACKS.get(uid, set())),
         "total_generated": int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0)),
@@ -7584,7 +7618,7 @@ async def api_community_share(request: Request):
         USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + 5
     analytics_event(uid, "community_share", {"key": cp_key, "label": label})
     import datetime as _dt
-    _quest_incr_daily(uid, "share_photo", _dt.date.today().isoformat())
+    _quest_incr_daily(uid, "share_photo", _dt.date.today().strftime("%G-W%V"))
     _check_and_unlock_achievements(uid)
     return {"ok": True, "key": cp_key, "already_shared": False}
 
@@ -8785,14 +8819,17 @@ async def api_claim_daily(request: Request):
     uid = int(user["uid"])
     if is_free_user(uid, str(user.get("username") or "")):
         return JSONResponse({"error": "free_user"}, status_code=400)
+    if USER_CREDITS.get(uid, 0) >= 100:
+        return JSONResponse({"error": "cap_reached", "credits": USER_CREDITS.get(uid, 0)}, status_code=400)
     async with _credits_lock:
         result = _claim_daily_bonus(uid)
+    _bc, _bi, phase = _get_bonus_phase(uid)
     if result is None:
         last = USER_LAST_BONUS.get(uid, 0)
-        next_at = int(last + DAILY_WINDOW)
+        next_at = int(last + DAILY_WINDOW * _bi)
         return JSONResponse({"error": "already_claimed", "next_at": next_at}, status_code=400)
     gens_added, streak, milestone_bonus = result
-    return {"gens_added": gens_added, "streak": streak, "credits": USER_CREDITS.get(uid, 0), "milestone_bonus": milestone_bonus}
+    return {"gens_added": gens_added, "streak": streak, "credits": USER_CREDITS.get(uid, 0), "milestone_bonus": milestone_bonus, "phase": phase}
 
 @app.get("/api/v1/profile/challenge")
 async def api_daily_challenge(request: Request):
@@ -8829,8 +8866,10 @@ async def api_profile_stats(request: Request):
     ref_stats = REF_STATS.get(uid, {"count": 0, "earned": 0})
     streak = USER_STREAK.get(uid, 0)
     last_bonus = USER_LAST_BONUS.get(uid, 0)
-    can_claim = (time.time() - last_bonus) >= DAILY_WINDOW and not is_free_user(uid, str(user.get("username") or ""))
-    next_at = int(last_bonus + DAILY_WINDOW) if not can_claim else None
+    _bc, _bi, _bp = _get_bonus_phase(uid)
+    _claim_interval = DAILY_WINDOW * _bi
+    can_claim = (time.time() - last_bonus) >= _claim_interval and not is_free_user(uid, str(user.get("username") or "")) and USER_CREDITS.get(uid, 0) < 100
+    next_at = int(last_bonus + _claim_interval) if not can_claim else None
     return {
         "total_photos": int(info.get("gens_ok", 0)),
         "streak": streak,
@@ -8885,6 +8924,7 @@ def _quest_progress_for_user(uid: int, today: str) -> List[Dict]:
     invites = int((STATS_USERS_INFO.get(uid) or {}).get("referrals_sent", 0))
     claimed = USER_QUEST_CLAIMED.get(uid, {})
     progress = USER_QUEST_PROGRESS.get(uid, {})
+    week_key = _dt.date.today().strftime("%G-W%V")
     result = []
     for q in QUESTS_CONFIG:
         qid = q["id"]
@@ -8894,6 +8934,10 @@ def _quest_progress_for_user(uid: int, today: str) -> List[Dict]:
             prog_key = f"{qid}:{today}"
             current = int(progress.get(prog_key, 0))
             claimed_today = claimed.get(qid) == today
+        elif qtype == "weekly":
+            prog_key = f"{qid}:{week_key}"
+            current = int(progress.get(prog_key, 0))
+            claimed_today = claimed.get(qid) == week_key
         elif qtype == "milestone":
             # milestone: based on streak
             if qid == "streak_7":
@@ -8944,6 +8988,7 @@ async def api_quest_claim(quest_id: str, request: Request):
     uid = int(user["uid"])
     import datetime as _dt
     today = _dt.date.today().isoformat()
+    week_key = _dt.date.today().strftime("%G-W%V")
     # For home screen quest, grant progress server-side on claim (no JS hook needed)
     if quest_id == "add_to_home_screen":
         USER_QUEST_PROGRESS.setdefault(uid, {})["add_to_home_screen"] = 1
@@ -8954,17 +8999,18 @@ async def api_quest_claim(quest_id: str, request: Request):
             return JSONResponse({"error": "quest_not_found"}, status_code=404)
         if not quest["claimable"]:
             return JSONResponse({"error": "not_claimable"}, status_code=400)
-        # Mark claimed atomically before granting
+        # Mark claimed atomically before granting (weekly quests use week key)
         if uid not in USER_QUEST_CLAIMED:
             USER_QUEST_CLAIMED[uid] = {}
-        USER_QUEST_CLAIMED[uid][quest_id] = today
+        claim_date = week_key if quest["type"] == "weekly" else today
+        USER_QUEST_CLAIMED[uid][quest_id] = claim_date
         # Grant reward
         reward = quest["reward"]
         USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + reward
     analytics_event(uid, "quest_claimed", {"quest_id": quest_id, "reward": reward})
     # Persist claimed state to DB so it survives restarts
     _db_save_quest(
-        uid, quest_id, 0, today,
+        uid, quest_id, 0, claim_date,
         json.dumps(USER_QUEST_PROGRESS.get(uid, {}), ensure_ascii=False)
     )
     # Check achievements after claiming
