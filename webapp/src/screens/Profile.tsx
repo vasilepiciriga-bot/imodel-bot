@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target } from 'lucide-react'
+import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target, Trophy } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
 import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { createGift } from '../api/gift'
 import { getQuests, claimQuest, getAchievements, setLanguage } from '../api/quests'
+import { getLeaderboard } from '../api/leaderboard'
 import { AchievementPopup } from '../components/shared/AchievementPopup'
 import { HomeScreenModal } from '../components/HomeScreenModal'
 import { hap } from '../lib/haptics'
 import type { ReferralData } from '../api/session'
+import type { LeaderboardData } from '../api/leaderboard'
 import type { QuestItem, Achievement } from '../types'
 
 const tg = window.Telegram?.WebApp
@@ -82,6 +84,7 @@ export default function Profile() {
   const [achievements, setAchievements] = useState<Achievement[]>([])
   const [newAchievement, setNewAchievement] = useState<Achievement | null>(null)
   const [homeScreenOpen, setHomeScreenOpen] = useState(false)
+  const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
   const challenge = useAppStore((s) => s.challenge)
@@ -95,6 +98,7 @@ export default function Profile() {
         .catch(() => null)
     }
     getReferral().then(setReferral).catch(() => null)
+    getLeaderboard().then(setLeaderboard).catch(() => null)
     getQuests().then(({ quests: q, claimable }) => {
       setQuests(q)
       useAppStore.getState().setProfileBadge(claimable)
@@ -192,6 +196,14 @@ export default function Profile() {
   const username = tg?.initDataUnsafe?.user?.username
   const displayName = tg?.initDataUnsafe?.user?.first_name ?? 'User'
   const weekDays = Array.from({ length: 7 }, (_, i) => i < (streak % 7 || (streak > 0 ? 7 : 0)))
+
+  // Member since
+  const memberSinceDays = user?.first_seen
+    ? Math.max(1, Math.floor((Date.now() / 1000 - user.first_seen) / 86400))
+    : null
+
+  const myRank = leaderboard?.my_rank ?? null
+  const myWeeklyGens = leaderboard?.my_gens ?? 0
   const claimableCount = quests.filter((q) => q.claimable).length
 
   // Next milestone logic
@@ -235,6 +247,15 @@ export default function Profile() {
           <div>
             <p className="text-[18px] font-bold text-[#1D1D1F]">{displayName}</p>
             {username && <p className="text-[13px] text-[#6E6E73]">@{username}</p>}
+            {memberSinceDays !== null && (
+              <p className="text-[11px] text-[#AEAEB2] mt-0.5">
+                Member since {memberSinceDays < 7
+                  ? `${memberSinceDays}d`
+                  : memberSinceDays < 30
+                    ? `${Math.floor(memberSinceDays / 7)}w`
+                    : `${Math.floor(memberSinceDays / 30)}mo`} ago
+              </p>
+            )}
             {user?.plan && user.plan !== 'free' && (
               <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white text-[10px] font-bold">
                 ✦ {user.plan.toUpperCase()}
@@ -258,6 +279,31 @@ export default function Profile() {
             </div>
           ))}
         </div>
+
+        {/* Weekly leaderboard rank card */}
+        {myRank !== null && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-3 px-4 py-3 bg-white rounded-[16px] shadow-sm"
+          >
+            <div className="w-9 h-9 rounded-[10px] bg-gradient-to-br from-[#FFD700]/20 to-[#FF9500]/20 flex items-center justify-center flex-shrink-0">
+              <Trophy size={18} className="text-[#FF9500]" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-semibold text-[#1D1D1F]">
+                Weekly rank: <span className="text-[#FF9500]">#{myRank}</span>
+              </p>
+              <p className="text-[11px] text-[#6E6E73]">{myWeeklyGens} gen{myWeeklyGens !== 1 ? 's' : ''} this week</p>
+            </div>
+            <button
+              onClick={() => useAppStore.getState().setTab('gallery')}
+              className="text-[11px] font-semibold text-[#6C47FF]"
+            >
+              Leaderboard →
+            </button>
+          </motion.div>
+        )}
 
         {/* Next milestone card */}
         {showMilestone && milestoneTarget && (

@@ -7218,6 +7218,7 @@ async def api_me(request: Request):
         "total_generated": int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0)),
         "friends_invited": int(ui.get("referrals_sent", 0)),
         "language": USER_LANG.get(uid, LANG_DEFAULT),
+        "first_seen": float(ui.get("first_seen", 0)) or None,
     }
 
 @app.post("/api/v1/me/language")

@@ -27,6 +27,7 @@ export interface UserProfile {
   last_gen_at?: number | null
   can_claim_daily?: boolean
   next_daily_credits?: number
+  first_seen?: number | null
 }
 
 export interface Preset {
