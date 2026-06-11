@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { TabBar } from './components/layout/TabBar'
 import { ScreenSkeleton } from './components/shared/ScreenSkeleton'
 import { OnboardingOverlay, useOnboarding } from './components/shared/OnboardingOverlay'
+import { ToastProvider } from './components/shared/Toast'
 import { useAuth } from './hooks/useAuth'
 import { useAppStore } from './store/appStore'
 import { track } from './api/analytics'
@@ -52,6 +53,7 @@ export default function App() {
   }, [needsOnboarding])
 
   return (
+    <ToastProvider>
     <AuthGate>
       <AnimatePresence>
         {showOnboarding && (
@@ -78,5 +80,6 @@ export default function App() {
         <TabBar />
       </div>
     </AuthGate>
+    </ToastProvider>
   )
 }

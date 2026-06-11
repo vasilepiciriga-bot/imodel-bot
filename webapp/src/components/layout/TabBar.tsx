@@ -18,6 +18,7 @@ export function TabBar() {
   const tab    = useAppStore((s) => s.tab)
   const setTab = useAppStore((s) => s.setTab)
   const user   = useAppStore((s) => s.user)
+  const profileBadge = useAppStore((s) => s.profileBadge)
   const isAdmin = user?.role && ADMIN_ROLES.has(user.role)
 
   return (
@@ -27,6 +28,7 @@ export function TabBar() {
     >
       {TABS.map(({ id, icon: Icon, label }) => {
         const active = tab === id
+        const badge = id === 'profile' ? profileBadge : 0
         return (
           <button
             key={id}
@@ -43,13 +45,24 @@ export function TabBar() {
                 transition={{ type: 'spring', stiffness: 400, damping: 30 }}
               />
             )}
-            <motion.div animate={{ scale: active ? 1.1 : 1 }} transition={{ type: 'spring', stiffness: 400, damping: 25 }}>
-              <Icon
-                size={22}
-                strokeWidth={active ? 2.2 : 1.6}
-                className={active ? 'text-[#6C47FF]' : 'text-[#6E6E73]'}
-              />
-            </motion.div>
+            <div className="relative">
+              <motion.div animate={{ scale: active ? 1.1 : 1 }} transition={{ type: 'spring', stiffness: 400, damping: 25 }}>
+                <Icon
+                  size={22}
+                  strokeWidth={active ? 2.2 : 1.6}
+                  className={active ? 'text-[#6C47FF]' : 'text-[#6E6E73]'}
+                />
+              </motion.div>
+              {badge > 0 && (
+                <motion.span
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] rounded-full bg-[#FF2D78] text-white text-[8px] font-bold flex items-center justify-center px-0.5"
+                >
+                  {badge}
+                </motion.span>
+              )}
+            </div>
             <span className={`text-[10px] font-medium ${active ? 'text-[#6C47FF]' : 'text-[#6E6E73]'}`}>
               {label}
             </span>

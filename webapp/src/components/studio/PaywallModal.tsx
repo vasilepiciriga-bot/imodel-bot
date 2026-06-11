@@ -7,6 +7,7 @@ import { getMe } from '../../api/session'
 import { useAppStore } from '../../store/appStore'
 import { track } from '../../api/analytics'
 import { useExperiment } from '../../hooks/useExperiment'
+import { useToast } from '../../hooks/useToast'
 
 const tg = window.Telegram?.WebApp
 
@@ -60,6 +61,7 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
   const updateCredits = useAppStore((s) => s.updateCredits)
   const setTab = useAppStore((s) => s.setTab)
   const [buyingId, setBuyingId] = useState<string | null>(null)
+  const toast = useToast()
 
   const gens = user?.gens_ok ?? 0
   const payments = user?.payments ?? 0
@@ -89,7 +91,7 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
       })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Purchase failed'
-      alert(msg)
+      toast.error(msg)
     } finally {
       setBuyingId(null)
     }

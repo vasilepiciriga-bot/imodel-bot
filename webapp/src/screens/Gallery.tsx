@@ -7,8 +7,76 @@ import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { getMe } from '../api/session'
 import { generateCaption } from '../api/caption'
+import { reactToPhoto } from '../api/quests'
 import { track } from '../api/analytics'
+import { useToast } from '../hooks/useToast'
 import type { Generation } from '../types'
+
+const EMOJIS = ['❤️', '🔥', '😍', '👏', '😮']
+
+interface ReactionState {
+  counts: Record<string, number>
+  mine: string | null
+}
+
+function ReactionRow({ jobId, state, compact, onReact }: {
+  jobId: string
+  state: ReactionState
+  compact: boolean
+  onReact: (jobId: string, emoji: string) => void
+}) {
+  const total = Object.values(state.counts).reduce((s, n) => s + n, 0)
+  if (compact) {
+    return (
+      <div className="flex items-center gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
+        {EMOJIS.slice(0, 3).map((em) => {
+          const n = state.counts[em] ?? 0
+          const active = state.mine === em
+          return (
+            <motion.button
+              key={em}
+              whileTap={{ scale: 0.85 }}
+              onClick={() => onReact(jobId, em)}
+              className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+                active
+                  ? 'bg-[#6C47FF] text-white'
+                  : n > 0 ? 'bg-black/40 text-white' : 'bg-black/20 text-white/60'
+              }`}
+            >
+              <span>{em}</span>
+              {n > 0 && <span>{n}</span>}
+            </motion.button>
+          )
+        })}
+        {total === 0 && <span className="text-[9px] text-white/40">Tap to react</span>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+      {EMOJIS.map((em) => {
+        const n = state.counts[em] ?? 0
+        const active = state.mine === em
+        return (
+          <motion.button
+            key={em}
+            whileTap={{ scale: 0.85 }}
+            onClick={() => onReact(jobId, em)}
+            className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-[13px] font-medium transition-colors ${
+              active
+                ? 'bg-[#6C47FF] text-white'
+                : 'bg-white/10 text-white'
+            }`}
+          >
+            <span>{em}</span>
+            {n > 0 && <span className="text-[12px]">{n}</span>}
+          </motion.button>
+        )
+      })}
+    </div>
+  )
+}
 
 const tg = window.Telegram?.WebApp
 
@@ -185,6 +253,8 @@ export default function Gallery() {
   const [captions, setCaptions] = useState<string[]>([])
   const [captionLoading, setCaptionLoading] = useState(false)
   const [showCaptions, setShowCaptions] = useState(false)
+  const [reactions, setReactions] = useState<Record<string, ReactionState>>({})
+  const toast = useToast()
 
   useEffect(() => {
     const cached = getCachedGallery()
@@ -199,14 +269,32 @@ export default function Gallery() {
     getLeaderboard().then(setLeaderboard).catch(() => null)
   }, [])
 
+  async function handleReact(jobId: string, emoji: string) {
+    tg?.HapticFeedback?.impactOccurred('light')
+    // Optimistic update
+    setReactions((prev) => {
+      const cur = prev[jobId] ?? { counts: {}, mine: null }
+      const counts = { ...cur.counts }
+      if (cur.mine) counts[cur.mine] = Math.max(0, (counts[cur.mine] ?? 1) - 1)
+      const isToggle = cur.mine === emoji
+      if (!isToggle) counts[emoji] = (counts[emoji] ?? 0) + 1
+      return { ...prev, [jobId]: { counts, mine: isToggle ? null : emoji } }
+    })
+    try {
+      const res = await reactToPhoto(jobId, emoji)
+      setReactions((prev) => ({ ...prev, [jobId]: { counts: res.reactions, mine: res.my_reaction } }))
+    } catch { /* optimistic stays */ }
+  }
+
   async function handleHD(job: Generation) {
     setHdLoading(true)
     try {
       await requestHD(job.job_id)
       tg?.HapticFeedback?.notificationOccurred('success')
+      toast.success('HD upgrade started!', { sub: 'Ready in ~30 seconds' })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'HD failed'
-      alert(msg)
+      const msg = e instanceof Error ? e.message : 'HD upgrade failed'
+      toast.error(msg)
     } finally {
       setHdLoading(false)
     }
@@ -358,21 +446,34 @@ export default function Gallery() {
                 animate={{ opacity: 1 }}
                 transition={{ delay: Math.min(i * 0.04, 0.4) }}
                 className="break-inside-avoid mb-2.5 relative"
-                onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setLightbox(item) }}
               >
-                <img
-                  src={item.hd_url ?? item.output_url}
-                  alt={item.preset_key ?? 'photo'}
-                  loading="lazy"
-                  className="w-full rounded-card object-cover"
-                />
-                {item.hd_url && (
-                  <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] rounded-full text-[9px] text-white font-bold">
-                    HD
+                <div
+                  className="relative"
+                  onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setLightbox(item) }}
+                >
+                  <img
+                    src={item.hd_url ?? item.output_url}
+                    alt={item.preset_key ?? 'photo'}
+                    loading="lazy"
+                    className="w-full rounded-t-card object-cover"
+                  />
+                  {item.hd_url && (
+                    <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] rounded-full text-[9px] text-white font-bold">
+                      HD
+                    </div>
+                  )}
+                  <div className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 bg-black/50 rounded-full text-[9px] text-white truncate max-w-[80%]">
+                    {item.preset_key ?? item.mode ?? 'portrait'}
                   </div>
-                )}
-                <div className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 bg-black/50 rounded-full text-[9px] text-white truncate max-w-[80%]">
-                  {item.preset_key ?? item.mode ?? 'portrait'}
+                </div>
+                {/* Reaction strip */}
+                <div className="px-1.5 py-1.5 bg-white rounded-b-card border border-black/[0.05]">
+                  <ReactionRow
+                    jobId={item.job_id}
+                    state={reactions[item.job_id] ?? { counts: {}, mine: null }}
+                    compact
+                    onReact={handleReact}
+                  />
                 </div>
               </motion.div>
             ))}
@@ -407,6 +508,16 @@ export default function Gallery() {
                 className="max-h-full max-w-full rounded-card object-contain"
               />
             </motion.div>
+
+            {/* Reactions in lightbox */}
+            <div className="px-4 pb-2" onClick={(e) => e.stopPropagation()}>
+              <ReactionRow
+                jobId={lightbox.job_id}
+                state={reactions[lightbox.job_id] ?? { counts: {}, mine: null }}
+                compact={false}
+                onReact={handleReact}
+              />
+            </div>
 
             <div className="grid grid-cols-2 gap-2 p-4" onClick={(e) => e.stopPropagation()}>
               <a

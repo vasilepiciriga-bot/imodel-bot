@@ -15,6 +15,7 @@ import { createGeneration, createBatch, getGeneration, requestHD } from '../api/
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
 import { getChallenge } from '../api/session'
 import { track } from '../api/analytics'
+import { useToast } from '../hooks/useToast'
 import type { Generation, PhotoshootMode } from '../types'
 
 const tg = window.Telegram?.WebApp
@@ -34,6 +35,7 @@ export default function Studio() {
   const [showModePicker, setShowModePicker] = useState(false)
   const [photoshootModes, setPhotoshootModes] = useState<PhotoshootMode[]>([])
   const [showPaywall, setShowPaywall] = useState(false)
+  const toast = useToast()
 
   const user = useAppStore((s) => s.user)
   const streak = user?.streak ?? 0
@@ -151,7 +153,7 @@ export default function Studio() {
         setShowPaywall(true)
         return
       }
-      alert(e instanceof Error ? e.message : 'Generation failed')
+      toast.error(e instanceof Error ? e.message : 'Generation failed')
     }
   }
 
@@ -162,8 +164,8 @@ export default function Studio() {
       const { job_id } = await requestHD(currentJob.job_id)
       setPollingJobId(job_id)
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'HD failed'
-      alert(msg)
+      const msg = e instanceof Error ? e.message : 'HD upgrade failed'
+      toast.error(msg)
     } finally {
       setHdLoading(false)
     }

@@ -6,6 +6,7 @@ import { getShop, createInvoice, type ShopData } from '../api/shop'
 import { getMe } from '../api/session'
 import { useAppStore } from '../store/appStore'
 import { track } from '../api/analytics'
+import { useToast } from '../hooks/useToast'
 
 const tg = window.Telegram?.WebApp
 
@@ -34,6 +35,7 @@ export default function Shop() {
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
   const updateCredits = useAppStore((s) => s.updateCredits)
+  const toast = useToast()
 
   useEffect(() => {
     getShopCached().then(setShop).catch(() => null)
@@ -58,9 +60,9 @@ export default function Shop() {
       })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Purchase failed'
-      alert(msg)
+      toast.error(msg)
     }
-  }, [setUser, updateCredits])
+  }, [setUser, updateCredits, toast])
 
   const credits = user?.credits ?? 0
   const activePlan = shop?.subscription

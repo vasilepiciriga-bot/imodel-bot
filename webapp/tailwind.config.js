@@ -26,6 +26,14 @@ export default {
         card: '0 2px 20px rgba(0,0,0,0.08)',
         tab: '0 -1px 0 rgba(0,0,0,0.06)',
       },
+      keyframes: {
+        shimmer: {
+          '100%': { transform: 'translateX(200%)' },
+        },
+      },
+      animation: {
+        shimmer: 'shimmer 1.6s infinite',
+      },
     },
   },
   plugins: [],

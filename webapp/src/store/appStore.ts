@@ -47,6 +47,9 @@ interface AppState {
   challengeLoaded: boolean
   setChallenge: (c: Challenge | null) => void
   setChallengeLoaded: (v: boolean) => void
+
+  profileBadge: number
+  setProfileBadge: (n: number) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -93,4 +96,7 @@ export const useAppStore = create<AppState>((set) => ({
   challengeLoaded: false,
   setChallenge: (challenge) => set({ challenge }),
   setChallengeLoaded: (challengeLoaded) => set({ challengeLoaded }),
+
+  profileBadge: 0,
+  setProfileBadge: (profileBadge) => set({ profileBadge }),
 }))

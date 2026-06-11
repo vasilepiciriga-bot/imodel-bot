@@ -1426,6 +1426,37 @@ USER_SUBSCRIPTION: Dict[int, Dict] = {}
 USER_STYLE_PACKS: Dict[int, Set[str]] = {}
 USER_AGE_PACKS:   Dict[int, bool]     = {}  # uid → True if Age Magic Pack purchased
 
+# ── Quests ──────────────────────────────────────────────────────────────────
+QUESTS_CONFIG = [
+    {"id": "gen_daily_2",  "title": "Generate 2 photos",       "target": 2,  "reward": 2,  "icon": "📸", "type": "daily"},
+    {"id": "gen_daily_5",  "title": "Generate 5 photos",       "target": 5,  "reward": 5,  "icon": "🔥", "type": "daily"},
+    {"id": "try_preset",   "title": "Try a new style",          "target": 1,  "reward": 1,  "icon": "✨", "type": "daily"},
+    {"id": "share_photo",  "title": "Share a photo",            "target": 1,  "reward": 2,  "icon": "📤", "type": "daily"},
+    {"id": "streak_7",     "title": "Reach 7-day streak",       "target": 7,  "reward": 7,  "icon": "🏆", "type": "milestone"},
+    {"id": "gen_50",       "title": "50 total generations",     "target": 50, "reward": 10, "icon": "💫", "type": "lifetime"},
+    {"id": "invite_1",     "title": "Invite your first friend", "target": 1,  "reward": 5,  "icon": "👥", "type": "lifetime"},
+]
+# uid → {quest_id: count}  (daily quests reset each UTC day)
+USER_QUEST_PROGRESS: Dict[int, Dict[str, int]] = {}
+# uid → {quest_id: date_string}  (when the quest was claimed — daily reset for daily type)
+USER_QUEST_CLAIMED:  Dict[int, Dict[str, str]] = {}
+
+# ── Achievements ─────────────────────────────────────────────────────────────
+ACHIEVEMENTS_CONFIG = [
+    {"id": "first_gen",   "title": "First Creation",   "icon": "🌟", "desc": "Generated your first AI photo"},
+    {"id": "gen_10",      "title": "Creative Spark",   "icon": "✨", "desc": "10 photos generated"},
+    {"id": "gen_50",      "title": "Prolific Creator", "icon": "🎨", "desc": "50 photos generated"},
+    {"id": "gen_100",     "title": "Visionary",        "icon": "👑", "desc": "100 photos generated"},
+    {"id": "streak_7",    "title": "Week Warrior",     "icon": "🔥", "desc": "7-day streak"},
+    {"id": "streak_30",   "title": "Unstoppable",      "icon": "⚡", "desc": "30-day streak"},
+    {"id": "invited_1",   "title": "Ambassador",       "icon": "🤝", "desc": "Invited a friend"},
+    {"id": "invited_5",   "title": "Connector",        "icon": "🌐", "desc": "Invited 5 friends"},
+    {"id": "paid_user",   "title": "Supporter",        "icon": "💎", "desc": "Made a purchase"},
+    {"id": "all_presets", "title": "Style Explorer",   "icon": "🎭", "desc": "Used 10 different presets"},
+]
+# uid → set of unlocked achievement ids with timestamps: {id: timestamp}
+USER_ACHIEVEMENTS: Dict[int, Dict[str, float]] = {}
+
 # Photoshoot Tournament Mode
 USER_PHOTOSHOOT_MODE: Dict[int, str]        = {}  # uid → mode key (e.g. "premium")
 USER_PHOTOSHOOT_CUSTOM_DESC: Dict[int, str] = {}  # uid → vision text (custom mode)
@@ -6607,6 +6638,24 @@ async def api_me(request: Request):
         "portfolio_url": f"{WEBHOOK_BASE.rstrip('/')}/p/{uid}" if USER_PORTFOLIO_PUBLIC.get(uid) else None,
     }
 
+@app.post("/api/v1/me/language")
+async def api_set_language(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    try:
+        data = await request.json()
+        lang = str(data.get("language") or "").strip().lower()[:8]
+    except Exception:
+        return JSONResponse({"error": "invalid body"}, status_code=400)
+    allowed = {"en", "ru", "ro", "de"}
+    if lang not in allowed:
+        return JSONResponse({"error": "unsupported language"}, status_code=400)
+    USER_LANG[uid] = lang
+    return {"ok": True, "language": lang}
+
+
 _LEADERBOARD_CACHE: Optional[List[Dict]] = None
 _LEADERBOARD_CACHE_AT: float = 0.0
 _LEADERBOARD_TTL = 300  # 5 minutes
@@ -6734,6 +6783,52 @@ async def api_gallery(request: Request):
         if int(j.get("chat_id") or 0) == uid and j.get("status") == "ready"
     ][-20:]
     return {"items": items}
+
+ALLOWED_REACTIONS = ["❤️", "🔥", "😍", "👏", "😮"]
+# job_id → {emoji: count}
+PHOTO_REACTIONS: Dict[str, Dict[str, int]] = {}
+# (uid, job_id) → emoji  (one reaction per user per photo)
+USER_PHOTO_REACTIONS: Dict[tuple, str] = {}
+
+@app.post("/api/v1/gallery/{job_id}/react")
+async def api_gallery_react(job_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    try:
+        data = await request.json()
+        emoji = str(data.get("emoji") or "").strip()
+    except Exception:
+        return JSONResponse({"error": "invalid body"}, status_code=400)
+    if emoji not in ALLOWED_REACTIONS:
+        return JSONResponse({"error": "invalid emoji"}, status_code=400)
+    key = (uid, job_id)
+    prev = USER_PHOTO_REACTIONS.get(key)
+    reactions = PHOTO_REACTIONS.setdefault(job_id, {})
+    if prev:
+        # Remove previous reaction
+        reactions[prev] = max(0, int(reactions.get(prev, 1)) - 1)
+    if emoji == prev:
+        # Toggle off
+        del USER_PHOTO_REACTIONS[key]
+        my_reaction = None
+    else:
+        reactions[emoji] = int(reactions.get(emoji, 0)) + 1
+        USER_PHOTO_REACTIONS[key] = emoji
+        my_reaction = emoji
+    return {"ok": True, "reactions": reactions, "my_reaction": my_reaction}
+
+@app.get("/api/v1/gallery/{job_id}/reactions")
+async def api_gallery_reactions(job_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    reactions = PHOTO_REACTIONS.get(job_id, {})
+    my_reaction = USER_PHOTO_REACTIONS.get((uid, job_id))
+    return {"reactions": reactions, "my_reaction": my_reaction}
+
 
 def _s3_key_from_url(url: str) -> Optional[str]:
     """Extract S3 object key from a presigned URL."""
@@ -7229,15 +7324,18 @@ async def api_presets(request: Request):
         elif lang == "ro": label = p.label_ro
         elif lang == "de": label = p.label_de
         result.append({"key": p.key, "label": label, "category": _preset_category(p.key),
-                        "is_premium": False, "locked": False})
+                        "is_premium": False, "locked": False, "emoji": getattr(p, "emoji", "✦"),
+                        "thumbnail_url": f"/preset-thumbs/{p.key}.webp"})
     for s in PREMIUM_STYLES:
         result.append({"key": s["key"], "label": s["label_en"], "emoji": s.get("emoji","✦"),
                         "category": s["category"], "is_premium": True,
-                        "pack_id": s["pack_id"], "locked": s["pack_id"] not in unlocked})
+                        "pack_id": s["pack_id"], "locked": s["pack_id"] not in unlocked,
+                        "thumbnail_url": f"/preset-thumbs/{s['key']}.webp"})
     for a in AGE_STYLES:
         result.append({"key": a["key"], "label": a["label_en"], "emoji": a.get("emoji","✨"),
                         "category": "age", "is_premium": True,
-                        "pack_id": "age_pack", "locked": not age_unlocked})
+                        "pack_id": "age_pack", "locked": not age_unlocked,
+                        "thumbnail_url": f"/preset-thumbs/{a['key']}.webp"})
     for pack_id, cfg in PRESET_PACKS.items():
         pack_unlocked = pack_id in unlocked
         lang = USER_LANG.get(uid, LANG_DEFAULT)
@@ -7248,6 +7346,7 @@ async def api_presets(request: Request):
                 "category": cfg["category"], "is_premium": True,
                 "pack_id": pack_id, "locked": not pack_unlocked,
                 "prompt": p["prompt"],
+                "thumbnail_url": f"/preset-thumbs/{p['key']}.webp",
             })
     trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
     return {"presets": result, "trending": trending_keys}
@@ -7686,6 +7785,23 @@ async def api_analytics_event(request: Request):
             return JSONResponse({"error": "event required"}, status_code=400)
         props["source"] = "webapp"
         analytics_event(uid, event, props)
+        # Quest progress hooks
+        import datetime as _dt
+        _today = _dt.date.today().isoformat()
+        if event in ("generation_completed", "generation_done"):
+            _quest_incr_daily(uid, "gen_daily_2", _today)
+            _quest_incr_daily(uid, "gen_daily_5", _today)
+            preset_key = props.get("preset_key") or props.get("preset")
+            if preset_key:
+                _quest_incr_daily(uid, "try_preset", _today)
+                # Track presets used for "all_presets" achievement
+                ui = STATS_USERS_INFO.setdefault(uid, {})
+                used = ui.get("presets_used") if isinstance(ui.get("presets_used"), list) else []
+                if preset_key not in used:
+                    ui["presets_used"] = (used + [preset_key])[-50:]
+        elif event == "share_tapped":
+            _quest_incr_daily(uid, "share_photo", _today)
+        _check_and_unlock_achievements(uid)
     except Exception:
         pass
     return {"ok": True}
@@ -7703,6 +7819,151 @@ async def api_analytics_funnel(request: Request):
     days = int(request.query_params.get("days", 7))
     days = max(1, min(days, 90))
     return _analytics_funnel_counts(days)
+
+def _quest_progress_for_user(uid: int, today: str) -> List[Dict]:
+    """Return quests with current progress for a user."""
+    import datetime as _dt
+    ui = STATS_USERS_INFO.get(uid) or {}
+    streak = USER_STREAK.get(uid, 0)
+    total_gens = int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0))
+    invites = int((STATS_USERS_INFO.get(uid) or {}).get("referrals_sent", 0))
+    claimed = USER_QUEST_CLAIMED.get(uid, {})
+    progress = USER_QUEST_PROGRESS.get(uid, {})
+    result = []
+    for q in QUESTS_CONFIG:
+        qid = q["id"]
+        qtype = q["type"]
+        # For daily quests, progress resets each day
+        if qtype == "daily":
+            prog_key = f"{qid}:{today}"
+            current = int(progress.get(prog_key, 0))
+            claimed_today = claimed.get(qid) == today
+        elif qtype == "milestone":
+            # milestone: based on streak
+            if qid == "streak_7":
+                current = min(streak, q["target"])
+            else:
+                current = 0
+            claimed_today = qid in claimed
+        else:  # lifetime
+            if qid == "gen_50":
+                current = min(total_gens, q["target"])
+            elif qid == "invite_1":
+                current = min(invites, q["target"])
+            else:
+                current = 0
+            claimed_today = qid in claimed
+        result.append({
+            "id": qid,
+            "title": q["title"],
+            "icon": q["icon"],
+            "type": qtype,
+            "target": q["target"],
+            "progress": current,
+            "reward": q["reward"],
+            "claimable": current >= q["target"] and not claimed_today,
+            "claimed": bool(claimed_today),
+        })
+    return result
+
+
+@app.get("/api/v1/quests")
+async def api_quests(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    quests = _quest_progress_for_user(uid, today)
+    claimable = sum(1 for q in quests if q["claimable"])
+    return {"quests": quests, "claimable": claimable}
+
+
+@app.post("/api/v1/quests/{quest_id}/claim")
+async def api_quest_claim(quest_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    quests = _quest_progress_for_user(uid, today)
+    quest = next((q for q in quests if q["id"] == quest_id), None)
+    if not quest:
+        return JSONResponse({"error": "quest_not_found"}, status_code=404)
+    if not quest["claimable"]:
+        return JSONResponse({"error": "not_claimable"}, status_code=400)
+    # Grant reward
+    reward = quest["reward"]
+    USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + reward
+    # Mark claimed
+    if uid not in USER_QUEST_CLAIMED:
+        USER_QUEST_CLAIMED[uid] = {}
+    USER_QUEST_CLAIMED[uid][quest_id] = today
+    analytics_event(uid, "quest_claimed", {"quest_id": quest_id, "reward": reward})
+    # Check achievements after claiming
+    _check_and_unlock_achievements(uid)
+    return {"ok": True, "credits_added": reward, "new_balance": USER_CREDITS.get(uid, 0)}
+
+
+def _check_and_unlock_achievements(uid: int) -> List[str]:
+    """Check all achievements and unlock newly earned ones. Returns list of newly unlocked ids."""
+    ui = STATS_USERS_INFO.get(uid) or {}
+    streak = USER_STREAK.get(uid, 0)
+    total_gens = int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0))
+    invites = int(ui.get("referrals_sent", 0))
+    payments = int(ui.get("payments", 0))
+    presets_used_count = len(ui.get("presets_used", []) if isinstance(ui.get("presets_used"), list) else [])
+    unlocked = USER_ACHIEVEMENTS.setdefault(uid, {})
+    newly = []
+    checks = {
+        "first_gen":   total_gens >= 1,
+        "gen_10":      total_gens >= 10,
+        "gen_50":      total_gens >= 50,
+        "gen_100":     total_gens >= 100,
+        "streak_7":    streak >= 7,
+        "streak_30":   streak >= 30,
+        "invited_1":   invites >= 1,
+        "invited_5":   invites >= 5,
+        "paid_user":   payments >= 1,
+        "all_presets": presets_used_count >= 10,
+    }
+    for ach_id, earned in checks.items():
+        if earned and ach_id not in unlocked:
+            unlocked[ach_id] = time.time()
+            newly.append(ach_id)
+    return newly
+
+
+@app.get("/api/v1/achievements")
+async def api_achievements(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    unlocked = USER_ACHIEVEMENTS.get(uid, {})
+    result = []
+    for a in ACHIEVEMENTS_CONFIG:
+        result.append({
+            "id": a["id"],
+            "title": a["title"],
+            "icon": a["icon"],
+            "desc": a["desc"],
+            "unlocked": a["id"] in unlocked,
+            "unlocked_at": unlocked.get(a["id"]),
+        })
+    newly_unlocked = _check_and_unlock_achievements(uid)
+    return {"achievements": result, "newly_unlocked": newly_unlocked}
+
+
+def _quest_incr_daily(uid: int, quest_id: str, today: str, n: int = 1):
+    """Increment a daily quest counter for a user."""
+    if uid not in USER_QUEST_PROGRESS:
+        USER_QUEST_PROGRESS[uid] = {}
+    key = f"{quest_id}:{today}"
+    USER_QUEST_PROGRESS[uid][key] = int(USER_QUEST_PROGRESS[uid].get(key, 0)) + n
+
 
 @app.get("/api/v1/referral")
 async def api_referral(request: Request):

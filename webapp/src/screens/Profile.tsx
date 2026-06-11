@@ -6,7 +6,11 @@ import { useAppStore } from '../store/appStore'
 import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { createGift } from '../api/gift'
+import { getQuests, claimQuest, getAchievements, setLanguage } from '../api/quests'
+import { AchievementPopup } from '../components/shared/AchievementPopup'
+import { hap } from '../lib/haptics'
 import type { ReferralData } from '../api/session'
+import type { QuestItem, Achievement } from '../types'
 
 const tg = window.Telegram?.WebApp
 
@@ -20,6 +24,42 @@ function formatCountdown(secs: number): string {
   return `${m}m`
 }
 
+function QuestCard({ quest, onClaim }: { quest: QuestItem; onClaim: (id: string) => void }) {
+  const pct = Math.min(1, quest.progress / quest.target)
+  return (
+    <div className="flex items-center gap-3 py-3 border-b border-black/[0.04] last:border-0">
+      <span className="text-[22px] w-8 text-center flex-shrink-0">{quest.icon}</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] font-semibold text-[#1D1D1F] truncate">{quest.title}</p>
+        <div className="mt-1.5 flex items-center gap-2">
+          <div className="flex-1 h-1.5 rounded-full bg-[#F5F5F7] overflow-hidden">
+            <motion.div
+              className="h-full rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78]"
+              initial={{ width: 0 }}
+              animate={{ width: `${pct * 100}%` }}
+              transition={{ duration: 0.6, ease: 'easeOut' }}
+            />
+          </div>
+          <span className="text-[10px] text-[#6E6E73] flex-shrink-0">{quest.progress}/{quest.target}</span>
+        </div>
+      </div>
+      {quest.claimable ? (
+        <motion.button
+          whileTap={{ scale: 0.94 }}
+          onClick={() => { hap.success(); onClaim(quest.id) }}
+          className="flex-shrink-0 px-3 py-1.5 rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white text-[11px] font-bold"
+        >
+          +{quest.reward}⚡
+        </motion.button>
+      ) : quest.claimed ? (
+        <span className="flex-shrink-0 text-[11px] font-semibold text-[#34C759]">✓ Done</span>
+      ) : (
+        <span className="flex-shrink-0 text-[11px] font-medium text-[#6E6E73]">+{quest.reward}⚡</span>
+      )}
+    </div>
+  )
+}
+
 export default function Profile() {
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
@@ -31,6 +71,9 @@ export default function Profile() {
   const [giftAmount, setGiftAmount] = useState<number | null>(null)
   const [giftLoading, setGiftLoading] = useState(false)
   const [giftSent, setGiftSent] = useState(false)
+  const [quests, setQuests] = useState<QuestItem[]>([])
+  const [achievements, setAchievements] = useState<Achievement[]>([])
+  const [newAchievement, setNewAchievement] = useState<Achievement | null>(null)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
   const challenge = useAppStore((s) => s.challenge)
@@ -44,6 +87,17 @@ export default function Profile() {
         .catch(() => null)
     }
     getReferral().then(setReferral).catch(() => null)
+    getQuests().then(({ quests: q, claimable }) => {
+      setQuests(q)
+      useAppStore.getState().setProfileBadge(claimable)
+    }).catch(() => null)
+    getAchievements().then(({ achievements: a, newly_unlocked }) => {
+      setAchievements(a)
+      if (newly_unlocked.length > 0) {
+        const found = a.find((x) => x.id === newly_unlocked[0])
+        if (found) setNewAchievement(found)
+      }
+    }).catch(() => null)
   }, [])
 
   useEffect(() => {
@@ -58,33 +112,50 @@ export default function Profile() {
       const result = await claimDaily()
       setDailyClaimed(true)
       confetti({ particleCount: 80, spread: 60, origin: { y: 0.5 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
-      tg?.HapticFeedback?.notificationOccurred('success')
-      if (user) {
-        setUser({ ...user, credits: result.credits, streak: result.streak })
-      }
+      hap.success()
+      if (user) setUser({ ...user, credits: result.credits, streak: result.streak })
     } catch (e: unknown) {
       if (e && typeof e === 'object' && 'data' in e) {
         const data = (e as { data?: { next_at?: number } }).data
-        if (data?.next_at) {
-          setNextBonusIn(Math.round((data.next_at * 1000 - Date.now()) / 1000))
-        }
+        if (data?.next_at) setNextBonusIn(Math.round((data.next_at * 1000 - Date.now()) / 1000))
       }
     } finally {
       setClaimLoading(false)
     }
   }
 
+  async function handleClaimQuest(questId: string) {
+    try {
+      const res = await claimQuest(questId)
+      setQuests((prev) => {
+        const updated = prev.map((q) => q.id === questId ? { ...q, claimed: true, claimable: false } : q)
+        useAppStore.getState().setProfileBadge(updated.filter((q) => q.claimable).length)
+        return updated
+      })
+      if (user) setUser({ ...user, credits: res.new_balance })
+      confetti({ particleCount: 60, spread: 55, origin: { y: 0.6 }, colors: ['#6C47FF', '#FFD700'] })
+    } catch { /* noop */ }
+  }
+
+  async function handleLanguage(code: string) {
+    hap.select()
+    try {
+      await setLanguage(code)
+      if (user) setUser({ ...user, language: code })
+    } catch { /* noop */ }
+  }
+
   function handleCopyLink() {
     if (!referral) return
     navigator.clipboard.writeText(referral.link).catch(() => null)
     setCopied(true)
-    tg?.HapticFeedback?.notificationOccurred('success')
+    hap.success()
     setTimeout(() => setCopied(false), 2000)
   }
 
   function handleShareLink() {
     if (!referral) return
-    tg?.HapticFeedback?.impactOccurred('light')
+    hap.light()
     const text = encodeURIComponent('Try AI photoshoots — turns your selfie into stunning photos!')
     const url = encodeURIComponent(referral.link)
     tg?.openLink(`https://t.me/share/url?url=${url}&text=${text}`)
@@ -93,7 +164,7 @@ export default function Profile() {
   async function handleSendGift(credits: number) {
     if (!user || user.credits < credits) return
     setGiftLoading(true)
-    tg?.HapticFeedback?.impactOccurred('medium')
+    hap.medium()
     try {
       const { link } = await createGift(credits)
       setGiftSent(true)
@@ -108,16 +179,24 @@ export default function Profile() {
   }
 
   const streak = user?.streak ?? 0
-  const initials = (user as { first_name?: string } | null)
-    ? (tg?.initDataUnsafe?.user?.first_name ?? 'U').charAt(0).toUpperCase()
-    : 'U'
+  const initials = (tg?.initDataUnsafe?.user?.first_name ?? 'U').charAt(0).toUpperCase()
   const username = tg?.initDataUnsafe?.user?.username
   const displayName = tg?.initDataUnsafe?.user?.first_name ?? 'User'
-
   const weekDays = Array.from({ length: 7 }, (_, i) => i < streak % 7)
+  const claimableCount = quests.filter((q) => q.claimable).length
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
+      {/* Achievement popup */}
+      <AnimatePresence>
+        {newAchievement && (
+          <AchievementPopup
+            achievement={newAchievement}
+            onDone={() => setNewAchievement(null)}
+          />
+        )}
+      </AnimatePresence>
+
       <div className="px-4 pt-4 pb-2">
         <h1 className="text-[22px] font-bold text-[#1D1D1F]">👤 Profile</h1>
       </div>
@@ -157,9 +236,7 @@ export default function Profile() {
         {/* Streak calendar */}
         {streak > 0 && (
           <div className="p-4 rounded-card bg-white shadow-sm">
-            <p className="text-[13px] font-semibold text-[#1D1D1F] mb-3">
-              🔥 {streak} day streak
-            </p>
+            <p className="text-[13px] font-semibold text-[#1D1D1F] mb-3">🔥 {streak} day streak</p>
             <div className="flex gap-1.5">
               {weekDays.map((active, i) => (
                 <motion.div
@@ -174,16 +251,12 @@ export default function Profile() {
           </div>
         )}
 
-        {/* Daily Bonus Button */}
+        {/* Daily Bonus */}
         <div className="rounded-card overflow-hidden">
           <AnimatePresence mode="wait">
             {dailyClaimed ? (
-              <motion.div
-                key="claimed"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="flex items-center gap-3 p-4 bg-[#34C759]/10 border border-[#34C759]/20"
-              >
+              <motion.div key="claimed" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                className="flex items-center gap-3 p-4 bg-[#34C759]/10 border border-[#34C759]/20">
                 <CheckCircle2 size={24} className="text-[#34C759]" />
                 <div>
                   <p className="text-[14px] font-semibold text-[#1D1D1F]">Daily bonus claimed!</p>
@@ -191,12 +264,8 @@ export default function Profile() {
                 </div>
               </motion.div>
             ) : nextBonusIn ? (
-              <motion.div
-                key="waiting"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex items-center justify-between p-4 bg-[#F5F5F7] rounded-card"
-              >
+              <motion.div key="waiting" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                className="flex items-center justify-between p-4 bg-[#F5F5F7] rounded-card">
                 <div>
                   <p className="text-[14px] font-semibold text-[#1D1D1F]">Daily Bonus</p>
                   <p className="text-[12px] text-[#6E6E73]">Next in {formatCountdown(nextBonusIn)}</p>
@@ -204,13 +273,9 @@ export default function Profile() {
                 <span className="text-2xl">⏳</span>
               </motion.div>
             ) : (
-              <motion.button
-                key="available"
-                whileTap={{ scale: 0.98 }}
-                onClick={handleDailyBonus}
+              <motion.button key="available" whileTap={{ scale: 0.98 }} onClick={handleDailyBonus}
                 disabled={claimLoading}
-                className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-[#34C759]/20 to-[#34C759]/10 border border-[#34C759]/30 rounded-card"
-              >
+                className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-[#34C759]/20 to-[#34C759]/10 border border-[#34C759]/30 rounded-card">
                 <div className="text-left">
                   <p className="text-[15px] font-semibold text-[#1D1D1F]">🎁 Daily Bonus</p>
                   <p className="text-[12px] text-[#6E6E73]">+1 free generation · streak bonus</p>
@@ -221,83 +286,47 @@ export default function Profile() {
           </AnimatePresence>
         </div>
 
-        {/* Gift Credits */}
-        <AnimatePresence mode="wait">
-          {giftSent ? (
-            <motion.div
-              key="giftsent"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              className="flex items-center gap-3 p-4 rounded-card bg-[#FF2D78]/10 border border-[#FF2D78]/20"
-            >
-              <Gift size={22} className="text-[#FF2D78]" />
-              <div>
-                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift sent! 🎉</p>
-                <p className="text-[12px] text-[#6E6E73]">Share the link so your friend can claim it</p>
-              </div>
-            </motion.div>
-          ) : giftAmount ? (
-            <motion.div
-              key="giftpick"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              className="p-4 rounded-card bg-white shadow-sm"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[14px] font-semibold text-[#1D1D1F]">🎁 Send {giftAmount}⚡ as gift</p>
-                <button onClick={() => setGiftAmount(null)} className="text-[12px] text-[#6E6E73]">Cancel</button>
-              </div>
-              <p className="text-[12px] text-[#6E6E73] mb-3">
-                Your balance: {user?.credits ?? 0}⚡ → {(user?.credits ?? 0) - giftAmount}⚡ after gift
-              </p>
-              <motion.button
-                whileTap={{ scale: 0.97 }}
-                onClick={() => handleSendGift(giftAmount)}
-                disabled={giftLoading || (user?.credits ?? 0) < giftAmount}
-                className="w-full py-3 rounded-[12px] bg-gradient-to-r from-[#FF2D78] to-[#6C47FF] text-white text-[14px] font-bold disabled:opacity-40"
-              >
-                {giftLoading ? 'Creating link…' : 'Create & Share Gift →'}
-              </motion.button>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="giftcard"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="p-4 rounded-card bg-white shadow-sm"
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <Gift size={16} className="text-[#FF2D78]" />
-                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift Credits to a Friend</p>
-              </div>
-              <p className="text-[12px] text-[#6E6E73] mb-3">
-                They get credits instantly · you get +1⚡ when they claim
-              </p>
-              <div className="flex gap-2">
-                {[5, 10, 25].map((amt) => (
-                  <motion.button
-                    key={amt}
-                    whileTap={{ scale: 0.93 }}
-                    onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setGiftAmount(amt) }}
-                    disabled={(user?.credits ?? 0) < amt}
-                    className="flex-1 py-2.5 rounded-[10px] bg-[#FF2D78]/10 border border-[#FF2D78]/20 text-[#FF2D78] text-[13px] font-bold disabled:opacity-30"
-                  >
-                    {amt}⚡
-                  </motion.button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* Quick Quests */}
+        {quests.length > 0 && (
+          <div className="rounded-card bg-white shadow-sm overflow-hidden">
+            <div className="px-4 pt-4 pb-2 flex items-center justify-between">
+              <p className="text-[15px] font-bold text-[#1D1D1F]">⚡ Daily Quests</p>
+              {claimableCount > 0 && (
+                <motion.span
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  className="w-5 h-5 rounded-full bg-[#FF2D78] text-white text-[10px] font-bold flex items-center justify-center"
+                >
+                  {claimableCount}
+                </motion.span>
+              )}
+            </div>
+            <div className="px-4 pb-2">
+              {quests.filter((q) => q.type === 'daily').map((q) => (
+                <QuestCard key={q.id} quest={q} onClaim={handleClaimQuest} />
+              ))}
+            </div>
+            {quests.some((q) => q.type !== 'daily') && (
+              <>
+                <div className="px-4 pt-2 pb-1">
+                  <p className="text-[11px] font-semibold text-[#6E6E73] uppercase tracking-wide">Milestones</p>
+                </div>
+                <div className="px-4 pb-2">
+                  {quests.filter((q) => q.type !== 'daily').map((q) => (
+                    <QuestCard key={q.id} quest={q} onClaim={handleClaimQuest} />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Daily Challenge */}
         {challenge && (
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={() => {
-              tg?.HapticFeedback?.impactOccurred('medium')
+              hap.medium()
               setActivePreset({ key: challenge.preset_key, label: challenge.label, category: 'challenge', is_premium: false, emoji: '⚡' })
               setTab('studio')
             }}
@@ -312,6 +341,36 @@ export default function Profile() {
           </motion.button>
         )}
 
+        {/* Achievements row */}
+        {achievements.length > 0 && (
+          <div className="rounded-card bg-white shadow-sm overflow-hidden">
+            <div className="px-4 pt-4 pb-3">
+              <p className="text-[15px] font-bold text-[#1D1D1F] mb-3">🏆 Achievements</p>
+              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                {achievements.map((a) => (
+                  <div
+                    key={a.id}
+                    title={a.desc}
+                    className={`flex-shrink-0 w-12 h-12 rounded-[14px] flex items-center justify-center text-[22px] relative ${
+                      a.unlocked
+                        ? 'bg-gradient-to-br from-[#6C47FF]/20 to-[#FF2D78]/20 border border-[#6C47FF]/30'
+                        : 'bg-[#F5F5F7] grayscale opacity-40'
+                    }`}
+                  >
+                    {a.icon}
+                    {a.unlocked && (
+                      <div className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#6C47FF] border-2 border-white" />
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-[#6E6E73] mt-2">
+                {achievements.filter((a) => a.unlocked).length}/{achievements.length} unlocked
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Subscription status */}
         {user?.plan && user.plan !== 'free' && (
           <div className="p-4 rounded-card bg-gradient-to-r from-[#6C47FF]/10 to-[#FF2D78]/10 border border-[#6C47FF]/20">
@@ -319,15 +378,62 @@ export default function Profile() {
               <div>
                 <p className="text-[14px] font-semibold text-[#1D1D1F]">✦ {user.plan.toUpperCase()} Plan</p>
                 {user.plan_expiry && (
-                  <p className="text-[12px] text-[#6E6E73] mt-0.5">
-                    Renews {new Date(user.plan_expiry).toLocaleDateString()}
-                  </p>
+                  <p className="text-[12px] text-[#6E6E73] mt-0.5">Renews {new Date(user.plan_expiry).toLocaleDateString()}</p>
                 )}
               </div>
               <CheckCircle2 size={20} className="text-[#6C47FF]" />
             </div>
           </div>
         )}
+
+        {/* Gift Credits */}
+        <AnimatePresence mode="wait">
+          {giftSent ? (
+            <motion.div key="giftsent" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              className="flex items-center gap-3 p-4 rounded-card bg-[#FF2D78]/10 border border-[#FF2D78]/20">
+              <Gift size={22} className="text-[#FF2D78]" />
+              <div>
+                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift sent! 🎉</p>
+                <p className="text-[12px] text-[#6E6E73]">Share the link so your friend can claim it</p>
+              </div>
+            </motion.div>
+          ) : giftAmount ? (
+            <motion.div key="giftpick" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              className="p-4 rounded-card bg-white shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[14px] font-semibold text-[#1D1D1F]">🎁 Send {giftAmount}⚡ as gift</p>
+                <button onClick={() => setGiftAmount(null)} className="text-[12px] text-[#6E6E73]">Cancel</button>
+              </div>
+              <p className="text-[12px] text-[#6E6E73] mb-3">
+                Your balance: {user?.credits ?? 0}⚡ → {(user?.credits ?? 0) - giftAmount}⚡ after gift
+              </p>
+              <motion.button whileTap={{ scale: 0.97 }} onClick={() => handleSendGift(giftAmount)}
+                disabled={giftLoading || (user?.credits ?? 0) < giftAmount}
+                className="w-full py-3 rounded-[12px] bg-gradient-to-r from-[#FF2D78] to-[#6C47FF] text-white text-[14px] font-bold disabled:opacity-40">
+                {giftLoading ? 'Creating link…' : 'Create & Share Gift →'}
+              </motion.button>
+            </motion.div>
+          ) : (
+            <motion.div key="giftcard" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="p-4 rounded-card bg-white shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <Gift size={16} className="text-[#FF2D78]" />
+                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift Credits to a Friend</p>
+              </div>
+              <p className="text-[12px] text-[#6E6E73] mb-3">They get credits instantly · you get +1⚡ when they claim</p>
+              <div className="flex gap-2">
+                {[5, 10, 25].map((amt) => (
+                  <motion.button key={amt} whileTap={{ scale: 0.93 }}
+                    onClick={() => { hap.light(); setGiftAmount(amt) }}
+                    disabled={(user?.credits ?? 0) < amt}
+                    className="flex-1 py-2.5 rounded-[10px] bg-[#FF2D78]/10 border border-[#FF2D78]/20 text-[#FF2D78] text-[13px] font-bold disabled:opacity-30">
+                    {amt}⚡
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Referral card */}
         {referral && (
@@ -339,12 +445,8 @@ export default function Profile() {
                   +{referral.bonus_per_invite}⚡ you · +{referral.bonus_for_new}⚡ them
                 </span>
               </div>
-              <p className="text-[12px] text-[#6E6E73]">
-                {referral.invited_count} invited · {referral.credits_earned} credits earned
-              </p>
+              <p className="text-[12px] text-[#6E6E73]">{referral.invited_count} invited · {referral.credits_earned} credits earned</p>
             </div>
-
-            {/* Milestone progress */}
             {referral.milestones.length > 0 && (
               <div className="px-4 py-3 border-b border-black/[0.04]">
                 <div className="flex gap-2">
@@ -359,31 +461,23 @@ export default function Profile() {
                 </div>
                 {referral.next_milestone && (
                   <p className="text-[11px] text-[#6E6E73] mt-1.5">
-                    {referral.next_milestone - referral.invited_count} more to unlock +{referral.next_milestone_bonus}⚡ bonus
+                    {referral.next_milestone - referral.invited_count} more → +{referral.next_milestone_bonus}⚡ bonus
                   </p>
                 )}
               </div>
             )}
-
-            {/* Link + buttons */}
             <div className="px-4 py-3">
               <div className="flex items-center gap-2 px-3 py-2 bg-[#F5F5F7] rounded-[10px] mb-2">
                 <span className="flex-1 text-[11px] text-[#6E6E73] truncate">{referral.link}</span>
               </div>
               <div className="flex gap-2">
-                <motion.button
-                  whileTap={{ scale: 0.96 }}
-                  onClick={handleCopyLink}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-[10px] bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-semibold"
-                >
+                <motion.button whileTap={{ scale: 0.96 }} onClick={handleCopyLink}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-[10px] bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-semibold">
                   <Copy size={13} />
                   {copied ? 'Copied!' : 'Copy link'}
                 </motion.button>
-                <motion.button
-                  whileTap={{ scale: 0.96 }}
-                  onClick={handleShareLink}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-[10px] bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white text-[12px] font-semibold"
-                >
+                <motion.button whileTap={{ scale: 0.96 }} onClick={handleShareLink}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-[10px] bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white text-[12px] font-semibold">
                   <Share2 size={13} />
                   Share
                 </motion.button>
@@ -397,12 +491,18 @@ export default function Profile() {
           <p className="text-[12px] text-[#6E6E73] font-medium mb-2">Language</p>
           <div className="flex gap-2">
             {LANGS.map((flag, i) => (
-              <button
+              <motion.button
                 key={LANG_CODES[i]}
-                className={`w-10 h-10 rounded-xl text-xl ${user?.language === LANG_CODES[i] ? 'ring-2 ring-[#6C47FF]' : ''}`}
+                whileTap={{ scale: 0.88 }}
+                onClick={() => handleLanguage(LANG_CODES[i])}
+                className={`w-10 h-10 rounded-xl text-xl transition-all ${
+                  user?.language === LANG_CODES[i]
+                    ? 'ring-2 ring-[#6C47FF] bg-[#6C47FF]/10'
+                    : 'bg-[#F5F5F7]'
+                }`}
               >
                 {flag}
-              </button>
+              </motion.button>
             ))}
           </div>
         </div>

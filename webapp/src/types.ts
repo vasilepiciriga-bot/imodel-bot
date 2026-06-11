@@ -35,6 +35,7 @@ export interface Preset {
   locked?: boolean
   emoji: string
   prompt?: string
+  thumbnail_url?: string
 }
 
 export interface Generation {
@@ -89,6 +90,27 @@ export interface Challenge {
   label: string
   bonus_credits: number
   date: string
+}
+
+export interface QuestItem {
+  id: string
+  title: string
+  icon: string
+  type: 'daily' | 'milestone' | 'lifetime'
+  target: number
+  progress: number
+  reward: number
+  claimable: boolean
+  claimed: boolean
+}
+
+export interface Achievement {
+  id: string
+  title: string
+  icon: string
+  desc: string
+  unlocked: boolean
+  unlocked_at: number | null
 }
 
 export interface DailyBonusResult {
