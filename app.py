@@ -2588,6 +2588,78 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
         stats_incr("mj_prompt_fail", 1)
         return None
 
+# ===== AI Vision Judge for Generation Tournament =====
+_VISION_JUDGE_ENABLED = os.getenv("DISABLE_VISION_JUDGE", "0") != "1"
+
+def _judge_candidate_vision(candidate_bytes: bytes, face_bytes: bytes, mode_key: str) -> float:
+    """
+    Score a tournament candidate using GPT-4o Vision.
+    Evaluates face preservation (0-40) + technical quality (0-35) + style match (0-25).
+    Falls back to size+noise stub if OpenAI unavailable or call fails.
+    """
+    if not _VISION_JUDGE_ENABLED or not OPENAI_API_KEY or OpenAI is None:
+        return _score_candidate(candidate_bytes)
+    if not candidate_bytes or not face_bytes:
+        return _score_candidate(candidate_bytes)
+    try:
+        from photoshoot_modes import get_mode_config as _gmc
+        cfg = _gmc(mode_key)
+        mode_label = cfg["label"].get("en", mode_key)
+        style_goal = cfg.get("prompt_layer") or "natural portrait"
+
+        system_msg = (
+            "You are a strict AI photo quality judge for a portrait generation system. "
+            "Evaluate the generated portrait. Return ONLY valid JSON, nothing else."
+        )
+        user_text = (
+            f'Mode: "{mode_label}"\n'
+            f'Style goal: {style_goal}\n\n'
+            "Score the generated photo (image 2) compared to the original face (image 1):\n"
+            "• face_score 0-40: Identity preserved? Face sharp, natural, no deformations, no melted features\n"
+            "• quality_score 0-35: Technical quality — sharpness, lighting, no artifacts, proper anatomy\n"
+            "• style_score 0-25: Does it match the mode's aesthetic?\n\n"
+            'Return ONLY this JSON with integers: {"face_score": 0, "quality_score": 0, "style_score": 0}'
+        )
+
+        face_b64 = base64.b64encode(face_bytes).decode()
+        cand_b64 = base64.b64encode(candidate_bytes).decode()
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        r = client.chat.completions.create(
+            model=OPENAI_MODEL_VISION,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Image 1 — original face (identity reference):"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{face_b64}", "detail": "low"}},
+                    {"type": "text", "text": "Image 2 — generated result to evaluate:"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{cand_b64}", "detail": "low"}},
+                    {"type": "text", "text": user_text},
+                ],
+            }],
+            temperature=0.1,
+            max_tokens=60,
+            timeout=25,
+        )
+        raw = (r.choices[0].message.content or "").strip()
+        import re as _re
+        m = _re.search(r'\{[^}]+\}', raw)
+        if not m:
+            return _score_candidate(candidate_bytes)
+        data = json.loads(m.group())
+        total = (
+            int(data.get("face_score", 0))
+            + int(data.get("quality_score", 0))
+            + int(data.get("style_score", 0))
+        )
+        stats_incr("vision_judge_ok", 1)
+        return float(max(0, min(total, 100)))
+    except Exception as e:
+        stats_incr("vision_judge_fail", 1)
+        print(f"Vision judge error: {str(e)[:120]}")
+        return _score_candidate(candidate_bytes)
+
+
 # ===== Короткий caption (для канала) =================
 def generate_instacaption(user_prompt: str, lang: str = "ru") -> str:
     # (как раньше) — опущено ради краткости
@@ -5082,7 +5154,9 @@ async def run_photoshoot_tournament_job(job_id: str):
                 None,    # job_id=None — critical: prevent inner call clobbering outer job
             )
             if result_bytes:
-                score = _score_candidate(result_bytes)
+                score = await asyncio.to_thread(
+                    _judge_candidate_vision, result_bytes, img_bytes, mode_key
+                )
                 candidates.append((score, result_bytes))
                 job_event(job_id, "candidate_ok", index=i + 1, score=round(score, 1), size=len(result_bytes))
             else:
