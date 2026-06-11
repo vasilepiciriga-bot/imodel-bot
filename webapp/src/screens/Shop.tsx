@@ -134,6 +134,30 @@ export default function Shop() {
           </div>
         </div>
 
+        {/* Preset Packs */}
+        {(shop?.preset_packs ?? []).some((p) => !p.unlocked) && (
+          <div>
+            <p className="text-[13px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Preset Packs</p>
+            <div className="space-y-2">
+              {(shop?.preset_packs ?? []).filter((p) => !p.unlocked).map((pack) => (
+                <motion.button
+                  key={pack.id}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => handleBuy(pack.id, pack.stars)}
+                  className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#FF9500]/10 to-[#6C47FF]/10 border border-[#FF9500]/20"
+                >
+                  <span className="text-2xl">{pack.emoji}</span>
+                  <div className="flex-1 text-left">
+                    <p className="text-[14px] font-semibold text-[#1D1D1F]">{pack.label}</p>
+                    <p className="text-[11px] text-[#6E6E73]">{pack.presets_count} presets · one-time unlock</p>
+                  </div>
+                  <span className="text-[14px] font-bold text-[#6C47FF]">{pack.stars}★</span>
+                </motion.button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Power-ups */}
         <div>
           <p className="text-[13px] font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">Power-Ups</p>
@@ -142,7 +166,7 @@ export default function Shop() {
             {shop && !(user?.unlocked_packs ?? []).includes('premium_pack_1') && (
               <motion.button
                 whileTap={{ scale: 0.98 }}
-                onClick={() => handleBuy('premium_pack_1', 490)}
+                onClick={() => handleBuy('premium_pack_1', shop?.style_packs?.find(p => p.id === 'premium_pack_1')?.stars ?? 490)}
                 className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#6C47FF]/10 to-[#FF2D78]/10 border border-[#6C47FF]/20"
               >
                 <span className="text-2xl">🎨</span>
@@ -150,7 +174,7 @@ export default function Shop() {
                   <p className="text-[14px] font-semibold text-[#1D1D1F]">Premium Style Pack</p>
                   <p className="text-[11px] text-[#6E6E73]">15 exclusive styles · one-time unlock</p>
                 </div>
-                <span className="text-[14px] font-bold text-[#6C47FF]">490★</span>
+                <span className="text-[14px] font-bold text-[#6C47FF]">{shop?.style_packs?.find(p => p.id === 'premium_pack_1')?.stars ?? 490}★</span>
               </motion.button>
             )}
 
@@ -158,7 +182,7 @@ export default function Shop() {
             {shop && !user?.age_pack && (
               <motion.button
                 whileTap={{ scale: 0.98 }}
-                onClick={() => handleBuy('age_pack', 290)}
+                onClick={() => handleBuy('age_pack', shop?.style_packs?.find(p => p.id === 'age_pack')?.stars ?? 290)}
                 className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#FF9500]/10 to-[#FF2D78]/10 border border-[#FF9500]/20"
               >
                 <span className="text-2xl">🎭</span>
@@ -166,7 +190,7 @@ export default function Shop() {
                   <p className="text-[14px] font-semibold text-[#1D1D1F]">Age Magic Pack</p>
                   <p className="text-[11px] text-[#6E6E73]">Young/Old filters · 4 styles · one-time</p>
                 </div>
-                <span className="text-[14px] font-bold text-[#FF9500]">290★</span>
+                <span className="text-[14px] font-bold text-[#FF9500]">{shop?.style_packs?.find(p => p.id === 'age_pack')?.stars ?? 290}★</span>
               </motion.button>
             )}
 

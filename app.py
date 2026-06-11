@@ -785,8 +785,11 @@ SUB_WEEKLY_CREDITS = int(os.getenv("SUB_WEEKLY_CREDITS", "15"))
 SUB_WEEKLY_PERIOD  = 604800  # 7 days
 
 # Style pack pricing
-STYLE_PACK_STARS = int(os.getenv("STYLE_PACK_STARS", "490"))
-AGE_PACK_STARS   = int(os.getenv("AGE_PACK_STARS",   "290"))
+STYLE_PACK_STARS    = int(os.getenv("STYLE_PACK_STARS",    "490"))
+AGE_PACK_STARS      = int(os.getenv("AGE_PACK_STARS",      "290"))
+VIRAL_PACK_STARS    = int(os.getenv("VIRAL_PACK_STARS",    "190"))
+LOCATIONS_PACK_STARS= int(os.getenv("LOCATIONS_PACK_STARS","290"))
+FANTASY_PACK_STARS  = int(os.getenv("FANTASY_PACK_STARS",  "390"))
 
 # Challenge bonus
 CHALLENGE_BONUS_CREDITS = int(os.getenv("CHALLENGE_BONUS_CREDITS", "2"))
@@ -1476,6 +1479,64 @@ AGE_STYLES = [
     {"key": "age_older_20", "label_ru": "+20 лет",  "label_en": "+20 Years",
      "emoji": "🌿", "prompt": "older distinguished face, 20 years older, silver hair, deep character lines, wise dignified presence"},
 ]
+
+# Preset Packs — themed scene/mood presets sold as one-time Star purchases
+PRESET_PACKS: Dict[str, Dict] = {
+    "viral_pack": {
+        "label_en": "Viral Social", "label_ru": "Соц. сети", "emoji": "📱",
+        "stars": VIRAL_PACK_STARS, "category": "lifestyle",
+        "presets": [
+            {"key": "dark_academia",    "emoji": "🎓", "label_en": "Dark Academia",   "label_ru": "Дарк Академия",
+             "prompt": "dark academia aesthetic portrait, ivy-league library, warm candlelight, turtleneck and tweed blazer, leather-bound books, moody intellectual atmosphere, golden hour"},
+            {"key": "y2k_glam",         "emoji": "💿", "label_en": "Y2K Glam",        "label_ru": "Y2K Гламур",
+             "prompt": "Y2K aesthetic portrait, early 2000s nostalgia, metallic silver outfit, butterfly clips, frosted glossy lips, pop-star energy, vibrant saturated color"},
+            {"key": "barbiecore",       "emoji": "💗", "label_en": "Barbiecore",       "label_ru": "Барбикор",
+             "prompt": "Barbiecore portrait, bubblegum pink backdrop, plastic fantastic editorial, glitter and glam, bright hot pinks, campy fashion photography, fun bold colors"},
+            {"key": "soft_aesthetic",   "emoji": "🌸", "label_en": "Soft Aesthetic",   "label_ru": "Мягкая эстетика",
+             "prompt": "soft girl aesthetic portrait, pastel palette, butterflies and wildflowers, blush pink tones, dreamy light leak, wholesome sweet mood, cottagecore edge"},
+            {"key": "e_girl",           "emoji": "🖤", "label_en": "E-Girl",           "label_ru": "Е-гёрл",
+             "prompt": "e-girl aesthetic portrait, alt fashion, layered chains, blush under eyes, dark streaks, bedroom ring light, edgy-cute hybrid, TikTok generation"},
+            {"key": "indie_alt",        "emoji": "🌻", "label_en": "Indie Alt",        "label_ru": "Инди Альт",
+             "prompt": "indie alternative aesthetic portrait, thrift-store layers, golden analog film grain, lo-fi vignette, muted warm tones, authentic raw candid mood"},
+        ],
+    },
+    "locations_pack": {
+        "label_en": "World Locations", "label_ru": "Локации мира", "emoji": "🌍",
+        "stars": LOCATIONS_PACK_STARS, "category": "outdoor",
+        "presets": [
+            {"key": "paris_cafe",       "emoji": "🥐", "label_en": "Paris Café",       "label_ru": "Парижское кафе",
+             "prompt": "Paris sidewalk café portrait, Eiffel Tower soft bokeh, morning golden light, French bistro atmosphere, cobblestone street, espresso and croissant"},
+            {"key": "tokyo_night",      "emoji": "🏙", "label_en": "Tokyo Night",       "label_ru": "Токийская ночь",
+             "prompt": "Shinjuku night street portrait, golden lanterns and vibrant neon signs, Japanese architecture bokeh, light rain puddles, cinematic Tokyo atmosphere"},
+            {"key": "maldives_beach",   "emoji": "🌊", "label_en": "Maldives",          "label_ru": "Мальдивы",
+             "prompt": "Maldives overwater bungalow portrait, turquoise crystal lagoon, white sand beach, tropical golden hour, luxury paradise, resort lifestyle"},
+            {"key": "nyc_penthouse",    "emoji": "🗽", "label_en": "NYC Penthouse",     "label_ru": "Пентхаус NYC",
+             "prompt": "NYC penthouse rooftop portrait, Manhattan skyline at blue hour, city lights bokeh, floor-to-ceiling glass, power and luxury lifestyle, golden dusk"},
+            {"key": "tuscany_vineyard", "emoji": "🍷", "label_en": "Tuscany",           "label_ru": "Тоскана",
+             "prompt": "Tuscany countryside portrait, rolling golden hills, cypress tree lanes, vineyard at sunset, Italian villa bokeh, warm Mediterranean late afternoon light"},
+            {"key": "dubai_skyline",    "emoji": "🌃", "label_en": "Dubai",             "label_ru": "Дубай",
+             "prompt": "Dubai skyline portrait, Burj Khalifa backdrop, luxury desert city at golden hour, ultra-modern glass architecture, dramatic editorial travel photography"},
+        ],
+    },
+    "fantasy_pack": {
+        "label_en": "Fantasy & Sci-Fi", "label_ru": "Фэнтези и Sci-Fi", "emoji": "⚔️",
+        "stars": FANTASY_PACK_STARS, "category": "cinematic",
+        "presets": [
+            {"key": "medieval_castle",  "emoji": "⚔️", "label_en": "Medieval Castle",  "label_ru": "Средневековье",
+             "prompt": "medieval fantasy portrait, castle stone walls, flickering torchlight, chainmail and wool cloak, epic fantasy film quality, dramatic heroic lighting"},
+            {"key": "space_station",    "emoji": "🚀", "label_en": "Space Station",     "label_ru": "Космос",
+             "prompt": "space station portrait, Earth visible through porthole window, zero gravity atmosphere, NASA quality photography, cosmic stars background, astronaut aesthetic"},
+            {"key": "elven_forest",     "emoji": "🌿", "label_en": "Elven Forest",      "label_ru": "Эльфийский лес",
+             "prompt": "Elven forest portrait, magical bioluminescent trees, ethereal light beams, flowing elvish robes, Lord of the Rings quality, mystical fantasy atmosphere"},
+            {"key": "cyberpunk_alley",  "emoji": "🤖", "label_en": "Cyberpunk Alley",   "label_ru": "Киберпанк",
+             "prompt": "cyberpunk back-alley portrait, holographic billboard ads, acid rain, techwear outfit, dystopian megacity, Blade Runner 2049 cinematic quality"},
+            {"key": "victorian_manor",  "emoji": "🕯", "label_en": "Victorian Manor",   "label_ru": "Викторианство",
+             "prompt": "Victorian manor portrait, antique drawing room, fireplace amber glow, ornate wallpaper, period drama BBC quality, candlelit elegant atmosphere"},
+            {"key": "pirates_cove",     "emoji": "🏴‍☠️", "label_en": "Pirate Cove",  "label_ru": "Пиратская бухта",
+             "prompt": "pirate cove portrait, tall ship and ocean at sunset, weathered wood and rigging, period pirate costume, dramatic adventure film cinematography"},
+        ],
+    },
+}
 
 # Preset category mapping
 _PRESET_CATEGORY_MAP = {
@@ -4007,6 +4068,13 @@ async def got_payment(m: Message):
         USER_AGE_PACKS[uid] = True
         _style_packs_save()
         await safe_answer(m, "✅ Age Magic Pack разблокирован! 4 стиля трансформации возраста доступны.")
+    elif payload in PRESET_PACKS:
+        USER_STYLE_PACKS.setdefault(uid, set()).add(payload)
+        _style_packs_save()
+        pack = PRESET_PACKS[payload]
+        count = len(pack["presets"])
+        name = pack["label_en"]
+        await safe_answer(m, f"✅ {name} unlocked! {count} new presets available in iModel Studio.")
     else:
         if payload == "pack_10": add = 10
         elif payload == "pack_30": add = 30
@@ -6458,6 +6526,17 @@ async def api_presets(request: Request):
         result.append({"key": a["key"], "label": a["label_en"], "emoji": a.get("emoji","✨"),
                         "category": "age", "is_premium": True,
                         "pack_id": "age_pack", "locked": not age_unlocked})
+    for pack_id, cfg in PRESET_PACKS.items():
+        pack_unlocked = pack_id in unlocked
+        lang = USER_LANG.get(uid, LANG_DEFAULT)
+        for p in cfg["presets"]:
+            label = p.get("label_ru", p["label_en"]) if lang == "ru" else p["label_en"]
+            result.append({
+                "key": p["key"], "label": label, "emoji": p.get("emoji", "✦"),
+                "category": cfg["category"], "is_premium": True,
+                "pack_id": pack_id, "locked": not pack_unlocked,
+                "prompt": p["prompt"],
+            })
     trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
     return {"presets": result, "trending": trending_keys}
 
@@ -6586,6 +6665,17 @@ async def api_shop(request: Request):
             {"id": "age_pack", "label": "Age Magic",
              "styles_count": 4,  "stars": AGE_PACK_STARS,   "unlocked": age_unlocked},
         ],
+        "preset_packs": [
+            {
+                "id": pack_id,
+                "label": cfg["label_en"],
+                "emoji": cfg["emoji"],
+                "presets_count": len(cfg["presets"]),
+                "stars": cfg["stars"],
+                "unlocked": pack_id in unlocked,
+            }
+            for pack_id, cfg in PRESET_PACKS.items()
+        ],
         "unlocked_packs": unlocked,
         "subscription": sub,
         "credits": USER_CREDITS.get(uid, 0),
@@ -6608,6 +6698,9 @@ async def api_shop_invoice(request: Request):
         "sub_elite":      ("iModel Elite", f"{SUB_ELITE_CREDITS} gens/month, auto-renewal", SUB_ELITE_STARS, True),
         "premium_pack_1": ("iModel Premium Styles", "15 exclusive artistic style presets", STYLE_PACK_STARS, False),
         "age_pack":       ("iModel Age Magic", "4 age transformation styles", AGE_PACK_STARS, False),
+        "viral_pack":     ("iModel Viral Social Pack", "6 trending social media aesthetic presets", VIRAL_PACK_STARS, False),
+        "locations_pack": ("iModel World Locations Pack", "6 exotic travel location presets", LOCATIONS_PACK_STARS, False),
+        "fantasy_pack":   ("iModel Fantasy & Sci-Fi Pack", "6 fantasy and sci-fi scene presets", FANTASY_PACK_STARS, False),
     }
     if item_id not in ITEMS:
         return JSONResponse({"error": "invalid_item"}, status_code=400)

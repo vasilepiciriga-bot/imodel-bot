@@ -3,8 +3,8 @@ import { api } from './client'
 export interface ShopData {
   subscriptions: Array<{ id: string; label: string; stars: number; credits: number; period_days?: number }>
   packs: Array<{ id: string; label: string; stars: number; credits: number }>
-  style_packs: Array<{ id: string; label: string; stars: number; styles_count: number }>
-  age_pack: { id: string; label: string; stars: number }
+  style_packs: Array<{ id: string; label: string; stars: number; styles_count: number; unlocked: boolean }>
+  preset_packs: Array<{ id: string; label: string; emoji: string; stars: number; presets_count: number; unlocked: boolean }>
   subscription: null | { plan: string; expiry: string }
   unlocked_packs: string[]
   age_pack_owned: boolean

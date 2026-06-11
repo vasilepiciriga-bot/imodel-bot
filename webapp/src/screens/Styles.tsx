@@ -49,7 +49,7 @@ export default function Styles() {
     if (preset.locked && preset.pack_id) {
       tg?.HapticFeedback?.impactOccurred('medium')
       try {
-        const { invoice_url } = await createInvoice('premium_pack_1')
+        const { invoice_url } = await createInvoice(preset.pack_id)
         tg?.openInvoice(invoice_url, (status: string) => {
           if (status === 'paid' && user) {
             setUser({ ...user, unlocked_packs: [...(user.unlocked_packs ?? []), preset.pack_id!] })
