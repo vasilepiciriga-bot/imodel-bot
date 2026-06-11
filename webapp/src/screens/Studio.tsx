@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Grid2X2, Diamond } from 'lucide-react'
+import { Flame, Grid2X2, Diamond, Check, Download } from 'lucide-react'
 import { SelfieUploader } from '../components/studio/SelfieUploader'
 import { ModeSelector } from '../components/studio/ModeSelector'
 import { GenerateButton } from '../components/studio/GenerateButton'
@@ -32,6 +32,7 @@ export default function Studio() {
   const [pollingJobId, setPollingJobId] = useState<string | null>(null)
   const [hdLoading, setHdLoading] = useState(false)
   const [batchIndex, setBatchIndex] = useState(0)
+  const [referralNudgeDismissed, setReferralNudgeDismissed] = useState(false)
   const [showModePicker, setShowModePicker] = useState(false)
   const [photoshootModes, setPhotoshootModes] = useState<PhotoshootMode[]>([])
   const [showPaywall, setShowPaywall] = useState(false)
@@ -161,6 +162,16 @@ export default function Studio() {
       }
       toast.error(e instanceof Error ? e.message : 'Generation failed')
     }
+  }
+
+  function handleReferralNudge() {
+    tg?.HapticFeedback?.impactOccurred('medium')
+    track('referral_nudge_tapped', { source: 'post_generation' })
+    setReferralNudgeDismissed(true)
+    const botLink = user?.bot_link ?? 'https://t.me/imodelapp_bot'
+    const shareText = encodeURIComponent('I made this with AI in seconds 🤩 Try it free →')
+    const shareUrl = encodeURIComponent(botLink)
+    tg?.openLink(`https://t.me/share/url?url=${shareUrl}&text=${shareText}`)
   }
 
   async function handleHD() {
@@ -340,28 +351,93 @@ export default function Studio() {
 
         {/* Multi-result grid (tournament results or batch) */}
         {batchJobs.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-[12px] text-[#6E6E73] font-medium">
-              {photoshootMode !== 'everyday' ? 'Select the best shot' : 'Tap to select'}
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              {batchJobs.map((job, i) => (
-                <motion.button
-                  key={job.job_id}
-                  whileTap={{ scale: 0.97 }}
-                  onClick={() => { setBatchIndex(i); setCurrentJob(job) }}
-                  className={`rounded-card overflow-hidden border-2 ${batchIndex === i ? 'border-[#6C47FF]' : 'border-transparent'}`}
-                >
-                  {job.output_url ? (
-                    <img src={job.output_url} alt={`result ${i + 1}`} className="w-full aspect-square object-cover" />
-                  ) : (
-                    <div className="w-full aspect-square bg-gray-100 flex items-center justify-center">
-                      <span className="text-[#6E6E73] text-[11px]">{job.status}</span>
-                    </div>
-                  )}
-                </motion.button>
-              ))}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#1D1D1F]">
+                {photoshootMode !== 'everyday' ? 'Pick your best shot' : 'Tap to select'}
+              </p>
+              <span className="text-[11px] text-[#6E6E73]">
+                {batchJobs.filter(isJobDone).length}/{batchJobs.length} ready
+              </span>
             </div>
+            <div className="grid grid-cols-2 gap-2">
+              {batchJobs.map((job, i) => {
+                const isDone = isJobDone(job)
+                const isActive = batchIndex === i
+                return (
+                  <motion.button
+                    key={job.job_id}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => {
+                      if (!isDone) return
+                      tg?.HapticFeedback?.impactOccurred('light')
+                      setBatchIndex(i)
+                      setCurrentJob(job)
+                    }}
+                    className="relative rounded-card overflow-hidden"
+                  >
+                    {isDone && job.output_url ? (
+                      <img src={job.output_url} alt={`result ${i + 1}`} className="w-full aspect-square object-cover" />
+                    ) : (
+                      <div className="w-full aspect-square bg-[#F5F5F7] flex items-center justify-center">
+                        <div className="w-5 h-5 rounded-full border-2 border-[#6C47FF]/30 border-t-[#6C47FF] animate-spin" />
+                      </div>
+                    )}
+                    {isActive && isDone && (
+                      <div className="absolute inset-0 border-[3px] border-[#6C47FF] rounded-card pointer-events-none" />
+                    )}
+                    {isDone && (
+                      <div className={`absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center shadow transition-colors ${
+                        isActive ? 'bg-[#6C47FF]' : 'bg-white/80'
+                      }`}>
+                        {isActive && <Check size={12} className="text-white" strokeWidth={3} />}
+                      </div>
+                    )}
+                  </motion.button>
+                )
+              })}
+            </div>
+            {batchJobs.some(isJobDone) && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex gap-2"
+              >
+                <motion.a
+                  whileTap={{ scale: 0.97 }}
+                  href={batchJobs[batchIndex]?.output_url ?? '#'}
+                  download="imodel-best.jpg"
+                  onClick={() => {
+                    tg?.HapticFeedback?.notificationOccurred('success')
+                    track('batch_keep_best', { index: batchIndex })
+                  }}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-card bg-[#6C47FF] text-white text-[13px] font-semibold"
+                >
+                  <Check size={14} strokeWidth={3} /> Keep best
+                </motion.a>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => {
+                    const readyJobs = batchJobs.filter(j => isJobDone(j) && j.output_url)
+                    readyJobs.forEach((job, idx) => {
+                      setTimeout(() => {
+                        const a = document.createElement('a')
+                        a.href = job.output_url!
+                        a.download = `imodel-${idx + 1}.jpg`
+                        a.click()
+                      }, idx * 250)
+                    })
+                    tg?.HapticFeedback?.notificationOccurred('success')
+                    toast.success(`Saving ${readyJobs.length} photos...`)
+                    track('batch_save_all', { count: readyJobs.length })
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-card bg-[#F5F5F7] text-[#1D1D1F] text-[12px] font-medium"
+                >
+                  <Download size={13} />
+                  All ({batchJobs.filter(isJobDone).length})
+                </motion.button>
+              </motion.div>
+            )}
           </div>
         )}
 
@@ -374,6 +450,36 @@ export default function Studio() {
             onHD={handleHD}
             hdLoading={hdLoading}
           />
+        )}
+
+        {/* Post-generation referral nudge */}
+        {currentJob && isJobDone(currentJob) && !batchJobs.length && !referralNudgeDismissed && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 1.8, type: 'spring', stiffness: 300, damping: 28 }}
+            className="flex items-center gap-3 px-4 py-3 rounded-card bg-gradient-to-r from-[#34C759]/10 to-[#30D158]/10 border border-[#34C759]/20"
+          >
+            <span className="text-[22px]">🎁</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-semibold text-[#1D1D1F]">Share → get +3 free credits</p>
+              <p className="text-[11px] text-[#6E6E73]">Invite a friend, you both earn</p>
+            </div>
+            <div className="flex flex-col items-end gap-1.5">
+              <button
+                onClick={handleReferralNudge}
+                className="px-3 py-1.5 rounded-full bg-[#34C759] text-white text-[11px] font-bold"
+              >
+                Invite
+              </button>
+              <button
+                onClick={() => setReferralNudgeDismissed(true)}
+                className="text-[10px] text-[#6E6E73]"
+              >
+                Later
+              </button>
+            </div>
+          </motion.div>
         )}
       </div>
 

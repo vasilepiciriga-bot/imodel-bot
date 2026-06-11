@@ -1052,6 +1052,7 @@ USER_LAST_ACTIVE: Dict[int, float] = {}   # timestamp последней акт�
 USER_LAST_BONUS: Dict[int, float]  = {}   # timestamp последнего daily bonus
 USER_STREAK: Dict[int, int]        = {}   # streak day count
 USER_STREAK_REMINDED: Dict[int, float] = {}   # uid → timestamp of last streak-at-risk reminder sent
+USER_QUEST_REMINDED:  Dict[int, float] = {}   # uid → timestamp of last quest-expiry reminder sent
 USER_PORTFOLIO_PUBLIC: Dict[int, bool] = {}   # uid → portfolio is public (opt-in)
 
 # Persistent storage for credits
@@ -3600,6 +3601,71 @@ async def streak_reminder_loop():
         await asyncio.sleep(1800)
 
 
+async def quest_reminder_loop():
+    """At 19-22 UTC each day, remind users with incomplete daily quests or claimable rewards."""
+    import datetime as _dt
+    await asyncio.sleep(180)
+    while True:
+        try:
+            now = time.time()
+            utc_hour = _dt.datetime.utcnow().hour
+            if 19 <= utc_hour < 22:
+                today = _dt.date.today().isoformat()
+                sent = 0
+                for uid in list(STATS_USERS_INFO.keys()):
+                    if NUDGE_INFO.get(uid, {}).get("blocked"):
+                        continue
+                    last_reminded = USER_QUEST_REMINDED.get(uid, 0)
+                    if now - last_reminded < 20 * 3600:
+                        continue
+                    lang = USER_LANG.get(uid, LANG_DEFAULT)
+                    if not _nudge_allowed_now(lang):
+                        continue
+                    quests = _quest_progress_for_user(uid, today)
+                    claimable = [q for q in quests if q["type"] == "daily" and q["claimable"]]
+                    incomplete = [q for q in quests if q["type"] == "daily" and not q["claimed"] and not q["claimable"]]
+                    if not claimable and not incomplete:
+                        continue
+                    if claimable:
+                        n = len(claimable)
+                        _msgs: Dict[str, str] = {
+                            "ru": f"✨ {'Задание выполнено' if n == 1 else f'{n} задания выполнены'}! Заберите кредиты до полуночи.",
+                            "en": f"✨ Quest reward{'s' if n > 1 else ''} ready to claim! Don't let them expire at midnight.",
+                            "ro": f"✨ {'Recompensă de misiune gata' if n == 1 else f'{n} recompense gata'}! Revendică înainte de miezul nopții.",
+                            "de": f"✨ {'Quest-Belohnung bereit' if n == 1 else f'{n} Quest-Belohnungen bereit'}! Hol sie vor Mitternacht.",
+                            "ar": f"✨ {'مكافأة مهمة جاهزة' if n == 1 else f'{n} مكافآت جاهزة'}! احصل عليها قبل منتصف الليل.",
+                        }
+                    else:
+                        _msgs = {
+                            "ru": "⚡ Дневные задания сбрасываются в полночь! Успейте заработать награды.",
+                            "en": "⚡ Daily quests reset at midnight! Complete them now for bonus credits.",
+                            "ro": "⚡ Misiunile zilnice se resetează la miezul nopții! Completează-le acum.",
+                            "de": "⚡ Tägliche Quests werden um Mitternacht zurückgesetzt! Erledige sie jetzt.",
+                            "ar": "⚡ تتجدد المهام اليومية عند منتصف الليل! أكملها الآن.",
+                        }
+                    text = _msgs.get(lang, _msgs["en"])
+                    webapp_url = f"{WEBHOOK_BASE}/webapp"
+                    markup = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="🎯 Open quests", web_app=WebAppInfo(url=webapp_url)),
+                    ]])
+                    try:
+                        await bot.send_message(uid, text, reply_markup=markup)
+                        USER_QUEST_REMINDED[uid] = now
+                        analytics_event(uid, "quest_reminder_sent", {"claimable": len(claimable), "incomplete": len(incomplete)})
+                        sent += 1
+                        if NUDGE_SEND_DELAY > 0:
+                            await asyncio.sleep(NUDGE_SEND_DELAY)
+                    except (TelegramForbiddenError, TelegramNotFound):
+                        NUDGE_INFO.setdefault(uid, {})["blocked"] = True
+                    except Exception:
+                        pass
+                if sent:
+                    print(f"[quest_reminder_loop] sent {sent} quest reminders")
+        except Exception as e:
+            print("quest_reminder_loop error:", str(e)[:200])
+        await asyncio.sleep(1800)
+
+
 async def nudge_loop():
     # Run hourly; send up to NUDGE_BATCH_LIMIT eligible nudges
     await asyncio.sleep(5)
@@ -6079,6 +6145,9 @@ async def on_startup():
             t = asyncio.create_task(streak_reminder_loop(), name="streak_reminder_loop")
             t.add_done_callback(_bg_task_error_handler)
             print("Streak reminder loop started")
+            t = asyncio.create_task(quest_reminder_loop(), name="quest_reminder_loop")
+            t.add_done_callback(_bg_task_error_handler)
+            print("Quest reminder loop started")
         if GROUP_POSTS_ENABLED:
             t = asyncio.create_task(group_posts_loop(), name="group_posts_loop")
             t.add_done_callback(_bg_task_error_handler)
