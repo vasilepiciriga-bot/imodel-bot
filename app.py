@@ -657,6 +657,21 @@ SUB_PRO_CREDITS   = int(os.getenv("SUB_PRO_CREDITS",   "50"))
 SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "200"))
 SUB_PERIOD = 2592000  # 30 days in seconds
 
+# Weekly subscription tier (low barrier)
+SUB_WEEKLY_STARS   = int(os.getenv("SUB_WEEKLY_STARS",   "99"))
+SUB_WEEKLY_CREDITS = int(os.getenv("SUB_WEEKLY_CREDITS", "15"))
+SUB_WEEKLY_PERIOD  = 604800  # 7 days
+
+# Style pack pricing
+STYLE_PACK_STARS = int(os.getenv("STYLE_PACK_STARS", "490"))
+AGE_PACK_STARS   = int(os.getenv("AGE_PACK_STARS",   "290"))
+
+# Challenge bonus
+CHALLENGE_BONUS_CREDITS = int(os.getenv("CHALLENGE_BONUS_CREDITS", "2"))
+
+# Trending presets (comma-sep keys, updated via env var weekly)
+TRENDING_PRESETS_ENV = os.getenv("TRENDING_PRESETS", "cinematic,neon_night,golden_hour,beauty_dish,vintage70")
+
 # Daily bonus / streak
 DAILY_BONUS_BASE = int(os.getenv("DAILY_BONUS_BASE", "1"))
 DAILY_STREAK_MILESTONES: Dict[int, int] = {3: 2, 7: 3, 14: 5, 30: 7}  # day → bonus gens
@@ -838,6 +853,12 @@ dp = Dispatcher()
 app = FastAPI(title="iModel Bot")
 api = app  # alias
 
+# Serve pre-built React mini app from webapp/dist/
+from fastapi.staticfiles import StaticFiles as _SF
+_WEBAPP_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp", "dist")
+if os.path.isdir(_WEBAPP_DIST):
+    app.mount("/webapp", _SF(directory=_WEBAPP_DIST, html=True), name="webapp_static")
+
 USER_REFS: Dict[int, List[bytes]]  = {}   # 1–4 селфи (последние)
 USER_LAST_OUTPUT: Dict[int, bytes] = {}   # последний результат
 USER_LAST_PROMPT: Dict[int, str]   = {}   # последний prompt (ввод пользователя/сцена)
@@ -1006,6 +1027,43 @@ def _claim_daily_bonus(uid: int) -> Optional[tuple]:
     _credits_save()
     return (add, streak)
 
+# ---- Style packs persistence ----
+STYLE_PACKS_FILE = os.getenv("STYLE_PACKS_FILE", os.path.join(DATA_DIR, "style_packs.json"))
+
+def _style_packs_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        payload = json.dumps({
+            "packs": {str(k): sorted(v) for k, v in USER_STYLE_PACKS.items()},
+            "age":   {str(k): v for k, v in USER_AGE_PACKS.items()},
+        }, ensure_ascii=False)
+        tmp = STYLE_PACKS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, STYLE_PACKS_FILE)
+        _s3_put_text(STATE_PREFIX + "style_packs.json", payload)
+    except Exception as e:
+        print("[style_packs] save error:", str(e)[:160])
+
+def _style_packs_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "style_packs.json")
+        if not txt and os.path.exists(STYLE_PACKS_FILE):
+            with open(STYLE_PACKS_FILE, "r", encoding="utf-8") as f:
+                txt = f.read()
+        if txt:
+            data = json.loads(txt)
+            for k, v in (data.get("packs") or {}).items():
+                try: USER_STYLE_PACKS[int(k)] = set(v)
+                except Exception: pass
+            for k, v in (data.get("age") or {}).items():
+                try: USER_AGE_PACKS[int(k)] = bool(v)
+                except Exception: pass
+    except Exception as e:
+        print("[style_packs] load error:", str(e)[:160])
+
+_style_packs_load()
+
 # Thread-safe credit operations (prevents double-spend on concurrent requests)
 _credits_lock = asyncio.Lock()
 
@@ -1049,8 +1107,12 @@ USER_COPY_PROMPT: Dict[int, str] = {}
 # Swap Mode (face swap into arbitrary target photo)
 USER_SWAP_MODE: Set[int]         = set()
 
-# Subscriptions: {uid: {"plan": "pro"|"elite", "expires": float, "credits_per_month": int}}
+# Subscriptions: {uid: {"plan": "pro"|"elite"|"weekly", "expires": float, "credits_per_month": int}}
 USER_SUBSCRIPTION: Dict[int, Dict] = {}
+
+# Style packs: {uid: set of pack_id strings}
+USER_STYLE_PACKS: Dict[int, Set[str]] = {}
+USER_AGE_PACKS:   Dict[int, bool]     = {}  # uid → True if Age Magic Pack purchased
 
 # Retouch Mode
  
@@ -1139,6 +1201,81 @@ PRESETS: List[Preset] = [
     Preset("bookstore", "📚 Книги", "📚 Bookstore", "📚 Librărie", "📚 Buchladen",
            "bookstore portrait, warm tungsten ambient, rows of books shallow bokeh, intellectual cozy mood, 35mm, golden hour window light"),
 ]
+
+# Premium Style Pack (490★ one-time unlock)
+PREMIUM_STYLES = [
+    {"key": "haute_couture",  "label_ru": "Высокая мода",  "label_en": "Haute Couture", "category": "artistic",
+     "pack_id": "premium_pack_1", "emoji": "👗",
+     "prompt": "haute couture fashion portrait, Vogue Paris editorial, extreme luxury, silk and lace, architectural lighting, flawless skin"},
+    {"key": "cyberpunk",      "label_ru": "Киберпанк",     "label_en": "Cyberpunk",    "category": "cinematic",
+     "pack_id": "premium_pack_1", "emoji": "🤖",
+     "prompt": "cyberpunk portrait, holographic neons, rain-soaked urban dystopia, techwear outfit, blade runner atmosphere, vivid cyan magenta"},
+    {"key": "oil_painting",   "label_ru": "Масло",         "label_en": "Oil Painting", "category": "artistic",
+     "pack_id": "premium_pack_1", "emoji": "🎨",
+     "prompt": "classical oil painting portrait, impasto brushwork, Flemish master lighting, rich saturated palette, museum quality masterpiece"},
+    {"key": "watercolor",     "label_ru": "Акварель",      "label_en": "Watercolor",   "category": "artistic",
+     "pack_id": "premium_pack_1", "emoji": "💧",
+     "prompt": "watercolor portrait, soft washes, loose expressive brushwork, pastel tones, impressionistic style, delicate paper texture"},
+    {"key": "anime_portrait", "label_ru": "Аниме",         "label_en": "Anime",        "category": "artistic",
+     "pack_id": "premium_pack_1", "emoji": "⛩️",
+     "prompt": "anime-style portrait, crisp cell shading, vibrant saturated palette, studio Ghibli quality, expressive large eyes, clean linework"},
+    {"key": "art_deco",       "label_ru": "Арт Деко",      "label_en": "Art Déco",     "category": "artistic",
+     "pack_id": "premium_pack_1", "emoji": "✦",
+     "prompt": "art deco portrait, geometric ornamental background, gold and black palette, 1920s glamour, ornate symmetrical design"},
+    {"key": "film_noir",      "label_ru": "Нуар",          "label_en": "Film Noir",    "category": "cinematic",
+     "pack_id": "premium_pack_1", "emoji": "🕵️",
+     "prompt": "film noir portrait, stark chiaroscuro, venetian blind shadow patterns, monochrome, 1940s detective atmosphere, rain on window"},
+    {"key": "vaporwave",      "label_ru": "Вейпорвейв",    "label_en": "Vaporwave",    "category": "cinematic",
+     "pack_id": "premium_pack_1", "emoji": "🌸",
+     "prompt": "vaporwave aesthetic portrait, pink and purple gradient, retro CRT glow, 80s nostalgia, synthwave vibes, neon pastel"},
+    {"key": "baroque",        "label_ru": "Барокко",       "label_en": "Baroque",      "category": "artistic",
+     "pack_id": "premium_pack_1", "emoji": "🕯️",
+     "prompt": "baroque portrait, Caravaggio chiaroscuro, dramatic shadow, ornate draping, museum masterpiece quality, deep rich colors"},
+    {"key": "impressionist",  "label_ru": "Импрессионизм", "label_en": "Impressionist","category": "artistic",
+     "pack_id": "premium_pack_1", "emoji": "🌸",
+     "prompt": "impressionist portrait painting, Monet-style dappled light, loose visible brushstrokes, garden backdrop, warm dreamy palette"},
+    {"key": "neo_tokyo",      "label_ru": "Нео-Токио",     "label_en": "Neo Tokyo",    "category": "cinematic",
+     "pack_id": "premium_pack_1", "emoji": "🗼",
+     "prompt": "neo-Tokyo street portrait, Akira-inspired neon dystopia, kanji signage, rain-slicked streets, dark futuristic atmosphere"},
+    {"key": "grunge",         "label_ru": "Гранж",         "label_en": "Grunge",       "category": "lifestyle",
+     "pack_id": "premium_pack_1", "emoji": "🎸",
+     "prompt": "90s grunge portrait, desaturated Seattle aesthetic, flannel shirt, overcast outdoor light, raw film grain, Kurt Cobain era"},
+    {"key": "cottagecore",    "label_ru": "Коттедж",       "label_en": "Cottagecore",  "category": "lifestyle",
+     "pack_id": "premium_pack_1", "emoji": "🌿",
+     "prompt": "cottagecore portrait, wildflower meadow, soft golden light, linen dress, pastoral dreamy aesthetic, bees and butterflies"},
+    {"key": "luxe_hotel",     "label_ru": "Люкс-отель",    "label_en": "Luxe Hotel",   "category": "lifestyle",
+     "pack_id": "premium_pack_1", "emoji": "🏨",
+     "prompt": "five-star hotel suite portrait, Italian marble, warm chandelier glow, silk robe, ultra-luxury editorial, opulent setting"},
+    {"key": "desert_fashion", "label_ru": "Пустыня",       "label_en": "Desert Fashion","category": "outdoor",
+     "pack_id": "premium_pack_1", "emoji": "🏜️",
+     "prompt": "desert fashion editorial, red dunes, harsh directional sun, couture styling, National Geographic quality, warm earth tones"},
+]
+
+# Age Magic Pack (290★ one-time) — 4 age transformation styles
+AGE_STYLES = [
+    {"key": "age_young_10", "label_ru": "−10 лет", "label_en": "−10 Years",
+     "emoji": "✨", "prompt": "youthful face, 10 years younger, smooth radiant skin, vibrant energetic look, natural beauty"},
+    {"key": "age_young_20", "label_ru": "−20 лет", "label_en": "−20 Years",
+     "emoji": "🌟", "prompt": "very young face, 20 years younger, fresh youthful appearance, smooth flawless skin, bright eyes"},
+    {"key": "age_older_10", "label_ru": "+10 лет",  "label_en": "+10 Years",
+     "emoji": "🍂", "prompt": "mature distinguished face, 10 years older, elegant silver streaks, wise confident expression"},
+    {"key": "age_older_20", "label_ru": "+20 лет",  "label_en": "+20 Years",
+     "emoji": "🌿", "prompt": "older distinguished face, 20 years older, silver hair, deep character lines, wise dignified presence"},
+]
+
+# Preset category mapping
+_PRESET_CATEGORY_MAP = {
+    "studio_soft": "studio", "editorial_highkey": "studio", "beauty_dish": "studio",
+    "headshot": "studio", "rembrandt": "studio",
+    "cinematic": "cinematic", "bw_film": "cinematic", "kodak_portra": "cinematic",
+    "vintage70": "cinematic", "mono_hicon": "cinematic", "soft_glam": "cinematic",
+    "golden_hour": "outdoor", "forest": "outdoor", "beach": "outdoor",
+    "park": "outdoor", "snow": "outdoor", "rain_window": "outdoor",
+    "cafe": "lifestyle", "fitness": "lifestyle", "garage": "lifestyle",
+    "bookstore": "lifestyle", "architecture": "lifestyle", "luxury_interior": "lifestyle",
+}
+def _preset_category(key: str) -> str:
+    return _PRESET_CATEGORY_MAP.get(key, "lifestyle")
 
 USER_PRESET_PENDING: Dict[int, int] = {}
 
@@ -1949,14 +2086,7 @@ def enhance_face_gfpgan(image_bytes: bytes) -> bytes:
         print(f"GFPGAN error (using original): {type(e).__name__}: {e}")
     return image_bytes
 
-def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8) -> bytes:
-    """CodeFormer face enhancement — subtle professional retouch, high identity fidelity.
-
-    fidelity=1.0 → max identity preservation, no enhancement
-    fidelity=0.0 → max enhancement, less identity
-    0.8 is the sweet spot: professional polish, face stays exact.
-    Falls back to GFPGAN, then original on failure.
-    """
+def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8, upscale: int = 2) -> bytes:
     if not CODEFORMER_MODEL or not image_bytes:
         return enhance_face_gfpgan(image_bytes)
     try:
@@ -1965,9 +2095,9 @@ def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8) -> bytes:
             input={
                 "image": io.BytesIO(image_bytes),
                 "codeformer_fidelity": fidelity,
-                "background_enhance": False,
+                "background_enhance": upscale >= 4,
                 "face_upsample": True,
-                "upscale": 2,
+                "upscale": upscale,
             }
         )
         print(f"CodeFormer raw output: type={type(out).__name__} val={str(out)[:300]}")
@@ -3263,15 +3393,18 @@ async def got_payment(m: Message):
     add = 0
     _touch_user(uid, getattr(m.from_user, "username", None))
 
-    is_sub = payload in ("sub_pro", "sub_elite")
+    is_sub = payload in ("sub_pro", "sub_elite", "sub_weekly")
     if is_sub:
-        plan = "pro" if payload == "sub_pro" else "elite"
-        credits_per_month = SUB_PRO_CREDITS if plan == "pro" else SUB_ELITE_CREDITS
+        if payload == "sub_weekly":
+            plan, credits_per_month, period = "weekly", SUB_WEEKLY_CREDITS, SUB_WEEKLY_PERIOD
+        elif payload == "sub_pro":
+            plan, credits_per_month, period = "pro", SUB_PRO_CREDITS, SUB_PERIOD
+        else:
+            plan, credits_per_month, period = "elite", SUB_ELITE_CREDITS, SUB_PERIOD
         add = credits_per_month
-        # Record subscription with expiry 31 days from now
         USER_SUBSCRIPTION[uid] = {
             "plan": plan,
-            "expires": time.time() + SUB_PERIOD + 86400,  # +1 day buffer
+            "expires": time.time() + period + 3600,  # +1h buffer
             "credits_per_month": credits_per_month,
         }
         _subs_save()
@@ -3286,6 +3419,14 @@ async def got_payment(m: Message):
         await safe_answer(m, lang.get(msg_key, "✅ Подписка активна! +{add} ген.").format(
             plan=plan.capitalize(), add=add, all=USER_CREDITS[uid]
         ))
+    elif payload == "premium_pack_1":
+        USER_STYLE_PACKS.setdefault(uid, set()).add("premium_pack_1")
+        _style_packs_save()
+        await safe_answer(m, "✅ Premium Style Pack разблокирован! 15 эксклюзивных стилей доступны в iModel Studio.")
+    elif payload == "age_pack":
+        USER_AGE_PACKS[uid] = True
+        _style_packs_save()
+        await safe_answer(m, "✅ Age Magic Pack разблокирован! 4 стиля трансформации возраста доступны.")
     else:
         if payload == "pack_10": add = 10
         elif payload == "pack_30": add = 30
@@ -4669,19 +4810,39 @@ async def run_webapp_generation_job(job_id: str):
     if not job:
         return
     uid = int(job.get("chat_id") or 0)
+    mode = str(job.get("mode") or "portrait")
     record_job(job_id, status="running")
     try:
-        final_bytes = await asyncio.to_thread(
-            generate_image_from_bytes,
-            job["image_bytes"],
-            str(job.get("prompt") or ""),
-            lang=str(job.get("lang") or LANG_DEFAULT),
-            strict=False,
-            style_bytes=None,
-            lock_scene=True,
-            user_id=uid,
-            job_id=job_id,
-        )
+        prompt = str(job.get("prompt") or "")
+        img_bytes = job.get("image_bytes")
+        style_bytes = job.get("style_bytes")
+
+        # Inject Age Pack prompt if applicable
+        age_key = str(job.get("age_key") or "")
+        if age_key:
+            age_info = next((a for a in AGE_STYLES if a["key"] == age_key), None)
+            if age_info:
+                prompt = age_info["prompt"] + (", " + prompt if prompt else "")
+
+        if mode == "face_swap" and style_bytes:
+            def _do_swap():
+                return face_swap(img_bytes, style_bytes)
+            result_bytes = await asyncio.to_thread(_do_swap)
+            if result_bytes:
+                result_bytes = await asyncio.to_thread(enhance_face_codeformer, result_bytes, 0.85)
+            final_bytes = result_bytes
+        else:
+            final_bytes = await asyncio.to_thread(
+                generate_image_from_bytes,
+                img_bytes,
+                prompt,
+                lang=str(job.get("lang") or LANG_DEFAULT),
+                strict=(mode == "copy_scene"),
+                style_bytes=style_bytes if mode == "copy_scene" else None,
+                lock_scene=(mode == "copy_scene"),
+                user_id=uid,
+                job_id=job_id,
+            )
     except Exception as e:
         final_bytes = None
         record_job(job_id, status="failed", error=str(e)[:500])
@@ -4690,12 +4851,29 @@ async def run_webapp_generation_job(job_id: str):
         record_job(job_id, status="failed", error=JOBS.get(job_id, {}).get("error") or "generation_failed")
         return
     output_url = s3_put_and_presign(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
-    if uid and not is_free_user(uid, str(job.get("username") or "")):
-        ensure_user_credit(uid)
-        USER_CREDITS[uid] = max(0, int(USER_CREDITS.get(uid, FREE_QUOTA)) - 1)
-        _credits_save()
     stats_incr("jobs_done", 1)
     record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes))
+
+
+async def _run_hd_upscale_job(hd_job_id: str, parent_job_id: str):
+    record_job(hd_job_id, status="running")
+    try:
+        parent = JOBS.get(parent_job_id) or (_db_load_job(parent_job_id) if DB_READY else None)
+        if not parent or not parent.get("output_url"):
+            record_job(hd_job_id, status="failed", error="parent_not_ready")
+            return
+        parent_bytes = await asyncio.to_thread(_download_with_retries, parent["output_url"])
+        if not parent_bytes:
+            record_job(hd_job_id, status="failed", error="download_failed")
+            return
+        hd_bytes = await asyncio.to_thread(enhance_face_codeformer, parent_bytes, 0.6, upscale=4)
+        if not hd_bytes:
+            record_job(hd_job_id, status="failed", error="enhance_failed")
+            return
+        output_url = s3_put_and_presign(hd_bytes, key_prefix=f"outputs/webapp/{hd_job_id}_hd_")
+        record_job(hd_job_id, status="ready", output_url=output_url, output_bytes=len(hd_bytes))
+    except Exception as e:
+        record_job(hd_job_id, status="failed", error=str(e)[:400])
 
 
 async def _process_telegram_update(data: Dict[str, Any], received_at: float):
@@ -4746,7 +4924,7 @@ async def root_health():
 async def healthz():
     return {"status": "ok"}
 
-@app.get("/webapp")
+@app.get("/webapp_legacy_redirect")
 async def webapp_index():
     html = """
 <!doctype html>
@@ -4910,6 +5088,26 @@ async def api_gallery(request: Request):
     ][-20:]
     return {"items": items}
 
+def _decode_b64_image(b64: str) -> Optional[bytes]:
+    try:
+        if b64.startswith("data:") and "," in b64:
+            b64 = b64.split(",", 1)[1]
+        return base64.b64decode(b64)
+    except Exception:
+        return None
+
+def _resolve_preset_prompt(preset_key: str) -> Optional[str]:
+    for p in PRESETS:
+        if p.key == preset_key:
+            return p.prompt
+    for s in PREMIUM_STYLES:
+        if s["key"] == preset_key:
+            return s["prompt"]
+    for a in AGE_STYLES:
+        if a["key"] == preset_key:
+            return a["prompt"]
+    return None
+
 @app.post("/api/v1/generations")
 async def api_create_generation(request: Request):
     user = webapp_user_from_request(request)
@@ -4923,17 +5121,23 @@ async def api_create_generation(request: Request):
     data = await request.json()
     prompt = str(data.get("prompt") or "").strip()
     image_b64 = str(data.get("image_b64") or "").strip()
-    if not prompt or not image_b64:
-        return JSONResponse({"error": "prompt and image_b64 are required"}, status_code=400)
-    try:
-        if image_b64.startswith("data:") and "," in image_b64:
-            image_b64 = image_b64.split(",", 1)[1]
-        image_bytes = base64.b64decode(image_b64)
-    except Exception:
+    mode = str(data.get("mode") or "portrait")
+    preset_key = str(data.get("preset_key") or "")
+    style_b64  = str(data.get("style_b64") or "")
+    age_key    = str(data.get("age_key") or "")
+
+    # Resolve preset prompt
+    if preset_key and not prompt:
+        prompt = _resolve_preset_prompt(preset_key) or ""
+    if not image_b64:
+        return JSONResponse({"error": "image_b64 required"}, status_code=400)
+    image_bytes = _decode_b64_image(image_b64)
+    if not image_bytes:
         return JSONResponse({"error": "invalid image"}, status_code=400)
     ok, reason = assess_selfie_quality(image_bytes)
     if not ok:
         return JSONResponse({"error": "selfie_quality", "reason": reason}, status_code=400)
+    style_bytes = _decode_b64_image(style_b64) if style_b64 else None
     job = record_job(
         kind="webapp_generation",
         status="queued",
@@ -4942,11 +5146,96 @@ async def api_create_generation(request: Request):
         prompt=prompt,
         model=INSTANTID_MODEL,
         image_bytes=image_bytes,
+        style_bytes=style_bytes,
+        mode=mode,
+        age_key=age_key,
         lang=str(data.get("lang") or LANG_DEFAULT),
     )
     stats_incr("jobs_created", 1)
     asyncio.create_task(run_webapp_generation_job(str(job["job_id"])))
     return {"job_id": job["job_id"], "status": "queued"}
+
+@app.post("/api/v1/generations/batch")
+async def api_create_batch(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    BATCH_COST = 3
+    async with _credits_lock:
+        if not is_free_user(uid, username):
+            available = USER_CREDITS.get(uid, FREE_QUOTA)
+            if available < BATCH_COST:
+                return JSONResponse({"error": "no_credits", "required": BATCH_COST, "available": available}, status_code=402)
+            USER_CREDITS[uid] -= BATCH_COST
+    _credits_save()
+    data = await request.json()
+    prompt = str(data.get("prompt") or "").strip()
+    image_b64 = str(data.get("image_b64") or "").strip()
+    preset_key = str(data.get("preset_key") or "")
+    if preset_key and not prompt:
+        prompt = _resolve_preset_prompt(preset_key) or ""
+    image_bytes = _decode_b64_image(image_b64) if image_b64 else None
+    if not image_bytes:
+        async with _credits_lock:
+            USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + BATCH_COST
+        _credits_save()
+        return JSONResponse({"error": "invalid image"}, status_code=400)
+    ok, _ = assess_selfie_quality(image_bytes)
+    if not ok:
+        async with _credits_lock:
+            USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + BATCH_COST
+        _credits_save()
+        return JSONResponse({"error": "selfie_quality"}, status_code=400)
+    variations = [
+        prompt,
+        (prompt + ", slightly different angle, candid") if prompt else "natural light portrait",
+        (prompt + ", soft bokeh, warm golden tone") if prompt else "soft bokeh portrait",
+        (prompt + ", dramatic lighting, editorial mood") if prompt else "editorial portrait",
+    ]
+    job_ids = []
+    lang = str(data.get("lang") or LANG_DEFAULT)
+    for vp in variations:
+        job = record_job(kind="webapp_batch", status="queued", chat_id=uid, username=username,
+                         prompt=vp, model=INSTANTID_MODEL, image_bytes=image_bytes, lang=lang)
+        job_ids.append(str(job["job_id"]))
+        asyncio.create_task(run_webapp_generation_job(str(job["job_id"])))
+        stats_incr("jobs_created", 1)
+    return {"job_ids": job_ids, "status": "queued", "credit_cost": BATCH_COST}
+
+@app.post("/api/v1/generations/{job_id}/hd")
+async def api_hd_upscale(job_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if not job:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if int(job.get("chat_id") or 0) != uid:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if job.get("status") != "ready":
+        return JSONResponse({"error": "job_not_ready"}, status_code=400)
+    if job.get("hd_job_id"):
+        hd = JOBS.get(job["hd_job_id"]) or (_db_load_job(job["hd_job_id"]) if DB_READY else None)
+        if hd:
+            return public_job_snapshot(hd)
+    HD_COST = 2
+    async with _credits_lock:
+        if not is_free_user(uid, username):
+            available = USER_CREDITS.get(uid, FREE_QUOTA)
+            if available < HD_COST:
+                return JSONResponse({"error": "no_credits", "required": HD_COST}, status_code=402)
+            USER_CREDITS[uid] -= HD_COST
+    _credits_save()
+    hd_job = record_job(kind="webapp_hd", status="queued", chat_id=uid, username=username,
+                        prompt=job.get("prompt", ""), model=CODEFORMER_MODEL, parent_job_id=job_id)
+    hd_job_id = str(hd_job["job_id"])
+    record_job(job_id, hd_job_id=hd_job_id)
+    asyncio.create_task(_run_hd_upscale_job(hd_job_id, job_id))
+    return {"job_id": hd_job_id, "status": "queued", "credit_cost": HD_COST}
 
 @app.get("/api/v1/generations/{job_id}")
 async def api_get_generation(job_id: str, request: Request):
@@ -4960,6 +5249,180 @@ async def api_get_generation(job_id: str, request: Request):
     if int(job.get("chat_id") or 0) != uid and not has_grant(uid, str(user.get("username") or ""), "jobs.view"):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     return public_job_snapshot(job)
+
+@app.get("/api/v1/presets")
+async def api_presets(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    unlocked = USER_STYLE_PACKS.get(uid, set())
+    age_unlocked = USER_AGE_PACKS.get(uid, False)
+    result = []
+    for p in PRESETS:
+        lang = USER_LANG.get(uid, LANG_DEFAULT)
+        label = p.label_en
+        if lang == "ru": label = p.label_ru
+        elif lang == "ro": label = p.label_ro
+        elif lang == "de": label = p.label_de
+        result.append({"key": p.key, "label": label, "category": _preset_category(p.key),
+                        "is_premium": False, "locked": False})
+    for s in PREMIUM_STYLES:
+        result.append({"key": s["key"], "label": s["label_en"], "emoji": s.get("emoji","✦"),
+                        "category": s["category"], "is_premium": True,
+                        "pack_id": s["pack_id"], "locked": s["pack_id"] not in unlocked})
+    for a in AGE_STYLES:
+        result.append({"key": a["key"], "label": a["label_en"], "emoji": a.get("emoji","✨"),
+                        "category": "age", "is_premium": True,
+                        "pack_id": "age_pack", "locked": not age_unlocked})
+    trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
+    return {"presets": result, "trending": trending_keys}
+
+@app.get("/api/v1/shop")
+async def api_shop(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    sub = get_active_sub(uid)
+    unlocked = sorted(USER_STYLE_PACKS.get(uid, set()))
+    age_unlocked = USER_AGE_PACKS.get(uid, False)
+    return {
+        "packs": [
+            {"id": "pack_10",  "credits": 10,  "stars": 200,  "label": "10 генераций", "badge": None},
+            {"id": "pack_30",  "credits": 30,  "stars": 500,  "label": "30 генераций", "badge": "−17%"},
+            {"id": "pack_100", "credits": 100, "stars": 1200, "label": "100 генераций","badge": "−40%"},
+            {"id": "pack_300", "credits": 300, "stars": 2500, "label": "300 генераций","badge": "−58%"},
+        ],
+        "subscriptions": [
+            {"id": "sub_weekly", "plan": "weekly", "stars": SUB_WEEKLY_STARS,
+             "credits": SUB_WEEKLY_CREDITS, "period": "week",
+             "active": bool(sub and sub.get("plan") == "weekly")},
+            {"id": "sub_pro",   "plan": "pro",    "stars": SUB_PRO_STARS,
+             "credits": SUB_PRO_CREDITS,   "period": "month",
+             "active": bool(sub and sub.get("plan") == "pro")},
+            {"id": "sub_elite", "plan": "elite",  "stars": SUB_ELITE_STARS,
+             "credits": SUB_ELITE_CREDITS, "period": "month",
+             "active": bool(sub and sub.get("plan") == "elite")},
+        ],
+        "style_packs": [
+            {"id": "premium_pack_1", "label": "Premium Collection",
+             "styles_count": 15, "stars": STYLE_PACK_STARS, "unlocked": "premium_pack_1" in unlocked},
+            {"id": "age_pack", "label": "Age Magic",
+             "styles_count": 4,  "stars": AGE_PACK_STARS,   "unlocked": age_unlocked},
+        ],
+        "unlocked_packs": unlocked,
+        "subscription": sub,
+        "credits": USER_CREDITS.get(uid, 0),
+    }
+
+@app.post("/api/v1/shop/invoice")
+async def api_shop_invoice(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    data = await request.json()
+    item_id = str(data.get("item_id") or "")
+    ITEMS = {
+        "pack_10":        ("iModel — 10 Generations", "10 AI portrait generations", 200, False),
+        "pack_30":        ("iModel — 30 Generations", "30 AI portrait generations (Save 17%)", 500, False),
+        "pack_100":       ("iModel — 100 Generations","100 AI portrait generations (Save 40%)", 1200, False),
+        "pack_300":       ("iModel — 300 Generations","300 AI portrait generations (Save 58%)", 2500, False),
+        "sub_weekly":     ("iModel Weekly Pro", f"{SUB_WEEKLY_CREDITS} gens/week, auto-renewal", SUB_WEEKLY_STARS, True),
+        "sub_pro":        ("iModel Pro", f"{SUB_PRO_CREDITS} gens/month, auto-renewal", SUB_PRO_STARS, True),
+        "sub_elite":      ("iModel Elite", f"{SUB_ELITE_CREDITS} gens/month, auto-renewal", SUB_ELITE_STARS, True),
+        "premium_pack_1": ("iModel Premium Styles", "15 exclusive artistic style presets", STYLE_PACK_STARS, False),
+        "age_pack":       ("iModel Age Magic", "4 age transformation styles", AGE_PACK_STARS, False),
+    }
+    if item_id not in ITEMS:
+        return JSONResponse({"error": "invalid_item"}, status_code=400)
+    title, description, stars, is_sub = ITEMS[item_id]
+    prices = [LabeledPrice(label=title, amount=stars)]
+    kwargs: Dict[str, Any] = dict(
+        title=title, description=description, payload=item_id,
+        provider_token="", currency="XTR", prices=prices,
+    )
+    if is_sub:
+        period = SUB_WEEKLY_PERIOD if item_id == "sub_weekly" else SUB_PERIOD
+        kwargs["subscription_period"] = period
+    try:
+        invoice_url = await bot.create_invoice_link(**kwargs)
+        return {"invoice_url": invoice_url}
+    except Exception as e:
+        print(f"[shop invoice] error: {e}")
+        return JSONResponse({"error": "invoice_failed", "detail": str(e)[:200]}, status_code=500)
+
+@app.post("/api/v1/style-packs/unlock")
+async def api_unlock_style_pack(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    data = await request.json()
+    pack_id = str(data.get("pack_id") or "")
+    uid = int(user["uid"])
+    if pack_id == "premium_pack_1":
+        USER_STYLE_PACKS.setdefault(uid, set()).add("premium_pack_1")
+        _style_packs_save()
+        return {"unlocked": pack_id, "all_packs": sorted(USER_STYLE_PACKS.get(uid, set()))}
+    elif pack_id == "age_pack":
+        USER_AGE_PACKS[uid] = True
+        _style_packs_save()
+        return {"unlocked": pack_id}
+    return JSONResponse({"error": "invalid_pack"}, status_code=400)
+
+@app.post("/api/v1/profile/daily")
+async def api_claim_daily(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    if is_free_user(uid, str(user.get("username") or "")):
+        return JSONResponse({"error": "free_user"}, status_code=400)
+    result = _claim_daily_bonus(uid)
+    if result is None:
+        last = USER_LAST_BONUS.get(uid, 0)
+        next_at = int(last + DAILY_WINDOW)
+        return JSONResponse({"error": "already_claimed", "next_at": next_at}, status_code=400)
+    gens_added, streak = result
+    return {"gens_added": gens_added, "streak": streak, "credits": USER_CREDITS.get(uid, 0)}
+
+@app.get("/api/v1/profile/challenge")
+async def api_daily_challenge(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    import hashlib as _hl, datetime as _dt
+    day_key = _dt.date.today().isoformat()
+    idx = int(_hl.md5(day_key.encode()).hexdigest(), 16) % len(PRESETS)
+    p = PRESETS[idx]
+    uid = int(user["uid"])
+    lang = USER_LANG.get(uid, LANG_DEFAULT)
+    label = p.label_ru if lang == "ru" else p.label_en
+    return {"preset_key": p.key, "label": label, "bonus_credits": CHALLENGE_BONUS_CREDITS, "date": day_key}
+
+@app.get("/api/v1/profile/stats")
+async def api_profile_stats(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    info = STATS_USERS_INFO.get(uid, {})
+    ref_stats = REF_STATS.get(uid, {"count": 0, "earned": 0})
+    streak = USER_STREAK.get(uid, 0)
+    last_bonus = USER_LAST_BONUS.get(uid, 0)
+    can_claim = (time.time() - last_bonus) >= DAILY_WINDOW and not is_free_user(uid, str(user.get("username") or ""))
+    next_at = int(last_bonus + DAILY_WINDOW) if not can_claim else None
+    return {
+        "total_photos": int(info.get("gens_ok", 0)),
+        "streak": streak,
+        "referrals": ref_stats.get("count", 0),
+        "referrals_earned": ref_stats.get("earned", 0),
+        "can_claim_daily": can_claim,
+        "next_daily_at": next_at,
+        "subscription": get_active_sub(uid),
+        "credits": USER_CREDITS.get(uid, 0),
+        "username": info.get("username", ""),
+    }
 
 @app.get("/metrics")
 async def http_metrics(request: Request):
