@@ -60,7 +60,14 @@ export default function App() {
           <OnboardingOverlay onDone={() => setShowOnboarding(false)} />
         )}
       </AnimatePresence>
-      <div className="flex flex-col h-screen bg-[#F5F5F7] overflow-hidden" style={{ maxWidth: 480, margin: '0 auto' }}>
+      <div
+        className="flex flex-col h-dvh bg-[#F5F5F7] overflow-hidden"
+        style={{
+          maxWidth: 480,
+          margin: '0 auto',
+          paddingTop: 'var(--tg-safe-top, env(safe-area-inset-top, 0px))',
+        }}
+      >
         <div className="flex-1 overflow-hidden">
           <AnimatePresence mode="wait">
             <motion.div

@@ -346,11 +346,11 @@ export default function Studio() {
           </motion.div>
         )}
 
-        <GenerateButton onClick={generate} loading={loading && !currentJob} disabled={!selfieB64} cost={cost} />
+        <GenerateButton onClick={generate} loading={loading && (!currentJob || !isJobDone(currentJob))} disabled={!selfieB64} cost={cost} />
 
         {/* Progress */}
         <AnimatePresence>
-          {loading && !currentJob && (
+          {loading && (!currentJob || !isJobDone(currentJob)) && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               {selfiePreview
                 ? <GeneratingCard selfiePreview={selfiePreview} stepLabel={stepLabel} step={progressStep} />
