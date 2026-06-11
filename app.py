@@ -1065,9 +1065,14 @@ T = {
         "gen": "Генерирую… ⏳",
         "fail": "Не удалось сгенерировать. Попробуйте изменить описание или фото.",
         "ready": "Готово ✅",
-        "credits_none": "Нет кредитов. Используй /buy или /promo. Также можно пригласить друга: /refer",
+        "credits_none": "💎 Генерации закончились\n\nТы уже видел, как работает iModel — теперь знаешь, чего это стоит.\n\nВыбери тариф и продолжи:",
+        "credits_low": "🔋 Осталось: {n} {gen}",
+        "credits_last": "⚠️ Последняя генерация! Пополни баланс → /buy",
+        "credits_gen_1": "генерация",
+        "credits_gen_2": "генерации",
+        "credits_gen_5": "генераций",
         "hint_refer_zero": "👥 У вас 0 генераций. Пригласите друга — +{ref_ref} вам и +{ref_new} ему: /refer",
-        "btn_invite": "👥 Пригласить друга",
+        "btn_invite": "👥 Пригласить друга (+{n} бесплатно)",
         "choose_lang": "🌐 Выберите язык интерфейса:",
         "lang_ru": "Язык установлен: Русский",
         "lang_en": "Язык установлен: Английский",
@@ -1091,11 +1096,12 @@ T = {
         "hint_refer_pay": "🎁 Бонусы: пригласи друга — +{ref_ref} тебе и +{ref_new} другу",
         "menu_pricing": "💎 Тарифы",
         "refer_msg": "👥 Пригласи друзей и получай бонусные генерации!\nТвоя ссылка: {link}\n\nПриглашено: {count}\nПолучено бонусов: {earned} генераций",
-        "buy_title": "💳 Покупка генераций (Telegram Stars)\nВыберите удобный пакет:",
-        "buy_btn_10": "10 генераций — 200★",
-        "buy_btn_30": "30 генераций — 500★",
-        "buy_btn_100": "100 генераций — 1200★",
-        "bought": "Спасибо! +{add}. Всего: {all}.",
+        "buy_title": "⭐ Пополнить баланс",
+        "buy_btn_10": "✨  10 генераций — 200★",
+        "buy_btn_30": "⚡  30 генераций — 500★  (−17%)",
+        "buy_btn_100": "🔥  100 генераций — 1200★  (−40%)",
+        "buy_btn_300": "💎  300 генераций — 2500★  (−58%)",
+        "bought": "✅ +{add} генераций. Баланс: {all}.",
         "promo_usage": "Использование: /promo КОД",
         "promo_ok": "Промокод: +{add}. Всего: {all}.",
         "promo_bad": "Промокод не найден.",
@@ -1145,9 +1151,14 @@ T = {
         "gen": "Working… ⏳",
         "fail": "Generation failed. Try adjusting your description or selfie.",
         "ready": "Done ✅",
-        "credits_none": "No credits. Use /buy or /promo. You can also invite a friend: /refer",
+        "credits_none": "💎 Out of generations\n\nYou've seen what iModel can do — keep going.\n\nChoose a plan:",
+        "credits_low": "🔋 Remaining: {n} {gen}",
+        "credits_last": "⚠️ Last generation! Top up → /buy",
+        "credits_gen_1": "generation",
+        "credits_gen_2": "generations",
+        "credits_gen_5": "generations",
         "hint_refer_zero": "👥 You have 0 credits. Invite a friend — +{ref_ref} you and +{ref_new} them: /refer",
-        "btn_invite": "👥 Invite a friend",
+        "btn_invite": "👥 Invite a friend (+{n} free)",
         "choose_lang": "🌐 Choose your interface language:",
         "lang_ru": "Language set: Russian",
         "lang_en": "Language set: English",
@@ -1173,11 +1184,12 @@ T = {
         "refer_msg": "👥 Invite friends and earn bonus generations!\nYour link: {link}\n\nInvited: {count}\nBonuses earned: {earned} gens",
         "style_share_btn": "✨ Make in this style",
         "style_share_intro": "Style loaded ✅ Send a selfie — I'll create a similar result.",
-        "buy_title": "💳 Buy generations (Telegram Stars)\nChoose a value pack:",
-        "buy_btn_10": "10 gens — 200★",
-        "buy_btn_30": "30 gens — 500★",
-        "buy_btn_100": "100 gens — 1200★",
-        "bought": "Thanks! +{add}. Total: {all}.",
+        "buy_title": "⭐ Top up",
+        "buy_btn_10": "✨  10 generations — 200★",
+        "buy_btn_30": "⚡  30 generations — 500★  (−17%)",
+        "buy_btn_100": "🔥  100 generations — 1200★  (−40%)",
+        "buy_btn_300": "💎  300 generations — 2500★  (−58%)",
+        "bought": "✅ +{add} generations. Balance: {all}.",
         "promo_usage": "Usage: /promo CODE",
         "promo_ok": "Promo applied: +{add}. Total: {all}.",
         "promo_bad": "Promo not found.",
@@ -1225,7 +1237,12 @@ T = {
         "gen": "Generez… ⏳",
         "fail": "Nu am reușit. Încearcă altă descriere sau alt selfie.",
         "ready": "Gata ✅",
-        "credits_none": "Nu mai ai credite. /buy sau /promo. Poți invita un prieten: /refer",
+        "credits_none": "💎 Generațiile s-au terminat\n\nAi văzut ce poate iModel — continuă.\n\nAlege un plan:",
+        "credits_low": "🔋 Rămase: {n} {gen}",
+        "credits_last": "⚠️ Ultima generație! Alimentează → /buy",
+        "credits_gen_1": "generație",
+        "credits_gen_2": "generații",
+        "credits_gen_5": "generații",
         "hint_refer_zero": "👥 Ai 0 credite. Invită un prieten — +{ref_ref} ție și +{ref_new} lui/ei: /refer",
         "btn_invite": "👥 Invită un prieten",
         "choose_lang": "🌐 Alege limba interfeței:",
@@ -1251,11 +1268,12 @@ T = {
         "hint_refer_pay": "🎁 Bonus: invită un prieten — +{ref_ref} ție · +{ref_new} lui/ei",
         "menu_pricing": "💎 Prețuri",
         "refer_msg": "👥 Invită prieteni și primește generații bonus!\nLinkul tău: {link}\n\nInvitați: {count}\nBonusuri obținute: {earned}",
-        "buy_title": "💳 Cumpără generații (Stele Telegram)\nAlege pachetul avantajos:",
-        "buy_btn_10": "10 gen — 200★",
-        "buy_btn_30": "30 gen — 500★",
-        "buy_btn_100": "100 gen — 1200★",
-        "bought": "Mulțumesc! +{add}. Total: {all}.",
+        "buy_title": "⭐ Alimentează contul",
+        "buy_btn_10": "✨  10 gen — 200★",
+        "buy_btn_30": "⚡  30 gen — 500★  (−17%)",
+        "buy_btn_100": "🔥  100 gen — 1200★  (−40%)",
+        "buy_btn_300": "💎  300 gen — 2500★  (−58%)",
+        "bought": "✅ +{add} generații. Sold: {all}.",
         "promo_usage": "Folosește: /promo COD",
         "promo_ok": "Promo: +{add}. Total: {all}.",
         "promo_bad": "Promo invalid.",
@@ -1307,7 +1325,12 @@ T = {
         "gen": "Erzeuge… ⏳",
         "fail": "Erzeugung fehlgeschlagen. Bitte Beschreibung oder Selfie anpassen.",
         "ready": "Fertig ✅",
-        "credits_none": "Keine Credits. Nutze /buy oder /promo. Du kannst auch einen Freund einladen: /refer",
+        "credits_none": "💎 Keine Generierungen mehr\n\nDu hast iModel kennengelernt — mach weiter.\n\nWähle einen Plan:",
+        "credits_low": "🔋 Verbleibend: {n} {gen}",
+        "credits_last": "⚠️ Letzte Generierung! Aufladen → /buy",
+        "credits_gen_1": "Generierung",
+        "credits_gen_2": "Generierungen",
+        "credits_gen_5": "Generierungen",
         "hint_refer_zero": "👥 Du hast 0 Credits. Lade einen Freund ein — +{ref_ref} dir und +{ref_new} ihm/ihr: /refer",
         "btn_invite": "👥 Freund einladen",
         "choose_lang": "🌐 Sprache für die Oberfläche wählen:",
@@ -1333,11 +1356,12 @@ T = {
         "hint_refer_pay": "🎁 Tipp: Freund einladen — +{ref_ref} dir · +{ref_new} ihm/ihr",
         "menu_pricing": "💎 Preise",
         "refer_msg": "👥 Lade Freunde ein und erhalte Bonus‑Generierungen!\nDein Link: {link}\n\nEingeladen: {count}\nErhaltene Boni: {earned}",
-        "buy_title": "💳 Käufe (Telegram Stars)\nWähle ein passendes Paket:",
-        "buy_btn_10": "10 Gen — 200★",
-        "buy_btn_30": "30 Gen — 500★",
-        "buy_btn_100": "100 Gen — 1200★",
-        "bought": "Danke! +{add}. Gesamt: {all}.",
+        "buy_title": "⭐ Guthaben aufladen",
+        "buy_btn_10": "✨  10 Gen — 200★",
+        "buy_btn_30": "⚡  30 Gen — 500★  (−17%)",
+        "buy_btn_100": "🔥  100 Gen — 1200★  (−40%)",
+        "buy_btn_300": "💎  300 Gen — 2500★  (−58%)",
+        "bought": "✅ +{add} Generierungen. Guthaben: {all}.",
         "promo_usage": "Verwendung: /promo CODE",
         "promo_ok": "Promo angewendet: +{add}. Gesamt: {all}.",
         "promo_bad": "Promo ungültig.",
@@ -2873,11 +2897,46 @@ def resolve_style_share(token: str) -> Optional[bytes]:
 
 # prompt-share removed
 
+def _pluralize_ru(n: int, lang: dict) -> str:
+    """Return correct plural form for 'generation' in Russian (1/2/5 rule)."""
+    if lang.get("credits_gen_1", "generation") == "генерация":
+        if n % 100 in range(11, 20):
+            return lang.get("credits_gen_5", "генераций")
+        r = n % 10
+        if r == 1:
+            return lang.get("credits_gen_1", "генерация")
+        elif r in (2, 3, 4):
+            return lang.get("credits_gen_2", "генерации")
+        return lang.get("credits_gen_5", "генераций")
+    return lang.get("credits_gen_2", "generations")
+
+async def _send_credits_hint(m: Message, uid: int, username: Optional[str] = None):
+    """Send remaining-credits nudge after a successful generation. Silent for free users."""
+    if is_free_user(uid, username):
+        return
+    n = USER_CREDITS.get(uid, 0)
+    lang = L(uid)
+    if n <= 0:
+        return  # paywall will trigger on next attempt
+    if n == 1:
+        txt = lang.get("credits_last", "⚠️ Last generation! Top up → /buy")
+    else:
+        gen_word = _pluralize_ru(n, lang)
+        txt = lang.get("credits_low", "🔋 Remaining: {n} {gen}").format(n=n, gen=gen_word)
+    try:
+        await m.answer(txt)
+    except Exception:
+        pass
+
 def kb_invite_buy(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
+    invite_text = lang.get("btn_invite", "👥 Invite a friend (+{n} free)").format(n=REF_BONUS_REF)
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
-        [InlineKeyboardButton(text="⭐ " + lang.get("btn_buy", "Buy"), callback_data="buy_open")],
+        [InlineKeyboardButton(text=lang.get("buy_btn_10",  "✨ 10 gens — 200★"),  callback_data="buy_stars_10")],
+        [InlineKeyboardButton(text=lang.get("buy_btn_30",  "⚡ 30 gens — 500★"),  callback_data="buy_stars_30")],
+        [InlineKeyboardButton(text=lang.get("buy_btn_100", "🔥 100 gens — 1200★"), callback_data="buy_stars_100")],
+        [InlineKeyboardButton(text=lang.get("buy_btn_300", "💎 300 gens — 2500★"), callback_data="buy_stars_300")],
+        [InlineKeyboardButton(text=invite_text, callback_data="refer_open")],
     ])
 
 def kb_lang_select(chat_id: int) -> InlineKeyboardMarkup:
@@ -2923,13 +2982,17 @@ async def send_stars_invoice(chat_id: int, title: str, desc: str, payload: str, 
 @dp.message(Command("buy"))
 async def cmd_buy(m: Message):
     lang = L(m.chat.id)
+    n = USER_CREDITS.get(m.chat.id, FREE_QUOTA)
+    invite_text = lang.get("btn_invite", "👥 Invite a friend (+{n} free)").format(n=REF_BONUS_REF)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=lang["buy_btn_10"],  callback_data="buy_stars_10")],
         [InlineKeyboardButton(text=lang["buy_btn_30"],  callback_data="buy_stars_30")],
         [InlineKeyboardButton(text=lang["buy_btn_100"], callback_data="buy_stars_100")],
-        [InlineKeyboardButton(text=lang.get("btn_invite", "👥 Invite a friend"), callback_data="refer_open")],
+        [InlineKeyboardButton(text=lang.get("buy_btn_300", "💎 300 gens — 2500★"), callback_data="buy_stars_300")],
+        [InlineKeyboardButton(text=invite_text, callback_data="refer_open")],
     ])
-    await safe_answer(m, lang["buy_title"], reply_markup=kb)
+    balance_line = f"\n\n🔋 Баланс: {n} ген." if not is_free_user(m.chat.id, getattr(m.from_user, "username", None)) else ""
+    await safe_answer(m, lang["buy_title"] + balance_line, reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("buy_stars_"))
 async def cb_buy_stars(c: CallbackQuery):
@@ -2937,11 +3000,13 @@ async def cb_buy_stars(c: CallbackQuery):
     # subtle referral tooltip
     txt = L(c.message.chat.id).get("hint_refer_pay", "Invite a friend for free credits").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
     if pack == "10":
-        await send_stars_invoice(c.message.chat.id, "iModel — 10 генераций", "Пакет 10 генераций", "pack_10", 200)
+        await send_stars_invoice(c.message.chat.id, "iModel — 10 генераций", "10 профессиональных фото", "pack_10", 200)
     elif pack == "30":
-        await send_stars_invoice(c.message.chat.id, "iModel — 30 генераций", "Пакет 30 генераций", "pack_30", 500)
+        await send_stars_invoice(c.message.chat.id, "iModel — 30 генераций", "30 профессиональных фото (−17%)", "pack_30", 500)
     elif pack == "100":
-        await send_stars_invoice(c.message.chat.id, "iModel — 100 генераций", "Пакет 100 генераций", "pack_100", 1200)
+        await send_stars_invoice(c.message.chat.id, "iModel — 100 генераций", "100 профессиональных фото (−40%)", "pack_100", 1200)
+    elif pack == "300":
+        await send_stars_invoice(c.message.chat.id, "iModel — 300 генераций", "300 профессиональных фото (−58%)", "pack_300", 2500)
     await safe_cb_answer(c, txt)
 
 @dp.pre_checkout_query()
@@ -2955,6 +3020,7 @@ async def got_payment(m: Message):
     if payload == "pack_10": add = 10
     elif payload == "pack_30": add = 30
     elif payload == "pack_100": add = 100
+    elif payload == "pack_300": add = 300
     # ensure user is recorded with username for admin visibility
     _touch_user(m.chat.id, getattr(m.from_user, "username", None))
     USER_CREDITS[m.chat.id] = USER_CREDITS.get(m.chat.id, 0) + add
@@ -3715,6 +3781,7 @@ async def _on_photo_inner(m: Message):
             caption=lang.get("swap_done", "Done ✅"),
             reply_markup=kb_actions(uid),
         )
+        await _send_credits_hint(m, uid, _uname_sw)
         return
 
     # ----- Copy Mode -----
@@ -3796,6 +3863,7 @@ async def _on_photo_inner(m: Message):
                 reply_markup=kb_actions(m.chat.id),
             )
             await maybe_send_referral_hint(m.chat.id)
+            await _send_credits_hint(m, m.chat.id, getattr(m.from_user, "username", None))
 
             # выключаем режим
             USER_COPY_STYLE.pop(m.chat.id, None)
@@ -3866,6 +3934,7 @@ async def _on_photo_inner(m: Message):
                     reply_markup=kb_actions(m.chat.id),
                 )
                 await maybe_send_referral_hint(m.chat.id)
+                await _send_credits_hint(m, m.chat.id, getattr(m.from_user, "username", None))
                 if AUTO_POST and GALLERY_CHANNEL_ID:
                     try:
                         await post_before_after_to_channel(m.chat.id)
@@ -3917,6 +3986,7 @@ async def _on_photo_inner(m: Message):
         reply_markup=kb_actions(m.chat.id),
     )
     await maybe_send_referral_hint(m.chat.id)
+    await _send_credits_hint(m, m.chat.id, getattr(m.from_user, "username", None))
 
     if AUTO_POST and GALLERY_CHANNEL_ID:
         try:
@@ -4057,6 +4127,7 @@ async def cb_more(c: CallbackQuery):
         reply_markup=kb_actions(chat_id),
     )
     await maybe_send_referral_hint(chat_id)
+    # credits hint via a fake Message-like context isn't possible here; skip
 
 
 async def ensure_webhook():
