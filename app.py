@@ -342,9 +342,11 @@ def _db_save_stats_totals():
         return
     rows = [(k, int(v)) for k, v in STATS.items() if k != "start_ts" and isinstance(v, (int, float))]
     for k, v in rows:
+        # GREATEST prevents a fresh-restart from overwriting historical DB values with zeros.
+        # Stats only grow; if in-memory < DB it means load failed — keep the DB value.
         _db_execute(
             "INSERT INTO imodel_stats_totals(key, value) VALUES (%s, %s) "
-            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            "ON CONFLICT (key) DO UPDATE SET value = GREATEST(EXCLUDED.value, imodel_stats_totals.value)",
             (k, v),
         )
 
@@ -544,18 +546,23 @@ def users_save(uid: Optional[int] = None):
 
 def stats_load():
     global STATS_DAILY
+    # --- totals ---
     try:
         loaded = None
         db_loaded = _db_load_stats_totals()
         if db_loaded:
             loaded = db_loaded
+            print(f"[stats] loaded totals from DB ({len(db_loaded)} keys, gens_ok={db_loaded.get('gens_ok',0)})")
         else:
+            print("[stats] DB totals empty — trying S3 fallback")
             txt = _s3_get_text(STATE_PREFIX + "stats_totals.json")
             if txt:
                 loaded = json.loads(txt)
+                print(f"[stats] loaded totals from S3 ({len(loaded)} keys)")
         if loaded is None and os.path.exists(STATS_TOTALS_FILE):
             with open(STATS_TOTALS_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
+            print(f"[stats] loaded totals from file ({len(loaded)} keys)")
         if loaded:
             for k, v in loaded.items():
                 try:
@@ -563,46 +570,63 @@ def stats_load():
                         STATS[k] = v
                 except Exception:
                     pass
-            _db_save_stats_totals()
+            # Only sync back to DB if we loaded from a non-DB source (S3/file)
+            if not db_loaded:
+                _db_save_stats_totals()
+        else:
+            print("[stats] WARNING: no totals found anywhere — starting from zero")
     except Exception as e:
         print("[stats] load totals error:", str(e)[:160])
+    # --- daily ---
     try:
         db_daily = _db_load_stats_daily()
         if db_daily:
             STATS_DAILY = db_daily
+            print(f"[stats] loaded daily from DB ({len(db_daily)} days)")
         else:
             txt = _s3_get_text(STATE_PREFIX + "stats_daily.json")
             if txt:
                 STATS_DAILY = json.loads(txt) or {}
+                print(f"[stats] loaded daily from S3 ({len(STATS_DAILY)} days)")
             elif os.path.exists(STATS_DAILY_FILE):
                 with open(STATS_DAILY_FILE, "r", encoding="utf-8") as f:
                     STATS_DAILY = json.load(f) or {}
+                print(f"[stats] loaded daily from file ({len(STATS_DAILY)} days)")
             else:
                 STATS_DAILY = {}
-        if DB_READY and STATS_DAILY:
+                print("[stats] WARNING: no daily stats found anywhere")
+        if DB_READY and STATS_DAILY and not db_daily:
             _db_save_stats_daily()
     except Exception as e:
         print("[stats] load daily error:", str(e)[:160])
         STATS_DAILY = {}
+    # --- users ---
     try:
         data = None
         db_users = _db_load_users()
         if db_users:
             data = db_users
+            print(f"[stats] loaded {len(db_users)} users from DB")
         else:
+            print("[stats] DB users empty — trying S3 fallback")
             txt = _s3_get_text(STATE_PREFIX + "users.json")
             if txt:
                 data = json.loads(txt) or {}
+                print(f"[stats] loaded {len(data)} users from S3")
         if data is None and os.path.exists(USERS_FILE):
             with open(USERS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
+            print(f"[stats] loaded {len(data)} users from file")
         if data:
             for uid_str, info in data.items():
                 try:
                     STATS_USERS_INFO[int(uid_str)] = info
                 except Exception:
                     continue
-            users_save()
+            if not db_users:
+                users_save()
+        else:
+            print("[stats] WARNING: no user data found anywhere")
     except Exception as e:
         print("[users] load error:", str(e)[:160])
 
@@ -8267,6 +8291,50 @@ async def api_admin_preset_thumbs_status(request: Request):
         {"done": len(PRESET_THUMB_KEYS), "total": len(PRESETS), "keys": PRESET_THUMB_KEYS},
         status_code=200,
     )
+
+
+@app.get("/api/v1/admin/debug-stats")
+async def api_admin_debug_stats(request: Request):
+    """Raw diagnostics: DB row counts + in-memory state. Use to verify data survived restarts."""
+    if not _check_admin_auth(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    loop = asyncio.get_running_loop()
+    def _query():
+        db_totals = _db_load_stats_totals()
+        db_users_count = len(_db_load_users())
+        db_daily_days = len(_db_load_stats_daily())
+        db_credits_count = len(_db_load_credits())
+        return db_totals, db_users_count, db_daily_days, db_credits_count
+    try:
+        db_totals, db_users_count, db_daily_days, db_credits_count = await loop.run_in_executor(None, _query)
+    except Exception as e:
+        db_totals, db_users_count, db_daily_days, db_credits_count = {}, 0, 0, 0
+    return {
+        "db_ready": DB_READY,
+        "db": {
+            "users_rows": db_users_count,
+            "stats_totals_rows": len(db_totals),
+            "stats_daily_days": db_daily_days,
+            "credits_rows": db_credits_count,
+            "gens_ok": db_totals.get("gens_ok", 0),
+            "gens_copy_ok": db_totals.get("gens_copy_ok", 0),
+            "payments": db_totals.get("payments", 0),
+        },
+        "memory": {
+            "users": len(STATS_USERS_INFO),
+            "credits_loaded": len(USER_CREDITS),
+            "stats_daily_days": len(STATS_DAILY),
+            "gens_ok": STATS.get("gens_ok", 0),
+            "gens_copy_ok": STATS.get("gens_copy_ok", 0),
+            "payments": STATS.get("payments", 0),
+            "top_users": sorted(
+                [{"uid": uid, "username": u.get("username",""), "gens": int(u.get("gens_ok",0))+int(u.get("gens_copy_ok",0)), "payments": int(u.get("payments",0))}
+                 for uid, u in STATS_USERS_INFO.items()],
+                key=lambda x: x["gens"], reverse=True
+            )[:20],
+        },
+        "s3_state": USE_S3_STATE,
+    }
 
 
 @app.get("/api/v1/shop")
