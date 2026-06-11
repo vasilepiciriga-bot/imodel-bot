@@ -2859,6 +2859,9 @@ NUDGE_BATCH_LIMIT = int(os.getenv("NUDGE_BATCH_LIMIT", "25"))
 NUDGE_DAY_START_HOUR = int(os.getenv("NUDGE_DAY_START_HOUR", "10"))
 NUDGE_DAY_END_HOUR = int(os.getenv("NUDGE_DAY_END_HOUR", "20"))
 NUDGE_TZ_DEFAULT = os.getenv("NUDGE_TZ_DEFAULT", "UTC")
+NUDGE_MAX_TOTAL = int(os.getenv("NUDGE_MAX_TOTAL", "7"))    # stop nudging after N total
+NUDGE_WEEKLY_CAP = int(os.getenv("NUDGE_WEEKLY_CAP", "3"))  # max per 7-day window
+NUDGE_SEND_DELAY = float(os.getenv("NUDGE_SEND_DELAY", "0.4"))  # seconds between sends (TG rate limit)
 NUDGE_INFO: Dict[int, Dict[str, object]] = {}
 NUDGE_FILE = os.getenv("NUDGE_FILE", os.path.join(DATA_DIR, "nudges.json"))
 
@@ -2898,11 +2901,26 @@ def _nudge_eligible(uid: int) -> bool:
     last_seen = float(ui.get("last_seen", 0))
     if last_seen <= 0:
         return False
+    # User was active recently — not lapsed
     if now - last_seen < NUDGE_INTERVAL_HOURS * 3600:
         return False
     ni = NUDGE_INFO.get(uid) or {}
+    # Skip permanently blocked users
+    if ni.get("blocked"):
+        return False
+    # Lifetime cap
+    total = int(ni.get("count", 0))
+    if total >= NUDGE_MAX_TOTAL:
+        return False
+    # Minimum gap since last nudge
     last_sent = float(ni.get("last_sent", 0))
     if last_sent and now - last_sent < NUDGE_MIN_GAP_HOURS * 3600:
+        return False
+    # Weekly cap: count sends in last 7 days
+    sent_timestamps = ni.get("sent_timestamps") or []
+    week_ago = now - 7 * 24 * 3600
+    recent_week = [t for t in sent_timestamps if float(t) > week_ago]
+    if len(recent_week) >= NUDGE_WEEKLY_CAP:
         return False
     return True
 
@@ -3122,19 +3140,34 @@ async def _send_nudge(uid: int, lang: str):
         text = _pick_nudge_text(segment, lang)
 
     kb = _nudge_keyboard(uid)
-    sent = await safe_send_text(uid, text, reply_markup=kb)
+    try:
+        sent = await bot.send_message(uid, text, reply_markup=kb)
+    except (TelegramForbiddenError, TelegramNotFound):
+        # User blocked the bot — mark permanently and stop retrying
+        ni["blocked"] = True
+        ni["blocked_at"] = time.time()
+        _nudge_save()
+        stats_incr("nudges_blocked", 1)
+        return
+    except Exception:
+        stats_incr("nudges_errors", 1)
+        return
     if sent:
-        ni["last_sent"] = time.time()
+        now = time.time()
+        ni["last_sent"] = now
         ni["count"] = int(ni.get("count", 0)) + 1
         ni["last_segment"] = segment
+        # Keep rolling 7-day timestamp list (trim old entries)
+        stamps: list = list(ni.get("sent_timestamps") or [])
+        stamps.append(now)
+        week_ago = now - 7 * 24 * 3600
+        ni["sent_timestamps"] = [t for t in stamps if float(t) > week_ago]
         _nudge_save()
         analytics_event(uid, "nudge_sent", {"segment": segment, "granted": granted})
         stats_incr("nudges_sent", 1)
         stats_incr(f"nudge_{segment.lower()}", 1)
         if granted:
             stats_incr("nudges_granted", 1)
-    else:
-        stats_incr("nudges_errors", 1)
 
 INACTIVE_TTL = int(os.getenv("INACTIVE_TTL_HOURS", "24")) * 3600  # bytes freed after N hours of inactivity
 
@@ -3164,11 +3197,19 @@ async def nudge_loop():
             if NUDGE_ENABLED and STATS_USERS_INFO:
                 eligible = [uid for uid in list(STATS_USERS_INFO.keys()) if _nudge_eligible(uid)]
                 random.shuffle(eligible)
-                for uid in eligible[:NUDGE_BATCH_LIMIT]:
+                sent_count = 0
+                for uid in eligible:
+                    if sent_count >= NUDGE_BATCH_LIMIT:
+                        break
                     lang = USER_LANG.get(uid, LANG_DEFAULT)
                     if not _nudge_allowed_now(lang):
                         continue
                     await _send_nudge(uid, lang)
+                    sent_count += 1
+                    if NUDGE_SEND_DELAY > 0:
+                        await asyncio.sleep(NUDGE_SEND_DELAY)
+                if sent_count:
+                    print(f"[nudge_loop] sent {sent_count} nudges (eligible={len(eligible)})")
         except Exception as e:
             print("nudge_loop error:", str(e)[:200])
         await asyncio.sleep(3600)
@@ -3912,6 +3953,44 @@ async def cmd_diag(m: Message):
         f"Last post: {last if last is not None else 'never'}s ago",
     ]
     await safe_answer(m, "\n".join(lines))
+
+@dp.message(Command("nudgestats"))
+async def cmd_nudgestats(m: Message):
+    if m.chat.id not in ADMIN_IDS:
+        return
+    now = time.time()
+    total_users = len(STATS_USERS_INFO)
+    eligible = sum(1 for uid in STATS_USERS_INFO if _nudge_eligible(uid))
+    blocked = sum(1 for ni in NUDGE_INFO.values() if ni.get("blocked"))
+    total_sent = sum(int(ni.get("count", 0)) for ni in NUDGE_INFO.values())
+    capped_total = sum(1 for ni in NUDGE_INFO.values() if int(ni.get("count", 0)) >= NUDGE_MAX_TOTAL)
+    week_ago = now - 7 * 24 * 3600
+    capped_weekly = sum(
+        1 for ni in NUDGE_INFO.values()
+        if len([t for t in (ni.get("sent_timestamps") or []) if float(t) > week_ago]) >= NUDGE_WEEKLY_CAP
+    )
+    lines = [
+        f"🔔 Nudge stats",
+        f"Enabled: {NUDGE_ENABLED}",
+        f"Total users: {total_users}",
+        f"Eligible now: {eligible}",
+        f"Blocked (bot): {blocked}",
+        f"Total nudges sent: {total_sent}",
+        f"Lifetime capped: {capped_total} (max {NUDGE_MAX_TOTAL})",
+        f"Weekly capped: {capped_weekly} (max {NUDGE_WEEKLY_CAP}/7d)",
+        f"Batch limit: {NUDGE_BATCH_LIMIT}/hr",
+        f"Gap: {NUDGE_MIN_GAP_HOURS}h | Window: {NUDGE_DAY_START_HOUR}-{NUDGE_DAY_END_HOUR}",
+    ]
+    await safe_answer(m, "\n".join(lines))
+
+@dp.message(Command("nudge_test"))
+async def cmd_nudge_test(m: Message):
+    """Admin: fire a test nudge to yourself."""
+    if m.chat.id not in ADMIN_IDS:
+        return
+    lang = USER_LANG.get(m.chat.id, LANG_DEFAULT)
+    await _send_nudge(m.chat.id, lang)
+    await safe_answer(m, "✅ Test nudge sent (check above)")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(m: Message):
