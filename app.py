@@ -7369,6 +7369,213 @@ def _admin_nudge_section() -> str:
         </div>
       </div>"""
 
+def _admin_revenue_section() -> str:
+    """Revenue analytics: KPIs, pack breakdown, paywall funnel, 14-day chart, cohort LTV, top spenders."""
+    if not DB_READY:
+        return '<div class="section"><div class="card muted">Revenue data unavailable (DB offline)</div></div>'
+    try:
+        now = time.time()
+        cutoff_7d  = _date_key(now - 7  * 86400)
+        cutoff_30d = _date_key(now - 30 * 86400)
+
+        # ── 1. KPI aggregates ────────────────────────────────────────────────
+        kpi_rows = _db_fetchall(
+            "SELECT day >= %s AS in7, day >= %s AS in30, "
+            "COUNT(*), COUNT(DISTINCT uid), "
+            "SUM(CAST(props_json::json->>'stars' AS FLOAT)) "
+            "FROM imodel_events WHERE event='purchase_completed' "
+            "GROUP BY in7, in30",
+            (cutoff_7d, cutoff_30d),
+        )
+        stars_7d = stars_30d = stars_all = 0
+        txn_7d = txn_30d = txn_all = 0
+        buyers_7d = buyers_30d = buyers_all = 0
+        all_rows_kpi = _db_fetchall(
+            "SELECT day >= %s, day >= %s, COUNT(*), COUNT(DISTINCT uid), "
+            "COALESCE(SUM(CAST(props_json::json->>'stars' AS FLOAT)),0) "
+            "FROM imodel_events WHERE event='purchase_completed' GROUP BY 1, 2",
+            (cutoff_7d, cutoff_30d),
+        )
+        for in7, in30, cnt, ucnt, s in all_rows_kpi:
+            s = int(s or 0); cnt = int(cnt); ucnt = int(ucnt)
+            stars_all += s; txn_all += cnt; buyers_all = max(buyers_all, ucnt)
+            if in30: stars_30d += s; txn_30d += cnt; buyers_30d = max(buyers_30d, ucnt)
+            if in7:  stars_7d  += s; txn_7d  += cnt; buyers_7d  = max(buyers_7d, ucnt)
+        aov = int(stars_all / txn_all) if txn_all else 0
+
+        kpi_html = (
+            f'<div class="grid kpi" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">'
+            f'<div class="card"><div class="muted">Stars (7d)</div><div class="v ok">{stars_7d:,}★</div><div class="muted">{txn_7d} txn · {buyers_7d} buyers</div></div>'
+            f'<div class="card"><div class="muted">Stars (30d)</div><div class="v ok">{stars_30d:,}★</div><div class="muted">{txn_30d} txn · {buyers_30d} buyers</div></div>'
+            f'<div class="card"><div class="muted">Stars (all time)</div><div class="v ok">{stars_all:,}★</div><div class="muted">{txn_all} txn · {buyers_all} buyers</div></div>'
+            f'<div class="card"><div class="muted">Avg order value</div><div class="v">{aov}★</div><div class="muted">per transaction</div></div>'
+            f'</div>'
+        )
+
+        # ── 2. Pack breakdown (last 30 days) ─────────────────────────────────
+        pack_rows = _db_fetchall(
+            "SELECT props_json::json->>'pack' AS pack, "
+            "COUNT(*) AS txn, COALESCE(SUM(CAST(props_json::json->>'stars' AS FLOAT)),0) AS stars "
+            "FROM imodel_events WHERE event='purchase_completed' AND day >= %s "
+            "GROUP BY pack ORDER BY stars DESC",
+            (cutoff_30d,),
+        )
+        pack_trs = ""
+        for pack, txn, s in pack_rows:
+            s = int(s or 0)
+            pct = f"{100*s/stars_30d:.0f}%" if stars_30d else "—"
+            pack_trs += f"<tr><td><code>{pack or '—'}</code></td><td>{int(txn)}</td><td>{s:,}★</td><td>{pct}</td></tr>"
+
+        # ── 3. Paywall conversion funnel ─────────────────────────────────────
+        funnel_events = ["paywall_hit", "paywall_buy_tapped", "purchase_completed"]
+        funnel_rows_db = _db_fetchall(
+            "SELECT event, COUNT(*), COUNT(DISTINCT uid) FROM imodel_events "
+            "WHERE event = ANY(%s) AND day >= %s GROUP BY event",
+            (funnel_events, cutoff_30d),
+        )
+        fc: Dict[str, Dict[str, int]] = {}
+        for ev, cnt, ucnt in funnel_rows_db:
+            fc[ev] = {"cnt": int(cnt), "ucnt": int(ucnt)}
+        def _funnel_rate(a: str, b: str) -> str:
+            d = fc.get(b, {}).get("cnt", 0)
+            n = fc.get(a, {}).get("cnt", 0)
+            return f"{100*n/d:.0f}%" if d else "—"
+        funnel_html = (
+            f'<table><tr><th>Step</th><th>Events (30d)</th><th>Uniq users</th><th>Step rate</th></tr>'
+            f'<tr><td>Paywall hit</td><td>{fc.get("paywall_hit",{}).get("cnt",0):,}</td><td>{fc.get("paywall_hit",{}).get("ucnt",0):,}</td><td>—</td></tr>'
+            f'<tr><td>Buy tapped</td><td>{fc.get("paywall_buy_tapped",{}).get("cnt",0):,}</td><td>{fc.get("paywall_buy_tapped",{}).get("ucnt",0):,}</td>'
+            f'<td>{_funnel_rate("paywall_buy_tapped","paywall_hit")}</td></tr>'
+            f'<tr><td><b>Purchase completed</b></td><td>{fc.get("purchase_completed",{}).get("cnt",0):,}</td><td>{fc.get("purchase_completed",{}).get("ucnt",0):,}</td>'
+            f'<td style="color:var(--ok)">{_funnel_rate("purchase_completed","paywall_buy_tapped")}</td></tr>'
+            f'</table>'
+        )
+
+        # ── 4. 14-day Stars chart ─────────────────────────────────────────────
+        chart_rows = _db_fetchall(
+            "SELECT day, COALESCE(SUM(CAST(props_json::json->>'stars' AS FLOAT)),0), COUNT(*) "
+            "FROM imodel_events WHERE event='purchase_completed' AND day >= %s "
+            "GROUP BY day ORDER BY day",
+            (_date_key(now - 14 * 86400),),
+        )
+        chart_by_day: Dict[str, Dict[str, int]] = {}
+        for day, s, c in chart_rows:
+            chart_by_day[str(day)] = {"stars": int(s or 0), "cnt": int(c)}
+        chart_days = [_date_key(now - i * 86400) for i in range(13, -1, -1)]
+        chart_data = [{"day": d[-5:], **chart_by_day.get(d, {"stars": 0, "cnt": 0})} for d in chart_days]
+        max_s = max((d["stars"] for d in chart_data), default=1) or 1
+        chart_bars = "".join(
+            f'<td style="vertical-align:bottom;text-align:center">'
+            f'<div style="background:#24c38b;opacity:.85;width:22px;height:{max(3,int(d["stars"]/max_s*60))}px;margin:0 auto 2px;border-radius:3px 3px 0 0" title="{d["stars"]}★"></div>'
+            f'<div class="muted" style="font-size:10px">{d["day"]}</div>'
+            f'</td>'
+            for d in chart_data
+        )
+        chart_trs = "".join(
+            f'<tr><td>{d["day"]}</td><td style="color:var(--ok)">{d["stars"]:,}★</td><td>{d["cnt"]}</td></tr>'
+            for d in chart_data if d["stars"] or d["cnt"]
+        )
+
+        # ── 5. Cohort LTV (8 weekly cohorts) ─────────────────────────────────
+        cohort_html = ""
+        cohort_rows_list = []
+        for week in range(7, -1, -1):
+            cohort_start = now - (week + 1) * 7 * 86400
+            cohort_end   = now - week * 7 * 86400
+            cs_day = _date_key(cohort_start)
+            ce_day = _date_key(cohort_end)
+            # Users who first appeared in this cohort window
+            cohort_uids = [
+                uid for uid, ui in STATS_USERS_INFO.items()
+                if cohort_start <= float(ui.get("first_seen", 0)) < cohort_end
+            ]
+            if not cohort_uids:
+                continue
+            # Revenue from these users
+            cohort_rev = _db_fetchall(
+                "SELECT COUNT(*), COALESCE(SUM(CAST(props_json::json->>'stars' AS FLOAT)),0) "
+                "FROM imodel_events WHERE event='purchase_completed' AND uid = ANY(%s)",
+                (cohort_uids,),
+            )
+            c_txn, c_stars = (int(cohort_rev[0][0]), int(cohort_rev[0][1] or 0)) if cohort_rev else (0, 0)
+            c_buyers = min(c_txn, len(cohort_uids))
+            conv = f"{100*c_buyers/len(cohort_uids):.0f}%" if cohort_uids else "—"
+            avg_ltv = f"{c_stars//c_buyers}★" if c_buyers else "—"
+            cohort_rows_list.append(
+                f'<tr><td>{cs_day[5:]}</td><td>{len(cohort_uids)}</td><td>{conv}</td>'
+                f'<td style="color:var(--ok)">{c_stars:,}★</td><td>{avg_ltv}</td></tr>'
+            )
+        if cohort_rows_list:
+            cohort_html = (
+                f'<table style="margin-top:12px"><tr><th>Cohort week</th><th>Users</th>'
+                f'<th>% converted</th><th>Total ★</th><th>Avg LTV</th></tr>'
+                + "".join(cohort_rows_list) + "</table>"
+            )
+
+        # ── 6. Top spenders ───────────────────────────────────────────────────
+        top_rows = _db_fetchall(
+            "SELECT uid, COUNT(*) AS txn, "
+            "COALESCE(SUM(CAST(props_json::json->>'stars' AS FLOAT)),0) AS stars, "
+            "MAX(ts) AS last_ts "
+            "FROM imodel_events WHERE event='purchase_completed' "
+            "GROUP BY uid ORDER BY stars DESC LIMIT 10",
+            (),
+        )
+        top_trs = ""
+        for uid, txn, s, last_ts in top_rows:
+            uid_int = int(uid)
+            uname = (STATS_USERS_INFO.get(uid_int) or {}).get("username") or str(uid_int)
+            age_d = int((now - float(last_ts or now)) / 86400)
+            age_str = f"{age_d}d ago" if age_d > 0 else "today"
+            top_trs += (
+                f'<tr><td>@{html_lib.escape(str(uname))}</td>'
+                f'<td style="color:var(--ok)">{int(s or 0):,}★</td>'
+                f'<td>{int(txn)}</td><td>{age_str}</td></tr>'
+            )
+
+        return f"""
+      <div class="section">
+        <div class="card">
+          <div class="muted" style="font-weight:600;font-size:13px;margin-bottom:12px">💰 Revenue Analytics</div>
+          {kpi_html}
+
+          <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+            <div>
+              <div class="muted" style="margin-bottom:8px">Pack breakdown (30d)</div>
+              <table>
+                <tr><th>Pack</th><th>Txn</th><th>Stars</th><th>Share</th></tr>
+                {pack_trs or '<tr><td colspan=4 class="muted">No purchases yet</td></tr>'}
+              </table>
+            </div>
+            <div>
+              <div class="muted" style="margin-bottom:8px">Paywall conversion (30d)</div>
+              {funnel_html}
+            </div>
+          </div>
+
+          <div class="muted" style="margin-bottom:8px">Daily revenue (last 14 days)</div>
+          <div style="overflow-x:auto;margin-bottom:8px">
+            <table style="border:none"><tr style="border:none">{chart_bars}</tr></table>
+          </div>
+          {'<table><tr><th>Date</th><th>Stars</th><th>Purchases</th></tr>' + chart_trs + '</table>' if chart_trs else ''}
+
+          <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+            <div>
+              <div class="muted" style="margin-bottom:8px">Cohort LTV (weekly)</div>
+              {cohort_html or '<p class="muted">Not enough data yet</p>'}
+            </div>
+            <div>
+              <div class="muted" style="margin-bottom:8px">Top spenders</div>
+              <table>
+                <tr><th>User</th><th>Stars</th><th>Txn</th><th>Last</th></tr>
+                {top_trs or '<tr><td colspan=4 class="muted">No purchases yet</td></tr>'}
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>"""
+    except Exception as e:
+        return f'<div class="section"><div class="card muted">Revenue data error: {html_lib.escape(str(e)[:120])}</div></div>'
+
 def _admin_daily_trend_section() -> str:
     """Last 14-day mini-table of gens + payments."""
     now_ts = time.time()
@@ -7667,6 +7874,7 @@ async def admin_panel(request: Request):
       </div>
 
       {_admin_broadcast_section()}
+      {_admin_revenue_section()}
       {_admin_funnel_section()}
       {_admin_nudge_section()}
       {_admin_experiments_section()}
