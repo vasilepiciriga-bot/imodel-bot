@@ -1101,6 +1101,7 @@ T = {
         "buy_btn_30": "⚡  30 генераций — 500★  (−17%)",
         "buy_btn_100": "🔥  100 генераций — 1200★  (−40%)",
         "buy_btn_300": "💎  300 генераций — 2500★  (−58%)",
+        "btn_upsell": "🔥 100 ген — 1200★",
         "bought": "✅ +{add} генераций. Баланс: {all}.",
         "promo_usage": "Использование: /promo КОД",
         "promo_ok": "Промокод: +{add}. Всего: {all}.",
@@ -1189,6 +1190,7 @@ T = {
         "buy_btn_30": "⚡  30 generations — 500★  (−17%)",
         "buy_btn_100": "🔥  100 generations — 1200★  (−40%)",
         "buy_btn_300": "💎  300 generations — 2500★  (−58%)",
+        "btn_upsell": "🔥 100 gens — 1200★",
         "bought": "✅ +{add} generations. Balance: {all}.",
         "promo_usage": "Usage: /promo CODE",
         "promo_ok": "Promo applied: +{add}. Total: {all}.",
@@ -1273,6 +1275,7 @@ T = {
         "buy_btn_30": "⚡  30 gen — 500★  (−17%)",
         "buy_btn_100": "🔥  100 gen — 1200★  (−40%)",
         "buy_btn_300": "💎  300 gen — 2500★  (−58%)",
+        "btn_upsell": "🔥 100 gen — 1200★",
         "bought": "✅ +{add} generații. Sold: {all}.",
         "promo_usage": "Folosește: /promo COD",
         "promo_ok": "Promo: +{add}. Total: {all}.",
@@ -1361,6 +1364,7 @@ T = {
         "buy_btn_30": "⚡  30 Gen — 500★  (−17%)",
         "buy_btn_100": "🔥  100 Gen — 1200★  (−40%)",
         "buy_btn_300": "💎  300 Gen — 2500★  (−58%)",
+        "btn_upsell": "🔥 100 Gen — 1200★",
         "bought": "✅ +{add} Generierungen. Guthaben: {all}.",
         "promo_usage": "Verwendung: /promo CODE",
         "promo_ok": "Promo angewendet: +{add}. Gesamt: {all}.",
@@ -2810,17 +2814,16 @@ def kb_actions(chat_id: int) -> InlineKeyboardMarkup:
     lang = L(chat_id)
     rows = [
         [
-            InlineKeyboardButton(text="🔄 " + lang.get("btn_more", "More"),   callback_data="more"),
-            InlineKeyboardButton(text="💰 " + lang["btn_balance"], callback_data="balance"),
-            InlineKeyboardButton(text="⭐ " + lang["btn_buy"],      callback_data="buy_open"),
+            InlineKeyboardButton(text="🔄 " + lang.get("btn_more", "More"),           callback_data="more"),
+            InlineKeyboardButton(text=lang.get("menu_swap", "💎 Swap"),               callback_data="swap_open"),
+            InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"),      callback_data="pub_yes"),
         ],
         [
-            InlineKeyboardButton(text=lang["menu_copy"], callback_data="copy_open"),
-            InlineKeyboardButton(text=lang.get("menu_swap", "💎 Swap"), callback_data="swap_open"),
-            InlineKeyboardButton(text="✨ " + lang.get("btn_publish", "Publish"), callback_data="pub_yes"),
+            InlineKeyboardButton(text=lang["menu_copy"],                              callback_data="copy_open"),
+            InlineKeyboardButton(text=lang.get("menu_presets", "📸 Presets"),          callback_data="presets_open"),
+            InlineKeyboardButton(text=lang.get("btn_upsell", "🔥 100 gens — 1200★"), callback_data="buy_stars_100"),
         ],
     ]
-    # Optional: publish to group button if configured
     try:
         if PUBLISH_GROUP_ID:
             rows.append([
