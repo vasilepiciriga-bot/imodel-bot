@@ -1,0 +1,26 @@
+const tg = window.Telegram?.WebApp
+
+function getToken(): string {
+  return tg?.initData ?? ''
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `tma ${getToken()}`,
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw Object.assign(new Error(err.detail ?? 'Request failed'), { status: res.status, data: err })
+  }
+  return res.json()
+}
+
+export const api = {
+  get: <T>(path: string) => request<T>('GET', path),
+  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
+}
