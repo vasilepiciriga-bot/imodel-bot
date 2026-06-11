@@ -1,1 +1,0 @@
-import{o as e}from"./index-OeIlJ0jQ.js";var t=t=>e.post(`/api/v1/portfolio/visibility`,{public:t});export{t};

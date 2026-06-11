@@ -1242,6 +1242,50 @@ def _style_packs_load():
 
 _style_packs_load()
 
+# ===================== GIFT CREDITS =======================
+GIFT_MAX_CREDITS  = int(os.getenv("GIFT_MAX_CREDITS", "50"))
+GIFT_SENDER_BONUS = int(os.getenv("GIFT_SENDER_BONUS", "1"))  # bonus when gift is claimed
+GIFT_CODES: Dict[str, Dict] = {}   # code → {from_uid, credits, created_at, claimed, claimed_by, claimed_at}
+GIFTS_FILE = os.getenv("GIFTS_FILE", os.path.join(DATA_DIR, "gifts.json"))
+
+def _gifts_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        payload = json.dumps(GIFT_CODES, ensure_ascii=False)
+        tmp = GIFTS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, GIFTS_FILE)
+        _s3_put_text(STATE_PREFIX + "gifts.json", payload)
+    except Exception as e:
+        print("[gifts] save error:", str(e)[:160])
+
+def _gifts_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "gifts.json")
+        if not txt and os.path.exists(GIFTS_FILE):
+            with open(GIFTS_FILE, "r", encoding="utf-8") as f:
+                txt = f.read()
+        if txt:
+            data = json.loads(txt)
+            now = time.time()
+            for code, v in (data or {}).items():
+                # Drop claimed codes older than 30 days; keep unclaimed for 7 days
+                age = now - float(v.get("created_at", 0))
+                if v.get("claimed") and age > 30 * 86400:
+                    continue
+                if not v.get("claimed") and age > 7 * 86400:
+                    continue
+                GIFT_CODES[code] = v
+    except Exception as e:
+        print("[gifts] load error:", str(e)[:160])
+
+def _make_gift_code() -> str:
+    import secrets
+    return "gift_" + secrets.token_hex(4).upper()
+
+_gifts_load()
+
 # Thread-safe credit operations (prevents double-spend on concurrent requests)
 _credits_lock = asyncio.Lock()
 
@@ -4444,6 +4488,71 @@ async def cmd_start(m: Message):
 
     # prompt-share deep-link removed
 
+    # Deep-link: start=gift_XXXXXXXX → claim gift credits
+    if len(parts) > 1 and parts[1].startswith("gift_"):
+        code = parts[1].strip()
+        gift = GIFT_CODES.get(code)
+        recipient_uid = m.chat.id
+        _glang = USER_LANG.get(recipient_uid, LANG_DEFAULT)
+        if not gift:
+            pass  # silently ignore unknown codes
+        elif gift.get("claimed"):
+            _already: Dict[str, str] = {
+                "ru": "🎁 Эта подарочная ссылка уже была использована.",
+                "en": "🎁 This gift link has already been claimed.",
+                "ro": "🎁 Acest link cadou a fost deja folosit.",
+                "de": "🎁 Dieser Geschenklink wurde bereits eingelöst.",
+                "ar": "🎁 تم استخدام رابط الهدية هذا بالفعل.",
+            }
+            await safe_answer(m, _already.get(_glang, _already["en"]))
+        elif gift["from_uid"] == recipient_uid:
+            _selfgift: Dict[str, str] = {
+                "ru": "🎁 Нельзя воспользоваться собственным подарком.",
+                "en": "🎁 You can't claim your own gift.",
+                "ro": "🎁 Nu poți folosi propriul tău cadou.",
+                "de": "🎁 Du kannst dein eigenes Geschenk nicht einlösen.",
+                "ar": "🎁 لا يمكنك المطالبة بهديتك الخاصة.",
+            }
+            await safe_answer(m, _selfgift.get(_glang, _selfgift["en"]))
+        else:
+            credits = int(gift["credits"])
+            ensure_user_credit(recipient_uid)
+            async with _credits_lock:
+                USER_CREDITS[recipient_uid] = USER_CREDITS.get(recipient_uid, 0) + credits
+            _credits_save()
+            GIFT_CODES[code]["claimed"] = True
+            GIFT_CODES[code]["claimed_by"] = recipient_uid
+            GIFT_CODES[code]["claimed_at"] = time.time()
+            _gifts_save()
+            analytics_event(recipient_uid, "gift_claimed", {"credits": credits, "from_uid": gift["from_uid"]})
+            _claimed: Dict[str, str] = {
+                "ru": f"🎁 Вы получили {credits}⚡ кредитов в подарок! Приятного использования.",
+                "en": f"🎁 You received {credits}⚡ gift credits! Enjoy your photoshoots.",
+                "ro": f"🎁 Ai primit {credits}⚡ credite cadou! Distracție plăcută.",
+                "de": f"🎁 Du hast {credits}⚡ Geschenk-Credits erhalten! Viel Spaß.",
+                "ar": f"🎁 حصلت على {credits}⚡ رصيد هدية! استمتع بالتصوير.",
+            }
+            await safe_answer(m, _claimed.get(_glang, _claimed["en"]))
+            # Notify sender + give bonus
+            from_uid = int(gift["from_uid"])
+            _slang = USER_LANG.get(from_uid, LANG_DEFAULT)
+            async with _credits_lock:
+                USER_CREDITS[from_uid] = USER_CREDITS.get(from_uid, 0) + GIFT_SENDER_BONUS
+            _credits_save()
+            analytics_event(from_uid, "gift_sender_bonus", {"credits": GIFT_SENDER_BONUS, "claimed_by": recipient_uid})
+            recipient_name = getattr(m.from_user, "first_name", None) or "Someone"
+            _notif: Dict[str, str] = {
+                "ru": f"🎁 {recipient_name} воспользовался вашим подарком! +{GIFT_SENDER_BONUS}⚡ бонус вам.",
+                "en": f"🎁 {recipient_name} claimed your gift! +{GIFT_SENDER_BONUS}⚡ bonus for you.",
+                "ro": f"🎁 {recipient_name} a folosit cadoul tău! +{GIFT_SENDER_BONUS}⚡ bonus pentru tine.",
+                "de": f"🎁 {recipient_name} hat dein Geschenk eingelöst! +{GIFT_SENDER_BONUS}⚡ Bonus für dich.",
+                "ar": f"🎁 {recipient_name} طالب بهديتك! +{GIFT_SENDER_BONUS}⚡ مكافأة لك.",
+            }
+            try:
+                await bot.send_message(from_uid, _notif.get(_slang, _notif["en"]))
+            except Exception:
+                pass
+
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
     if m.chat.id not in USER_ONBOARDED:
@@ -4810,6 +4919,71 @@ async def cmd_refer(m: Message):
         )],
     ])
     await safe_answer(m, msg, reply_markup=kb)
+
+@dp.message(Command("gift"))
+async def cmd_gift(m: Message):
+    uid = m.chat.id
+    lang = USER_LANG.get(uid, LANG_DEFAULT)
+    parts = (m.text or "").split(maxsplit=1)
+    amount_str = parts[1].strip() if len(parts) > 1 else ""
+    _usage: Dict[str, str] = {
+        "ru": f"Использование: /gift <кол-во> (от 1 до {GIFT_MAX_CREDITS})\nПример: /gift 10",
+        "en": f"Usage: /gift <amount> (1–{GIFT_MAX_CREDITS})\nExample: /gift 10",
+        "ro": f"Utilizare: /gift <sumă> (1–{GIFT_MAX_CREDITS})\nExemplu: /gift 10",
+        "de": f"Nutzung: /gift <Anzahl> (1–{GIFT_MAX_CREDITS})\nBeispiel: /gift 10",
+        "ar": f"الاستخدام: /gift <كمية> (١–{GIFT_MAX_CREDITS})\nمثال: /gift 10",
+    }
+    if not amount_str.isdigit():
+        return await safe_answer(m, _usage.get(lang, _usage["en"]))
+    amount = int(amount_str)
+    if amount < 1 or amount > GIFT_MAX_CREDITS:
+        return await safe_answer(m, _usage.get(lang, _usage["en"]))
+    balance = USER_CREDITS.get(uid, 0)
+    _insuff: Dict[str, str] = {
+        "ru": f"⚡ Недостаточно кредитов. Ваш баланс: {balance}",
+        "en": f"⚡ Not enough credits. Your balance: {balance}",
+        "ro": f"⚡ Credite insuficiente. Soldul tău: {balance}",
+        "de": f"⚡ Nicht genug Credits. Dein Kontostand: {balance}",
+        "ar": f"⚡ رصيد غير كافٍ. رصيدك: {balance}",
+    }
+    if balance < amount:
+        return await safe_answer(m, _insuff.get(lang, _insuff["en"]))
+    # Deduct and create gift
+    async with _credits_lock:
+        if USER_CREDITS.get(uid, 0) < amount:
+            return await safe_answer(m, _insuff.get(lang, _insuff["en"]))
+        USER_CREDITS[uid] -= amount
+    _credits_save()
+    code = _make_gift_code()
+    GIFT_CODES[code] = {
+        "from_uid": uid,
+        "credits": amount,
+        "created_at": time.time(),
+        "claimed": False,
+        "claimed_by": None,
+        "claimed_at": None,
+    }
+    _gifts_save()
+    analytics_event(uid, "gift_created", {"credits": amount, "code": code})
+    if not BOT_USERNAME_GLOBAL:
+        link = f"[set BOT_USERNAME_GLOBAL]?start={code}"
+    else:
+        link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start={code}"
+    _msg: Dict[str, str] = {
+        "ru": f"🎁 Подарочная ссылка создана!\nПодели ею с другом — он получит {amount}⚡ кредитов:\n\n{link}",
+        "en": f"🎁 Gift link created!\nShare it with a friend — they'll get {amount}⚡ credits:\n\n{link}",
+        "ro": f"🎁 Link cadou creat!\nTrimite-l unui prieten — va primi {amount}⚡ credite:\n\n{link}",
+        "de": f"🎁 Geschenklink erstellt!\nTeile ihn mit einem Freund — er bekommt {amount}⚡ Credits:\n\n{link}",
+        "ar": f"🎁 تم إنشاء رابط الهدية!\nشاركه مع صديق — سيحصل على {amount}⚡ رصيد:\n\n{link}",
+    }
+    from urllib.parse import quote as _quote_gift
+    _gift_share_text = "🎁 I'm gifting you AI photo credits!"
+    share_url = f"https://t.me/share/url?url={_quote_gift(link)}&text={_quote_gift(_gift_share_text)}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📤 Share gift", url=share_url),
+    ]])
+    await safe_answer(m, _msg.get(lang, _msg["en"]), reply_markup=kb)
+
 
 # ======= INLINE callbacks =======
 @dp.callback_query(F.data == "help_open")
@@ -5742,6 +5916,7 @@ async def on_startup():
             BotCommand(command="lang",    description="Сменить язык"),
             BotCommand(command="gallery", description="Моя галерея"),
             BotCommand(command="refer",   description="Реферальная ссылка"),
+            BotCommand(command="gift",    description="Подарить кредиты другу"),
             BotCommand(command="top",     description="Топ генераций недели"),
             BotCommand(command="pricing", description="Тарифы"),
             BotCommand(command="copy",    description="Скопировать фото"),
@@ -6550,6 +6725,44 @@ async def api_portfolio_visibility(request: Request):
     analytics_event(uid, "portfolio_visibility_changed", {"public": public})
     base = str(WEBHOOK_BASE).rstrip("/")
     return {"public": public, "portfolio_url": f"{base}/p/{uid}" if public else None}
+
+
+@app.post("/api/v1/gift/create")
+async def api_gift_create(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad_request"}, status_code=400)
+    amount = int(data.get("credits", 0))
+    if amount < 1 or amount > GIFT_MAX_CREDITS:
+        return JSONResponse({"error": "invalid_amount", "max": GIFT_MAX_CREDITS}, status_code=400)
+    balance = USER_CREDITS.get(uid, 0)
+    if balance < amount:
+        return JSONResponse({"error": "insufficient_credits", "balance": balance}, status_code=402)
+    async with _credits_lock:
+        if USER_CREDITS.get(uid, 0) < amount:
+            return JSONResponse({"error": "insufficient_credits"}, status_code=402)
+        USER_CREDITS[uid] -= amount
+    _credits_save()
+    code = _make_gift_code()
+    GIFT_CODES[code] = {
+        "from_uid": uid,
+        "credits": amount,
+        "created_at": time.time(),
+        "claimed": False,
+        "claimed_by": None,
+        "claimed_at": None,
+    }
+    _gifts_save()
+    analytics_event(uid, "gift_created", {"credits": amount, "code": code, "source": "webapp"})
+    bot_username = BOT_USERNAME_GLOBAL or "imodelapp_bot"
+    link = f"https://t.me/{bot_username}?start={code}"
+    return {"code": code, "credits": amount, "link": link}
+
 
 @app.get("/p/{uid}")
 async def portfolio_page(uid: int, request: Request):

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Users, Camera, CheckCircle2, Copy, Share2 } from 'lucide-react'
+import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
 import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
 import { setPortfolioVisibility } from '../api/portfolio'
+import { createGift } from '../api/gift'
 import type { Challenge } from '../types'
 import type { ReferralData } from '../api/session'
 
@@ -29,6 +30,9 @@ export default function Profile() {
   const [claimLoading, setClaimLoading] = useState(false)
   const [referral, setReferral] = useState<ReferralData | null>(null)
   const [copied, setCopied] = useState(false)
+  const [giftAmount, setGiftAmount] = useState<number | null>(null)
+  const [giftLoading, setGiftLoading] = useState(false)
+  const [giftSent, setGiftSent] = useState(false)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
 
@@ -79,6 +83,23 @@ export default function Profile() {
     const text = encodeURIComponent('Try AI photoshoots — turns your selfie into stunning photos!')
     const url = encodeURIComponent(referral.link)
     tg?.openLink(`https://t.me/share/url?url=${url}&text=${text}`)
+  }
+
+  async function handleSendGift(credits: number) {
+    if (!user || user.credits < credits) return
+    setGiftLoading(true)
+    tg?.HapticFeedback?.impactOccurred('medium')
+    try {
+      const { link } = await createGift(credits)
+      setGiftSent(true)
+      setGiftAmount(null)
+      const updated = await getMe()
+      setUser(updated)
+      const text = encodeURIComponent("🎁 I'm gifting you AI photo credits!")
+      tg?.openLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${text}`)
+    } catch { /* noop */ } finally {
+      setGiftLoading(false)
+    }
   }
 
   const streak = user?.streak ?? 0
@@ -194,6 +215,77 @@ export default function Profile() {
             )}
           </AnimatePresence>
         </div>
+
+        {/* Gift Credits */}
+        <AnimatePresence mode="wait">
+          {giftSent ? (
+            <motion.div
+              key="giftsent"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex items-center gap-3 p-4 rounded-card bg-[#FF2D78]/10 border border-[#FF2D78]/20"
+            >
+              <Gift size={22} className="text-[#FF2D78]" />
+              <div>
+                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift sent! 🎉</p>
+                <p className="text-[12px] text-[#6E6E73]">Share the link so your friend can claim it</p>
+              </div>
+            </motion.div>
+          ) : giftAmount ? (
+            <motion.div
+              key="giftpick"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="p-4 rounded-card bg-white shadow-sm"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[14px] font-semibold text-[#1D1D1F]">🎁 Send {giftAmount}⚡ as gift</p>
+                <button onClick={() => setGiftAmount(null)} className="text-[12px] text-[#6E6E73]">Cancel</button>
+              </div>
+              <p className="text-[12px] text-[#6E6E73] mb-3">
+                Your balance: {user?.credits ?? 0}⚡ → {(user?.credits ?? 0) - giftAmount}⚡ after gift
+              </p>
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={() => handleSendGift(giftAmount)}
+                disabled={giftLoading || (user?.credits ?? 0) < giftAmount}
+                className="w-full py-3 rounded-[12px] bg-gradient-to-r from-[#FF2D78] to-[#6C47FF] text-white text-[14px] font-bold disabled:opacity-40"
+              >
+                {giftLoading ? 'Creating link…' : 'Create & Share Gift →'}
+              </motion.button>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="giftcard"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="p-4 rounded-card bg-white shadow-sm"
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <Gift size={16} className="text-[#FF2D78]" />
+                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift Credits to a Friend</p>
+              </div>
+              <p className="text-[12px] text-[#6E6E73] mb-3">
+                They get credits instantly · you get +1⚡ when they claim
+              </p>
+              <div className="flex gap-2">
+                {[5, 10, 25].map((amt) => (
+                  <motion.button
+                    key={amt}
+                    whileTap={{ scale: 0.93 }}
+                    onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setGiftAmount(amt) }}
+                    disabled={(user?.credits ?? 0) < amt}
+                    className="flex-1 py-2.5 rounded-[10px] bg-[#FF2D78]/10 border border-[#FF2D78]/20 text-[#FF2D78] text-[13px] font-bold disabled:opacity-30"
+                  >
+                    {amt}⚡
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Daily Challenge */}
         {challenge && (
