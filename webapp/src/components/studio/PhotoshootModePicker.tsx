@@ -38,22 +38,37 @@ interface Props {
 export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, currentMode, userCredits, modes }: Props) {
   const [selected, setSelected] = useState<PhotoshootModeKey>(currentMode)
   const [customDesc, setCustomDesc] = useState('')
+  const [upgradeMode, setUpgradeMode] = useState<PhotoshootMode | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     setSelected(currentMode)
+    setUpgradeMode(null)
   }, [currentMode, open])
 
   // Android back button support
   useEffect(() => {
     if (!open) return
     window.history.pushState({ modePicker: true }, '')
-    const onPop = () => onClose()
+    const onPop = () => { setUpgradeMode(null); onClose() }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [open, onClose])
 
   const selectedMode = modes.find((m) => m.key === selected)
+
+  function handleModeSelect(mode: PhotoshootMode) {
+    tg?.HapticFeedback?.selectionChanged()
+    setSelected(mode.key)
+    if (mode.key !== 'custom') setCustomDesc('')
+    // Show inline upgrade sheet when premium mode + low credits
+    if (PREMIUM_MODES.has(mode.key) && userCredits < 10) {
+      track('premium_mode_upgrade_shown', { mode: mode.key, credits: userCredits })
+      setUpgradeMode(mode)
+    } else {
+      setUpgradeMode(null)
+    }
+  }
 
   function handleConfirm() {
     tg?.HapticFeedback?.impactOccurred('medium')
@@ -61,15 +76,23 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
       textareaRef.current?.focus()
       return
     }
-    // Premium mode gate: if user can't afford, show upgrade sheet
-    if (PREMIUM_MODES.has(selected) && userCredits < (selectedMode?.credits ?? 6)) {
-      track('premium_mode_upgrade_shown', { mode: selected, credits: userCredits })
-      onClose()
-      onUpgrade?.()
-      return
-    }
     track('mode_selected', { mode: selected, credits: selectedMode?.credits })
     onSelect(selected, selected === 'custom' ? customDesc.trim() : undefined)
+  }
+
+  function handleUpgradeSubscribe() {
+    track('premium_mode_subscribe_tapped', { mode: upgradeMode?.key })
+    setUpgradeMode(null)
+    onClose()
+    onUpgrade?.()
+  }
+
+  function handleUpgradeUseCredits() {
+    if (!upgradeMode) return
+    tg?.HapticFeedback?.impactOccurred('medium')
+    track('premium_mode_use_credits', { mode: upgradeMode.key, credits: userCredits })
+    setUpgradeMode(null)
+    onSelect(upgradeMode.key)
   }
 
   return (
@@ -120,11 +143,7 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                   <motion.button
                     key={mode.key}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => {
-                      tg?.HapticFeedback?.selectionChanged()
-                      setSelected(mode.key)
-                      if (mode.key !== 'custom') setCustomDesc('')
-                    }}
+                    onClick={() => handleModeSelect(mode)}
                     className={`w-full flex items-center gap-3 p-3.5 rounded-[16px] border-2 transition-colors text-left ${
                       isSelected ? 'border-[#6C47FF]' : 'border-transparent bg-[#F5F5F7]'
                     }`}
@@ -200,20 +219,81 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
               <div className="h-2" />
             </div>
 
-            {/* Confirm CTA */}
-            <div className="px-4 pb-safe pt-3 border-t border-black/[0.06]">
-              <motion.button
-                whileTap={{ scale: 0.97 }}
-                onClick={handleConfirm}
-                disabled={selected === 'custom' && !customDesc.trim()}
-                className={`w-full py-4 rounded-[16px] text-white text-[16px] font-semibold transition-opacity ${
-                  selected === 'custom' && !customDesc.trim() ? 'opacity-40' : ''
-                }`}
-                style={{ background: 'linear-gradient(135deg, #6C47FF 0%, #FF2D78 100%)' }}
-              >
-                {selectedMode ? `Set ${selectedMode.label} · ${selectedMode.credits}⚡` : 'Set Mode'}
-              </motion.button>
-            </div>
+            {/* Bottom CTA — upgrade sheet or normal confirm */}
+            <AnimatePresence mode="wait">
+              {upgradeMode ? (
+                <motion.div
+                  key="upgrade"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+                  className="px-4 pb-safe pt-3 border-t border-black/[0.06] space-y-2.5"
+                >
+                  {/* Mode preview info */}
+                  <div className="flex items-center gap-3 px-3 py-2.5 rounded-[14px] bg-gradient-to-r from-[#6C47FF]/8 to-[#FF2D78]/8">
+                    <span className="text-[26px]">{upgradeMode.emoji}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[14px] font-bold text-[#1D1D1F]">
+                        <Crown size={12} className="inline text-[#FF9500] mr-1" strokeWidth={2.5} />
+                        {upgradeMode.label}
+                      </p>
+                      <p className="text-[11px] text-[#6E6E73] truncate">{upgradeMode.short_desc}</p>
+                    </div>
+                    <span className="text-[13px] font-bold text-[#FF9500]">{upgradeMode.credits}⚡</span>
+                  </div>
+                  {/* Two-button choice */}
+                  <div className="flex gap-2">
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={handleUpgradeSubscribe}
+                      className="flex-1 py-3 rounded-[14px] text-white text-[13px] font-bold"
+                      style={{ background: 'linear-gradient(135deg, #6C47FF, #FF2D78)' }}
+                    >
+                      Subscribe →
+                    </motion.button>
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={handleUpgradeUseCredits}
+                      disabled={userCredits < upgradeMode.credits}
+                      className={`flex-1 py-3 rounded-[14px] text-[13px] font-bold border-2 transition-opacity ${
+                        userCredits >= upgradeMode.credits
+                          ? 'border-[#6C47FF] text-[#6C47FF]'
+                          : 'border-[#D1D1D6] text-[#6E6E73] opacity-50'
+                      }`}
+                    >
+                      Use {upgradeMode.credits}⚡
+                    </motion.button>
+                  </div>
+                  <button
+                    onClick={() => setUpgradeMode(null)}
+                    className="w-full text-center text-[12px] text-[#6E6E73] py-1"
+                  >
+                    ← Back to modes
+                  </button>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="confirm"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="px-4 pb-safe pt-3 border-t border-black/[0.06]"
+                >
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={handleConfirm}
+                    disabled={selected === 'custom' && !customDesc.trim()}
+                    className={`w-full py-4 rounded-[16px] text-white text-[16px] font-semibold transition-opacity ${
+                      selected === 'custom' && !customDesc.trim() ? 'opacity-40' : ''
+                    }`}
+                    style={{ background: 'linear-gradient(135deg, #6C47FF 0%, #FF2D78 100%)' }}
+                  >
+                    {selectedMode ? `Set ${selectedMode.label} · ${selectedMode.credits}⚡` : 'Set Mode'}
+                  </motion.button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         </>
       )}
