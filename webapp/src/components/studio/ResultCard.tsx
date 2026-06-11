@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { Download, Share2, RefreshCw, Sparkles, Star, Send } from 'lucide-react'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { useAppStore } from '../../store/appStore'
+import { track } from '../../api/analytics'
 import type { Generation } from '../../types'
 
 const tg = window.Telegram?.WebApp
@@ -75,6 +76,7 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tgAny = tg as any
       if (tgAny && typeof tgAny.shareToStory === 'function') {
+        track('share_tapped', { method: 'story' })
         tgAny.shareToStory(outputUrl, {
           text: '✦ Made with iModel Studio',
           widget_link: { url: botLink, name: 'Try it free →' },
@@ -83,6 +85,7 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
       }
 
       // Method 2: Build branded story card and download + show share link
+      track('share_tapped', { method: 'story_canvas' })
       const blob = await buildStoryBlob(outputUrl)
       if (blob) {
         const blobUrl = URL.createObjectURL(blob)
@@ -104,6 +107,7 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
 
   async function handleForward() {
     tg?.HapticFeedback?.impactOccurred('light')
+    track('share_tapped', { method: 'forward' })
     const shareText = encodeURIComponent('Look what AI made from my selfie 🤩 →')
     const url = encodeURIComponent(botLink)
     tg?.openLink(`https://t.me/share/url?url=${url}&text=${shareText}`)

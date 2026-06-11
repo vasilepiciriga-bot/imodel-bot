@@ -5,6 +5,7 @@ import confetti from 'canvas-confetti'
 import { getShop, createInvoice, type ShopData } from '../api/shop'
 import { getMe } from '../api/session'
 import { useAppStore } from '../store/appStore'
+import { track } from '../api/analytics'
 
 const tg = window.Telegram?.WebApp
 
@@ -22,8 +23,9 @@ export default function Shop() {
     getShop().then(setShop).catch(() => null)
   }, [])
 
-  const handleBuy = useCallback(async (itemId: string) => {
+  const handleBuy = useCallback(async (itemId: string, stars?: number) => {
     tg?.HapticFeedback?.impactOccurred('medium')
+    track('buy_tapped', { pack: itemId, stars: stars ?? 0 })
     try {
       const { invoice_url } = await createInvoice(itemId)
       tg?.openInvoice(invoice_url, async (status: string) => {
@@ -80,7 +82,7 @@ export default function Shop() {
                   key={sub.id}
                   whileTap={isActive ? {} : { scale: 0.98 }}
                   disabled={isActive}
-                  onClick={() => handleBuy(sub.id)}
+                  onClick={() => handleBuy(sub.id, sub.stars)}
                   className={`w-full flex items-center justify-between p-4 rounded-card border-2 ${
                     isActive ? 'border-[#34C759] bg-[#34C759]/5' : 'border-[#6C47FF]/20 bg-white'
                   }`}
@@ -118,7 +120,7 @@ export default function Shop() {
               <motion.button
                 key={pack.id}
                 whileTap={{ scale: 0.96 }}
-                onClick={() => handleBuy(pack.id)}
+                onClick={() => handleBuy(pack.id, pack.stars)}
                 className="p-4 rounded-card bg-white border border-black/[0.06] shadow-card text-left"
               >
                 <div className="flex items-center gap-1 mb-1">
@@ -140,7 +142,7 @@ export default function Shop() {
             {shop && !(user?.unlocked_packs ?? []).includes('premium_pack_1') && (
               <motion.button
                 whileTap={{ scale: 0.98 }}
-                onClick={() => handleBuy('premium_pack_1')}
+                onClick={() => handleBuy('premium_pack_1', 490)}
                 className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#6C47FF]/10 to-[#FF2D78]/10 border border-[#6C47FF]/20"
               >
                 <span className="text-2xl">🎨</span>
@@ -156,7 +158,7 @@ export default function Shop() {
             {shop && !user?.age_pack && (
               <motion.button
                 whileTap={{ scale: 0.98 }}
-                onClick={() => handleBuy('age_pack')}
+                onClick={() => handleBuy('age_pack', 290)}
                 className="w-full flex items-center gap-3 p-4 rounded-card bg-gradient-to-r from-[#FF9500]/10 to-[#FF2D78]/10 border border-[#FF9500]/20"
               >
                 <span className="text-2xl">🎭</span>

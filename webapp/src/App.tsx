@@ -1,9 +1,10 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { TabBar } from './components/layout/TabBar'
 import { ScreenSkeleton } from './components/shared/ScreenSkeleton'
 import { useAuth } from './hooks/useAuth'
 import { useAppStore } from './store/appStore'
+import { track } from './api/analytics'
 
 const Studio  = lazy(() => import('./screens/Studio'))
 const Styles  = lazy(() => import('./screens/Styles'))
@@ -40,6 +41,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 export default function App() {
   const tab = useAppStore((s) => s.tab)
   const Screen = SCREENS[tab]
+
+  useEffect(() => { track('tab_viewed', { tab }) }, [tab])
 
   return (
     <AuthGate>

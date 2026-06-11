@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Check } from 'lucide-react'
 import type { PhotoshootMode, PhotoshootModeKey } from '../../types'
+import { track } from '../../api/analytics'
 
 const tg = window.Telegram?.WebApp
 
@@ -57,6 +58,7 @@ export function PhotoshootModePicker({ open, onClose, onSelect, currentMode, use
       textareaRef.current?.focus()
       return
     }
+    track('mode_selected', { mode: selected, credits: selectedMode?.credits })
     onSelect(selected, selected === 'custom' ? customDesc.trim() : undefined)
   }
 

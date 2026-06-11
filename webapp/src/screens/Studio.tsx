@@ -13,6 +13,7 @@ import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
 import { getChallenge } from '../api/session'
+import { track } from '../api/analytics'
 import type { Challenge, Generation, PhotoshootMode } from '../types'
 
 const tg = window.Telegram?.WebApp
@@ -99,6 +100,7 @@ export default function Studio() {
   async function generate() {
     if (!selfieB64) return
     tg?.HapticFeedback?.impactOccurred('medium')
+    track('generate_tapped', { mode: photoshootMode, has_preset: !!activePreset, batch: batchEnabled })
     setLoading(true)
     setCurrentJob(null)
     setBatchJobs([])
@@ -161,7 +163,7 @@ export default function Studio() {
           )}
           {/* Mode pill */}
           <button
-            onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setShowModePicker(true) }}
+            onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setShowModePicker(true); track('mode_picker_opened', { current_mode: photoshootMode }) }}
             className="flex items-center gap-1 px-2 py-1 rounded-full bg-[#6C47FF]/10 border border-[#6C47FF]/20"
           >
             <span className="text-[11px]">{modeConfig?.emoji ?? '📸'}</span>

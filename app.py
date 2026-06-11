@@ -281,6 +281,18 @@ def db_init():
                         created_at DOUBLE PRECISION NOT NULL
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_events (
+                        id BIGSERIAL PRIMARY KEY,
+                        uid BIGINT,
+                        event TEXT NOT NULL,
+                        props_json TEXT NOT NULL DEFAULT '{}',
+                        day TEXT NOT NULL,
+                        ts DOUBLE PRECISION NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_imodel_events_uid   ON imodel_events(uid)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_imodel_events_event ON imodel_events(event, day)")
         DB_READY = True
         log_event("db_ready", backend="postgres")
     except Exception as e:
@@ -557,6 +569,105 @@ def stats_incr(key: str, n: int = 1):
         stats_save_daily()
     except Exception as e:
         print("[stats] incr error:", key, str(e)[:160])
+
+# ===================== ANALYTICS EVENTS ========================
+POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY", "")
+POSTHOG_HOST    = os.getenv("POSTHOG_HOST", "https://app.posthog.com")
+
+def analytics_event(uid: Optional[int], event: str, props: Optional[Dict[str, Any]] = None):
+    """
+    Record a structured funnel event. Non-blocking, never raises.
+    Writes to imodel_events (Postgres) and forwards to PostHog if configured.
+    Also increments stats_incr for lightweight aggregation.
+    """
+    try:
+        now = time.time()
+        day = _date_key()
+        p = props or {}
+        # Enrich with user context
+        if uid:
+            ui = STATS_USERS_INFO.get(uid) or {}
+            p.setdefault("lang", USER_LANG.get(uid, LANG_DEFAULT))
+            p.setdefault("credits", USER_CREDITS.get(uid, 0))
+            p.setdefault("gens_ok", int(ui.get("gens_ok", 0)))
+            p.setdefault("paid", int(ui.get("payments", 0)) > 0)
+        p_json = json.dumps(p, ensure_ascii=False)
+        _db_execute(
+            "INSERT INTO imodel_events(uid, event, props_json, day, ts) VALUES (%s,%s,%s,%s,%s)",
+            (uid, event, p_json, day, now),
+        )
+        stats_incr(f"evt_{event}", 1)
+        # PostHog (fire-and-forget via thread to avoid blocking event loop)
+        if POSTHOG_API_KEY and uid:
+            import threading as _th
+            _th.Thread(target=_posthog_capture_sync, args=(uid, event, p, now), daemon=True).start()
+    except Exception as e:
+        print(f"[analytics] event error {event}: {str(e)[:120]}")
+
+def _posthog_capture_sync(uid: int, event: str, props: Dict[str, Any], ts: float):
+    try:
+        import urllib.request as _ur
+        payload = json.dumps({
+            "api_key": POSTHOG_API_KEY,
+            "event": event,
+            "distinct_id": str(uid),
+            "properties": {**props, "$lib": "imodel-bot"},
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+        }).encode()
+        req = _ur.Request(
+            f"{POSTHOG_HOST}/capture/",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _ur.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+def _analytics_funnel_counts(days: int = 7) -> Dict[str, Any]:
+    """Aggregate funnel metrics from imodel_events for the last N days."""
+    if not DB_READY:
+        return {}
+    try:
+        cutoff_day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400))
+        rows = _db_fetchall(
+            "SELECT event, COUNT(*), COUNT(DISTINCT uid) FROM imodel_events "
+            "WHERE day >= %s GROUP BY event",
+            (cutoff_day,),
+        )
+        totals: Dict[str, int] = {}
+        uniq: Dict[str, int] = {}
+        for event, cnt, ucnt in rows:
+            totals[event] = int(cnt)
+            uniq[event] = int(ucnt)
+
+        def rate(num: str, den: str) -> Optional[float]:
+            d = totals.get(den, 0)
+            return round(totals.get(num, 0) / d, 3) if d else None
+
+        return {
+            "period_days": days,
+            "generation_started":    totals.get("generation_started", 0),
+            "generation_completed":  totals.get("generation_completed", 0),
+            "paywall_hit":           totals.get("paywall_hit", 0),
+            "purchase_completed":    totals.get("purchase_completed", 0),
+            "share_tapped":          totals.get("share_tapped", 0),
+            "nudge_converted":       totals.get("nudge_converted", 0),
+            "referral_joined":       totals.get("referral_joined", 0),
+            "mode_selected":         totals.get("mode_selected", 0),
+            # Rates
+            "completion_rate":       rate("generation_completed", "generation_started"),
+            "paywall_rate":          rate("paywall_hit", "generation_started"),
+            "purchase_rate":         rate("purchase_completed", "paywall_hit"),
+            "share_rate":            rate("share_tapped", "generation_completed"),
+            "nudge_conversion_rate": rate("nudge_converted", "nudges_sent"),
+            # Unique users
+            "unique_generators":     uniq.get("generation_started", 0),
+            "unique_buyers":         uniq.get("purchase_completed", 0),
+        }
+    except Exception as e:
+        print(f"[analytics] funnel error: {str(e)[:120]}")
+        return {}
 
 def _touch_user(uid: int, username: Optional[str] = None):
     now = time.time()
@@ -3017,6 +3128,7 @@ async def _send_nudge(uid: int, lang: str):
         ni["count"] = int(ni.get("count", 0)) + 1
         ni["last_segment"] = segment
         _nudge_save()
+        analytics_event(uid, "nudge_sent", {"segment": segment, "granted": granted})
         stats_incr("nudges_sent", 1)
         stats_incr(f"nudge_{segment.lower()}", 1)
         if granted:
@@ -3758,6 +3870,7 @@ async def got_payment(m: Message):
             balance=USER_CREDITS.get(uid, 0),
             stars=xtr,
         )
+        analytics_event(uid, "purchase_completed", {"pack": payload, "credits_added": add, "stars": xtr, "source": "telegram_stars"})
     except Exception as e:
         print("notify admins (payment) error:", str(e)[:160])
 
@@ -3957,6 +4070,7 @@ async def cmd_start(m: Message):
                 stats_incr("referrals", 1)
                 stats_incr("ref_bonus_ref", REF_BONUS_REF)
                 stats_incr("ref_bonus_invited", REF_BONUS_NEW)
+                analytics_event(invited_id, "referral_joined", {"ref_id": ref_id})
                 new_count = REF_STATS[ref_id]["count"]
                 # Notify referrer
                 ref_lang = USER_LANG.get(ref_id, LANG_DEFAULT)
@@ -4875,7 +4989,16 @@ async def _on_photo_inner(m: Message):
 
     _uname_photo = getattr(m.from_user, "username", None)
     if not await _try_use_credit(m.chat.id, _uname_photo):
+        analytics_event(m.chat.id, "paywall_hit", {"source": "bot", "mode": "everyday"})
         return await safe_answer(m, L(m.chat.id)["credits_none"], reply_markup=kb_invite_buy(m.chat.id))
+
+    _t0 = time.time()
+    analytics_event(m.chat.id, "generation_started", {"source": "bot", "mode": "everyday"})
+    # Check nudge conversion (generated within 24h of nudge)
+    _ni = NUDGE_INFO.get(m.chat.id) or {}
+    _last_nudge = float(_ni.get("last_sent", 0))
+    if _last_nudge and time.time() - _last_nudge < 86400:
+        analytics_event(m.chat.id, "nudge_converted", {"segment": _ni.get("last_segment", "unknown"), "hours": round((time.time() - _last_nudge) / 3600, 1)})
 
     wait = await safe_answer(m, L(m.chat.id)["gen"])
     _lang_ph = USER_LANG.get(m.chat.id, LANG_DEFAULT)
@@ -4904,6 +5027,7 @@ async def _on_photo_inner(m: Message):
             USER_LAST_OUTPUT_URL[m.chat.id] = _share_url
     except Exception:
         pass
+    analytics_event(m.chat.id, "generation_completed", {"source": "bot", "mode": "everyday", "latency_ms": int((time.time() - _t0) * 1000)})
     stats_incr("gens_ok", 1)
     _uadd(m.chat.id, "gens_ok", 1)
 
@@ -5336,6 +5460,8 @@ async def run_webapp_generation_job(job_id: str):
     output_url = s3_put_and_presign(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
     stats_incr("jobs_done", 1)
     record_job(job_id, status="ready", output_url=output_url, output_bytes=len(final_bytes))
+    _wjob = JOBS.get(job_id, {})
+    analytics_event(_wjob.get("chat_id"), "generation_completed", {"source": "webapp", "mode": "everyday", "job_id": job_id})
 
 
 async def _run_hd_upscale_job(hd_job_id: str, parent_job_id: str):
@@ -5474,6 +5600,7 @@ async def run_photoshoot_tournament_job(job_id: str):
     )
     stats_incr("tournament_done", 1)
     _uadd(uid, "photoshoot_count", 1)
+    analytics_event(uid, "generation_completed", {"source": "webapp", "mode": mode_key, "results": len(output_urls), "job_id": job_id})
 
     # Deliver results to Telegram for tg_photoshoot jobs
     if job.get("kind") == "tg_photoshoot" and uid:
@@ -5751,10 +5878,12 @@ async def api_create_generation(request: Request):
 
     # Check and deduct credits (n credits for photoshoot modes)
     if not await _try_use_credits_n(uid, credit_cost, username):
+        analytics_event(uid, "paywall_hit", {"source": "webapp", "mode": photoshoot_mode, "required": credit_cost})
         return JSONResponse(
             {"error": "no_credits", "required": credit_cost, "available": USER_CREDITS.get(uid, 0)},
             status_code=402,
         )
+    analytics_event(uid, "generation_started", {"source": "webapp", "mode": photoshoot_mode, "credit_cost": credit_cost})
 
     prompt = str(data.get("prompt") or "").strip()
     image_b64 = str(data.get("image_b64") or "").strip()
@@ -6114,6 +6243,38 @@ async def api_profile_stats(request: Request):
         "credits": USER_CREDITS.get(uid, 0),
         "username": info.get("username", ""),
     }
+
+@app.post("/api/v1/analytics/event")
+async def api_analytics_event(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    try:
+        data = await request.json()
+        event = str(data.get("event") or "").strip()[:64]
+        props = dict(data.get("props") or {})
+        if not event:
+            return JSONResponse({"error": "event required"}, status_code=400)
+        props["source"] = "webapp"
+        analytics_event(uid, event, props)
+    except Exception:
+        pass
+    return {"ok": True}
+
+@app.get("/api/v1/analytics/funnel")
+async def api_analytics_funnel(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    # Only admins
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    if role_for_user(uid, username) not in ("admin", "superadmin"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    days = int(request.query_params.get("days", 7))
+    days = max(1, min(days, 90))
+    return _analytics_funnel_counts(days)
 
 @app.get("/api/v1/referral")
 async def api_referral(request: Request):
