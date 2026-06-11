@@ -11,6 +11,14 @@ export interface ShopData {
   credits: number
   banner: string | null
   subscription_features: Record<string, string[]>
+  bundle: null | {
+    id: string
+    stars: number
+    credits: number
+    label: string
+    includes: string[]
+    expires_at: number
+  }
 }
 
 export const getShop = () => api.get<ShopData>('/api/v1/shop')

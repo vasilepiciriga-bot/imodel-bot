@@ -17,6 +17,8 @@ import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
 import { getChallenge, claimDaily, getMe } from '../api/session'
+import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
+import { getQuests, claimQuest, type QuestItem } from '../api/quests'
 import { track } from '../api/analytics'
 import { useToast } from '../hooks/useToast'
 import type { Generation, PhotoshootMode } from '../types'
@@ -46,6 +48,9 @@ export default function Studio() {
   const [refPreview, setRefPreview] = useState<string | null>(null)
   const [refLoading, setRefLoading] = useState(false)
   const [claimingDaily, setClaimingDaily] = useState(false)
+  const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
+  const [claimableQuest, setClaimableQuest] = useState<QuestItem | null>(null)
+  const [claimingQuest, setClaimingQuest] = useState(false)
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -95,6 +100,20 @@ export default function Studio() {
     fetchPhotoshootModes()
       .then(({ modes }) => { setPhotoshootModes(modes); setCachedModes(modes) })
       .catch(() => null)
+  }, [])
+
+  useEffect(() => {
+    const cached = sessionStorage.getItem('imodel_lb')
+    const cachedAt = parseInt(sessionStorage.getItem('imodel_lb_at') ?? '0')
+    if (cached && Date.now() - cachedAt < 5 * 60 * 1000) {
+      setLeaderboard(JSON.parse(cached))
+    } else {
+      getLeaderboard().then((lb) => {
+        setLeaderboard(lb)
+        sessionStorage.setItem('imodel_lb', JSON.stringify(lb))
+        sessionStorage.setItem('imodel_lb_at', String(Date.now()))
+      }).catch(() => null)
+    }
   }, [])
 
   useEffect(() => {
@@ -164,6 +183,12 @@ export default function Studio() {
           setFirstGenUrl(job.output_url)
           setTimeout(() => setShowFirstGen(true), 800)
         }
+
+        // Check for newly claimable quests after generation
+        getQuests().then(({ quests }) => {
+          const claimable = quests.find((q) => q.claimable)
+          setClaimableQuest(claimable ?? null)
+        }).catch(() => null)
 
         // Proactive paywall: show right after result if credits just ran out
         const credits = useAppStore.getState().user?.credits ?? 1
@@ -257,6 +282,20 @@ export default function Studio() {
       }
     }
   }, [selfieB64, loading, prompt, activePreset, setPhotoshootMode])
+
+  async function handleQuestClaim(questId: string) {
+    setClaimingQuest(true)
+    try {
+      const result = await claimQuest(questId)
+      if (result.new_balance !== undefined) useAppStore.getState().updateCredits(result.new_balance)
+      toast.reward(`⚡ +${result.credits_added ?? '?'} credits claimed!`, { sub: 'Keep generating to unlock more' })
+      setClaimableQuest(null)
+    } catch {
+      toast.error('Could not claim quest')
+    } finally {
+      setClaimingQuest(false)
+    }
+  }
 
   function handleReferralNudge() {
     tg?.HapticFeedback?.impactOccurred('medium')
@@ -385,6 +424,28 @@ export default function Studio() {
       </AnimatePresence>
 
       <div className="flex-1 px-4 pb-4 space-y-3">
+        {/* Leaderboard strip */}
+        <AnimatePresence>
+          {leaderboard && leaderboard.entries.length >= 2 && (
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-[#F5F5F7]"
+            >
+              <span className="text-[11px]">🏆</span>
+              {leaderboard.entries.slice(0, 2).map((e) => (
+                <span key={e.rank} className="text-[11px] text-[#1D1D1F] font-medium truncate max-w-[80px]">
+                  {e.display_name} · {e.gens}
+                </span>
+              ))}
+              {leaderboard.my_rank && (
+                <span className="text-[11px] text-[#6E6E73] ml-auto shrink-0">You: #{leaderboard.my_rank}</span>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <SelfieUploader />
         <ModeSelector />
 
@@ -761,6 +822,32 @@ export default function Studio() {
             </div>
           </motion.div>
         )}
+
+        {/* Inline quest completion card */}
+        <AnimatePresence>
+          {claimableQuest && currentJob && isJobDone(currentJob) && !batchJobs.length && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ delay: 2.2, type: 'spring', stiffness: 300, damping: 28 }}
+              className="flex items-center gap-3 px-4 py-3 rounded-card bg-gradient-to-r from-[#6C47FF]/10 to-[#FF2D78]/10 border border-[#6C47FF]/20"
+            >
+              <span className="text-[22px]">⚡</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-semibold text-[#1D1D1F]">Quest complete: {claimableQuest.title}</p>
+                <p className="text-[11px] text-[#6E6E73]">+{claimableQuest.reward}⚡ waiting for you</p>
+              </div>
+              <button
+                onClick={() => handleQuestClaim(claimableQuest.id)}
+                disabled={claimingQuest}
+                className="px-3 py-1.5 rounded-full bg-[#6C47FF] text-white text-[11px] font-bold disabled:opacity-60 shrink-0"
+              >
+                {claimingQuest ? '…' : 'Claim now'}
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Mode picker modal */}

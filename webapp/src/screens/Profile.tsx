@@ -539,34 +539,61 @@ export default function Profile() {
         {/* Referral card */}
         {referral && (
           <div className="rounded-card bg-white shadow-sm overflow-hidden">
+            {/* Header with dual-avatar visual */}
             <div className="px-4 pt-4 pb-3 bg-gradient-to-r from-[#6C47FF]/8 to-[#FF2D78]/8">
-              <div className="flex items-center justify-between mb-1">
-                <p className="text-[15px] font-bold text-[#1D1D1F]">👥 Invite Friends</p>
-                <span className="text-[12px] font-semibold text-[#6C47FF]">
-                  +{referral.bonus_per_invite}⚡ you · +{referral.bonus_for_new}⚡ them
-                </span>
-              </div>
-              <p className="text-[12px] text-[#6E6E73]">{referral.invited_count} invited · {referral.credits_earned} credits earned</p>
-            </div>
-            {referral.milestones.length > 0 && (
-              <div className="px-4 py-3 border-b border-black/[0.04]">
-                <div className="flex gap-2">
-                  {referral.milestones.map((ms) => (
-                    <div key={ms.count} className="flex-1 flex flex-col items-center gap-1">
-                      <div className={`w-full h-1.5 rounded-full ${ms.reached ? 'bg-[#6C47FF]' : 'bg-[#F5F5F7]'}`} />
-                      <span className={`text-[9px] font-medium ${ms.reached ? 'text-[#6C47FF]' : 'text-[#6E6E73]'}`}>
-                        {ms.count} · +{ms.bonus}⚡
-                      </span>
-                    </div>
-                  ))}
+              <div className="flex items-center gap-3 mb-2">
+                {/* Dual overlapping avatars */}
+                <div className="relative w-[52px] h-8 shrink-0">
+                  <div className="absolute left-0 w-8 h-8 rounded-full bg-gradient-to-br from-[#6C47FF] to-[#9B6DFF] border-2 border-white flex items-center justify-center text-white text-[14px] font-bold z-10">
+                    {(user?.first_name?.[0] ?? 'Y').toUpperCase()}
+                  </div>
+                  <div className="absolute left-5 w-8 h-8 rounded-full bg-gradient-to-br from-[#FF2D78] to-[#FF6B9D] border-2 border-white flex items-center justify-center text-white text-[14px]">
+                    👤
+                  </div>
                 </div>
-                {referral.next_milestone && (
-                  <p className="text-[11px] text-[#6E6E73] mt-1.5">
-                    {referral.next_milestone - referral.invited_count} more → +{referral.next_milestone_bonus}⚡ bonus
+                <div className="flex-1">
+                  <p className="text-[15px] font-bold text-[#1D1D1F] leading-tight">You + Friend each earn</p>
+                  <p className="text-[12px] text-[#6C47FF] font-semibold">
+                    +{referral.bonus_per_invite}⚡ you · +{referral.bonus_for_new}⚡ them
                   </p>
+                </div>
+              </div>
+              <p className="text-[11px] text-[#6E6E73]">{referral.invited_count} friend{referral.invited_count !== 1 ? 's' : ''} invited · {referral.credits_earned}⚡ earned</p>
+            </div>
+
+            {/* Progress to next milestone */}
+            {referral.next_milestone != null && (
+              <div className="px-4 py-3 border-b border-black/[0.04]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[11px] font-medium text-[#1D1D1F]">
+                    {referral.next_milestone - referral.invited_count} more friend{referral.next_milestone - referral.invited_count !== 1 ? 's' : ''} → +{referral.next_milestone_bonus}⚡ bonus
+                  </p>
+                  <span className="text-[10px] text-[#6E6E73]">{referral.invited_count}/{referral.next_milestone}</span>
+                </div>
+                <div className="w-full h-1.5 bg-[#F5F5F7] rounded-full overflow-hidden">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, (referral.invited_count / referral.next_milestone) * 100)}%` }}
+                    transition={{ duration: 0.8, ease: 'easeOut', delay: 0.3 }}
+                    className="h-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] rounded-full"
+                  />
+                </div>
+                {referral.milestones.length > 0 && (
+                  <div className="flex gap-1 mt-1.5">
+                    {referral.milestones.map((ms) => (
+                      <div key={ms.count} className="flex items-center gap-0.5">
+                        <div className={`w-1.5 h-1.5 rounded-full ${ms.reached ? 'bg-[#6C47FF]' : 'bg-[#D1D1D6]'}`} />
+                        <span className={`text-[9px] ${ms.reached ? 'text-[#6C47FF] font-semibold' : 'text-[#6E6E73]'}`}>
+                          {ms.count}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}
+
+            {/* Link + actions */}
             <div className="px-4 py-3">
               <div className="flex items-center gap-2 px-3 py-2 bg-[#F5F5F7] rounded-[10px] mb-2">
                 <span className="flex-1 text-[11px] text-[#6E6E73] truncate">{referral.link}</span>

@@ -1,9 +1,10 @@
 import { useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { X, Zap, Crown, Star } from 'lucide-react'
+import { X, Zap, Crown, Star, Users } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { createInvoice } from '../../api/shop'
 import { getMe } from '../../api/session'
+import { api } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { track } from '../../api/analytics'
 import { useExperiment } from '../../hooks/useExperiment'
@@ -67,6 +68,7 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
   const gens = user?.gens_ok ?? 0
   const payments = user?.payments ?? 0
   const segment = getSegment(gens, payments)
+  const showTrialCTA = payments === 0 && gens >= 3 && !localStorage.getItem('imodel_trial_shown')
   const paywallVariant = useExperiment('paywall_copy')
   const copyMap = paywallVariant === 'urgency' ? COPY_URGENCY
     : paywallVariant === 'social_proof' ? COPY_SOCIAL
@@ -103,6 +105,21 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
     setTab('shop')
     onClose()
   }
+
+  const handleTrialCTA = useCallback(async () => {
+    tg?.HapticFeedback?.impactOccurred('medium')
+    track('trial_cta_tapped', { segment })
+    localStorage.setItem('imodel_trial_shown', '1')
+    try {
+      const result = await api.post<{ ok: boolean; share_link: string }>('/api/v1/trial/pending')
+      if (result.share_link) {
+        const text = encodeURIComponent('I made AI portraits with iModel — try it free! 🤩')
+        tg?.openLink(`https://t.me/share/url?url=${encodeURIComponent(result.share_link)}&text=${text}`)
+      }
+    } catch {
+      // non-eligible — silent
+    }
+  }, [segment])
 
   function handleDismiss() {
     track('paywall_dismissed', { segment })
@@ -175,6 +192,25 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
               </motion.button>
             ))}
           </div>
+
+          {/* Pro Trial CTA — shown once to users who generated ≥3 times without paying */}
+          {showTrialCTA && (
+            <motion.button
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={handleTrialCTA}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-[16px] bg-white/8 border border-white/15"
+            >
+              <Users size={18} className="text-[#34C759] flex-shrink-0" />
+              <div className="flex-1 text-left">
+                <p className="text-[14px] font-semibold text-white">Try Pro free for 3 days</p>
+                <p className="text-[11px] text-white/50">Invite 1 friend to activate · no payment needed</p>
+              </div>
+              <span className="text-white/40 text-[13px]">→</span>
+            </motion.button>
+          )}
 
           {/* Secondary CTA */}
           <button

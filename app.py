@@ -985,6 +985,13 @@ SHOP_BANNER         = os.getenv("SHOP_BANNER", "")  # e.g. "🔥 Weekend Sale �
 VIRAL_PACK_STARS    = int(os.getenv("VIRAL_PACK_STARS",    "190"))
 LOCATIONS_PACK_STARS= int(os.getenv("LOCATIONS_PACK_STARS","290"))
 FANTASY_PACK_STARS  = int(os.getenv("FANTASY_PACK_STARS",  "390"))
+# Bundle-of-the-week offer — set BUNDLE_OFFER_EXPIRES_AT (unix ts) to activate
+BUNDLE_OFFER_EXPIRES_AT = int(os.getenv("BUNDLE_OFFER_EXPIRES_AT", "0"))
+BUNDLE_STARS        = int(os.getenv("BUNDLE_STARS",   "550"))
+BUNDLE_CREDITS      = int(os.getenv("BUNDLE_CREDITS", "150"))
+# Pro Trial via invite (3-day trial on first referral)
+PRO_TRIAL_CREDITS   = int(os.getenv("PRO_TRIAL_CREDITS", "15"))
+PRO_TRIAL_DAYS      = int(os.getenv("PRO_TRIAL_DAYS",    "3"))
 
 # Canonical payload → stars map used by pre_checkout validation and payment idempotency.
 # Must be kept in sync with ITEMS in api_shop_invoice and send_stars_invoice.
@@ -1000,9 +1007,10 @@ def _build_payment_sku_map() -> Dict[str, int]:
         "sub_elite":      SUB_ELITE_STARS,
         "premium_pack_1": STYLE_PACK_STARS,
         "age_pack":       AGE_PACK_STARS,
-        "viral_pack":     VIRAL_PACK_STARS,
-        "locations_pack": LOCATIONS_PACK_STARS,
-        "fantasy_pack":   FANTASY_PACK_STARS,
+        "viral_pack":          VIRAL_PACK_STARS,
+        "locations_pack":      LOCATIONS_PACK_STARS,
+        "fantasy_pack":        FANTASY_PACK_STARS,
+        "bundle_creator_week": BUNDLE_STARS,
     }
 
 # In-memory set of already-processed telegram_payment_charge_ids (survive restarts via DB load).
@@ -4847,6 +4855,13 @@ async def got_payment(m: Message):
         USER_AGE_PACKS[uid] = True
         _style_packs_save()
         await safe_answer(m, "✅ Age Magic Pack разблокирован! 4 стиля трансформации возраста доступны.")
+    elif payload == "bundle_creator_week":
+        async with _credits_lock:
+            USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + BUNDLE_CREDITS
+        _credits_save()
+        USER_STYLE_PACKS.setdefault(uid, set()).add("viral_pack")
+        _style_packs_save()
+        await safe_answer(m, f"🔥 Creator Bundle активирован! +{BUNDLE_CREDITS} кредитов + Viral Style Pack разблокирован.")
     elif payload in PRESET_PACKS:
         USER_STYLE_PACKS.setdefault(uid, set()).add(payload)
         _style_packs_save()
@@ -5148,6 +5163,31 @@ async def cmd_start(m: Message):
                     pass
                 # Milestone bonus (fire-and-forget)
                 asyncio.create_task(_maybe_give_milestone_bonus(ref_id, new_count))
+                # Pro Trial activation: grant if referrer has a pending trial
+                ref_ui = STATS_USERS_INFO.setdefault(ref_id, {})
+                if ref_ui.get("trial_pending") and not ref_ui.get("trial_used"):
+                    async with _credits_lock:
+                        USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + PRO_TRIAL_CREDITS
+                    _credits_save()
+                    USER_SUBSCRIPTION[ref_id] = {
+                        "plan": "pro_trial",
+                        "expires": time.time() + PRO_TRIAL_DAYS * 86400,
+                        "credits_per_month": PRO_TRIAL_CREDITS,
+                    }
+                    _subs_save()
+                    ref_ui["trial_pending"] = False
+                    ref_ui["trial_used"] = True
+                    analytics_event(ref_id, "pro_trial_activated", {"via_uid": invited_id})
+                    stats_incr("pro_trials_activated", 1)
+                    _trial_lang = USER_LANG.get(ref_id, LANG_DEFAULT)
+                    _trial_msg = {
+                        "ru": f"🎉 Ваш друг присоединился — Pro Trial на {PRO_TRIAL_DAYS} дня активирован!\n+{PRO_TRIAL_CREDITS} кредитов добавлено.",
+                        "en": f"🎉 Your friend joined — {PRO_TRIAL_DAYS}-day Pro Trial activated!\n+{PRO_TRIAL_CREDITS} credits added.",
+                    }.get(_trial_lang, f"🎉 Your friend joined — {PRO_TRIAL_DAYS}-day Pro Trial activated!\n+{PRO_TRIAL_CREDITS} credits added.")
+                    try:
+                        await bot.send_message(ref_id, _trial_msg)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -7755,6 +7795,27 @@ async def api_share_reward(request: Request):
     return {"ok": True, "credits": USER_CREDITS.get(uid, 0), "earned": 2}
 
 
+@app.post("/api/v1/trial/pending")
+async def api_trial_pending(request: Request):
+    """Mark referrer as having a pending Pro Trial — activated when 1 friend joins via their link."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    ui = STATS_USERS_INFO.setdefault(uid, {})
+    if int(ui.get("payments", 0)) > 0:
+        return JSONResponse({"error": "already_paid"}, status_code=400)
+    if int(ui.get("gens_ok", 0)) < 3:
+        return JSONResponse({"error": "not_enough_gens"}, status_code=400)
+    if ui.get("trial_used"):
+        return JSONResponse({"error": "trial_already_used"}, status_code=400)
+    ui["trial_pending"] = True
+    ui["trial_offer_shown"] = True
+    analytics_event(uid, "trial_pending_set", {})
+    share_link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{uid}" if BOT_USERNAME_GLOBAL else ""
+    return {"ok": True, "share_link": share_link, "trial_days": PRO_TRIAL_DAYS, "trial_credits": PRO_TRIAL_CREDITS}
+
+
 @app.get("/api/v1/community")
 async def api_community_list(request: Request, sort: str = "top"):
     user = webapp_user_from_request(request)
@@ -8961,6 +9022,14 @@ async def api_shop(request: Request):
         "subscription": sub,
         "credits": USER_CREDITS.get(uid, 0),
         "banner": SHOP_BANNER or None,
+        "bundle": {
+            "id": "bundle_creator_week",
+            "stars": BUNDLE_STARS,
+            "credits": BUNDLE_CREDITS,
+            "label": "🔥 Creator Bundle",
+            "includes": [f"{BUNDLE_CREDITS} gens", "Viral Style Pack"],
+            "expires_at": BUNDLE_OFFER_EXPIRES_AT,
+        } if BUNDLE_OFFER_EXPIRES_AT > 0 and BUNDLE_OFFER_EXPIRES_AT > time.time() else None,
         "subscription_features": {
             "free":    ["5 free gens/day", "All basic styles", "Standard quality"],
             "weekly":  [f"{SUB_WEEKLY_CREDITS} gens/week", "All basic styles", "Standard quality", "Priority queue"],
@@ -8990,7 +9059,8 @@ async def api_shop_invoice(request: Request):
         "age_pack":       ("iModel Age Magic", "4 age transformation styles", AGE_PACK_STARS, False),
         "viral_pack":     ("iModel Viral Social Pack", "6 trending social media aesthetic presets", VIRAL_PACK_STARS, False),
         "locations_pack": ("iModel World Locations Pack", "6 exotic travel location presets", LOCATIONS_PACK_STARS, False),
-        "fantasy_pack":   ("iModel Fantasy & Sci-Fi Pack", "6 fantasy and sci-fi scene presets", FANTASY_PACK_STARS, False),
+        "fantasy_pack":        ("iModel Fantasy & Sci-Fi Pack", "6 fantasy and sci-fi scene presets", FANTASY_PACK_STARS, False),
+        "bundle_creator_week": ("iModel Creator Bundle 🔥", f"{BUNDLE_CREDITS} gens + Viral Style Pack (limited offer)", BUNDLE_STARS, False),
     }
     if item_id not in ITEMS:
         return JSONResponse({"error": "invalid_item"}, status_code=400)

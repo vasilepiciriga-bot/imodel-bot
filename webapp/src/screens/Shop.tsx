@@ -45,6 +45,58 @@ const PACK_META: Record<string, { badge?: string; highlight?: boolean }> = {
   pack_300: { badge: 'Pro Pick' },
 }
 
+function useCountdown(expiresAt: number) {
+  const [remaining, setRemaining] = useState(() => Math.max(0, expiresAt - Math.floor(Date.now() / 1000)))
+  useEffect(() => {
+    if (remaining <= 0) return
+    const t = setInterval(() => setRemaining((r) => Math.max(0, r - 1)), 1000)
+    return () => clearInterval(t)
+  }, [remaining])
+  const h = Math.floor(remaining / 3600)
+  const m = Math.floor((remaining % 3600) / 60)
+  const s = remaining % 60
+  const days = Math.floor(remaining / 86400)
+  if (days >= 1) return `${days}d ${h % 24}h`
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+function BundleCard({ bundle, onBuy }: { bundle: NonNullable<ShopData['bundle']>; onBuy: () => void }) {
+  const countdown = useCountdown(bundle.expires_at)
+  return (
+    <motion.button
+      whileTap={{ scale: 0.97 }}
+      onClick={onBuy}
+      className="w-full text-left rounded-[20px] overflow-hidden"
+      style={{ background: 'linear-gradient(135deg, #FF6B00, #FF2D78)' }}
+    >
+      <div className="px-4 py-3.5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-white text-[15px] font-black">{bundle.label}</span>
+              <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-[10px] font-bold">
+                ⏰ {countdown}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {bundle.includes.map((item) => (
+                <span key={item} className="flex items-center gap-1 text-white/90 text-[11px]">
+                  <Check size={10} strokeWidth={3} className="text-white" />
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="flex-shrink-0 text-right">
+            <p className="text-white text-[20px] font-black leading-none">{bundle.stars}★</p>
+            <p className="text-white/70 text-[10px]">limited</p>
+          </div>
+        </div>
+      </div>
+    </motion.button>
+  )
+}
+
 export default function Shop() {
   const [shop, setShop] = useState<ShopData | null>(null)
   const [activeSubTab, setActiveSubTab] = useState<'monthly' | 'packs'>('monthly')
@@ -262,6 +314,11 @@ export default function Shop() {
               transition={{ duration: 0.15 }}
               className="space-y-4"
             >
+              {/* Bundle of the week */}
+              {shop?.bundle && (
+                <BundleCard bundle={shop.bundle} onBuy={() => handleBuy(shop!.bundle!.id, shop!.bundle!.stars)} />
+              )}
+
               {/* Credit packs grid */}
               <div className="grid grid-cols-2 gap-3">
                 {(shop?.packs ?? []).map((pack) => {
