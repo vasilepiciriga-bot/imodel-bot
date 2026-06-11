@@ -964,8 +964,8 @@ FREE_QUOTA   = int(os.getenv("FREE_QUOTA", "3"))
 # Subscription tiers
 SUB_PRO_STARS   = int(os.getenv("SUB_PRO_STARS",   "490"))
 SUB_ELITE_STARS = int(os.getenv("SUB_ELITE_STARS", "990"))
-SUB_PRO_CREDITS   = int(os.getenv("SUB_PRO_CREDITS",   "75"))
-SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "270"))
+SUB_PRO_CREDITS   = int(os.getenv("SUB_PRO_CREDITS",   "90"))   # 5.44★/credit = €0.071
+SUB_ELITE_CREDITS = int(os.getenv("SUB_ELITE_CREDITS", "270"))  # 3.67★/credit = €0.048
 SUB_PERIOD = 2592000  # 30 days in seconds
 
 # Weekly subscription tier (low barrier)
@@ -974,8 +974,9 @@ SUB_WEEKLY_CREDITS = int(os.getenv("SUB_WEEKLY_CREDITS", "20"))
 SUB_WEEKLY_PERIOD  = 604800  # 7 days
 
 # Creator subscription tier (~€15/month)
+# 1150★ / 320 credits = 3.59★/credit = €0.047 — top tier, slightly better per-credit than Elite
 SUB_CREATOR_STARS   = int(os.getenv("SUB_CREATOR_STARS",   "1150"))
-SUB_CREATOR_CREDITS = int(os.getenv("SUB_CREATOR_CREDITS", "400"))
+SUB_CREATOR_CREDITS = int(os.getenv("SUB_CREATOR_CREDITS", "320"))
 
 # Style pack pricing
 STYLE_PACK_STARS    = int(os.getenv("STYLE_PACK_STARS",    "490"))
