@@ -227,6 +227,37 @@ export default function Studio() {
     }
   }
 
+  const generateWithMode = useCallback(async (modeKey: string) => {
+    if (!selfieB64 || loading) return
+    tg?.HapticFeedback?.impactOccurred('medium')
+    setLoading(true)
+    setCurrentJob(null)
+    setBatchJobs([])
+    setProgressStep(0)
+    setStepLabel('analyzing')
+    track('upsell_mode_generate', { mode: modeKey })
+    try {
+      const { job_id } = await createGeneration({
+        image_b64: selfieB64,
+        photoshoot_mode: modeKey,
+        prompt: activePreset?.prompt ?? prompt,
+        preset_key: activePreset?.key,
+      })
+      setPhotoshootMode(modeKey as import('../types').PhotoshootModeKey)
+      setPollingJobId(job_id)
+    } catch (e: unknown) {
+      setLoading(false)
+      setProgressStep(0)
+      setStepLabel(undefined)
+      if ((e as { status?: number })?.status === 402) {
+        track('paywall_shown', { trigger: 'upsell_mode', source: 'result_card' })
+        setShowPaywall(true)
+      } else {
+        toast.error(e instanceof Error ? e.message : 'Generation failed')
+      }
+    }
+  }, [selfieB64, loading, prompt, activePreset, setPhotoshootMode])
+
   function handleReferralNudge() {
     tg?.HapticFeedback?.impactOccurred('medium')
     track('referral_nudge_tapped', { source: 'post_generation' })
@@ -696,6 +727,8 @@ export default function Studio() {
             onRegenerate={generate}
             onHD={handleHD}
             hdLoading={hdLoading}
+            photoshootMode={currentJob.photoshoot_mode ?? photoshootMode}
+            onTryMode={generateWithMode}
           />
         )}
 

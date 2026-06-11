@@ -1358,6 +1358,7 @@ USER_STREAK: Dict[int, int]        = {}   # streak day count
 USER_STREAK_REMINDED: Dict[int, float] = {}   # uid → timestamp of last streak-at-risk reminder sent
 USER_QUEST_REMINDED:  Dict[int, float] = {}   # uid → timestamp of last quest-expiry reminder sent
 USER_PORTFOLIO_PUBLIC: Dict[int, bool] = {}   # uid → portfolio is public (opt-in)
+USER_LAST_SHARE_REWARD: Dict[int, str] = {}  # uid → ISO date of last share-reward claim
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -3948,6 +3949,57 @@ async def memory_cleanup_loop():
         except Exception as e:
             print("[cleanup] error:", str(e)[:160])
         await asyncio.sleep(3600)
+
+async def sub_upgrade_nudge_loop():
+    """Daily: notify active Pro subscribers running low on credits to upgrade to Creator."""
+    await asyncio.sleep(180)
+    while True:
+        try:
+            today_str = _today()
+            sent = 0
+            for uid in list(STATS_USERS_INFO.keys()):
+                sub = get_active_sub(uid)
+                if not sub or sub.get("plan") != "pro":
+                    continue
+                if USER_CREDITS.get(uid, 0) >= 15:
+                    continue
+                ui = STATS_USERS_INFO.setdefault(uid, {})
+                if ui.get("upgrade_nudge_sent") == today_str:
+                    continue
+                if NUDGE_INFO.get(uid, {}).get("blocked"):
+                    continue
+                lang = USER_LANG.get(uid, LANG_DEFAULT)
+                if not _nudge_allowed_now(lang):
+                    continue
+                if lang == "ru":
+                    msg = (
+                        "⚡ Почти закончились кредиты Pro на этот месяц.\n\n"
+                        "Переходи на Creator — 320 генераций за 1150★/мес.\n"
+                        "Никаких перерывов, без лимитов."
+                    )
+                else:
+                    msg = (
+                        "⚡ Your Pro credits are running low this month.\n\n"
+                        "Upgrade to Creator — 320 gens for 1150★/mo.\n"
+                        "Keep creating without interruption."
+                    )
+                try:
+                    await bot.send_message(uid, msg)
+                    ui["upgrade_nudge_sent"] = today_str
+                    analytics_event(uid, "upgrade_nudge_sent", {"from_plan": "pro", "credits_left": USER_CREDITS.get(uid, 0)})
+                    stats_incr("upgrade_nudges_sent", 1)
+                    sent += 1
+                    await asyncio.sleep(0.3)
+                except Exception:
+                    pass
+                if sent >= 25:
+                    break
+            if sent:
+                print(f"[upgrade_nudge] sent {sent} upgrade nudges")
+        except Exception as e:
+            print(f"[upgrade_nudge] error: {str(e)[:120]}")
+        await asyncio.sleep(86400)
+
 
 async def streak_reminder_loop():
     """Check every 30 min; remind users whose streak will expire if they don't generate today."""
@@ -6581,6 +6633,9 @@ async def on_startup():
             t = asyncio.create_task(streak_reminder_loop(), name="streak_reminder_loop")
             t.add_done_callback(_bg_task_error_handler)
             print("Streak reminder loop started")
+            t = asyncio.create_task(sub_upgrade_nudge_loop(), name="sub_upgrade_nudge_loop")
+            t.add_done_callback(_bg_task_error_handler)
+            print("Sub upgrade nudge loop started")
             t = asyncio.create_task(quest_reminder_loop(), name="quest_reminder_loop")
             t.add_done_callback(_bg_task_error_handler)
             print("Quest reminder loop started")
@@ -7679,6 +7734,25 @@ async def api_community_share(request: Request):
     _quest_incr_daily(uid, "share_photo", _dt.date.today().strftime("%G-W%V"))
     _check_and_unlock_achievements(uid)
     return {"ok": True, "key": cp_key, "already_shared": False}
+
+
+@app.post("/api/v1/share-reward")
+async def api_share_reward(request: Request):
+    """Grant +2 credits for sharing, once per day. Separate from community share."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    today = _today()
+    if USER_LAST_SHARE_REWARD.get(uid) == today:
+        return JSONResponse({"error": "already_claimed", "credits": USER_CREDITS.get(uid, 0)}, status_code=429)
+    USER_LAST_SHARE_REWARD[uid] = today
+    async with _credits_lock:
+        USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + 2
+    _credits_save()
+    analytics_event(uid, "share_reward_claimed", {})
+    stats_incr("share_rewards", 1)
+    return {"ok": True, "credits": USER_CREDITS.get(uid, 0), "earned": 2}
 
 
 @app.get("/api/v1/community")

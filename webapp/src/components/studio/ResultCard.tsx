@@ -4,10 +4,24 @@ import { Download, Share2, RefreshCw, Sparkles, Star, Send } from 'lucide-react'
 import { saveImageToPhone } from '../../lib/saveImage'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { useAppStore } from '../../store/appStore'
+import { api } from '../../api/client'
 import { track } from '../../api/analytics'
+import { useToast } from '../../hooks/useToast'
 import type { Generation } from '../../types'
 
 const tg = window.Telegram?.WebApp
+
+const UPSELL_MODES = [
+  { key: 'vogue',   emoji: '👑', label: 'Vogue',   desc: '8 shots · 4× upscale',   credits: 6 },
+  { key: 'ceo',     emoji: '🤵', label: 'CEO',     desc: '6 shots · upscaled',      credits: 4 },
+  { key: 'luxury',  emoji: '✨', label: 'Luxury',  desc: '6 shots · old money',     credits: 4 },
+  { key: 'premium', emoji: '💎', label: 'Premium', desc: '4 shots · HD quality',    credits: 3 },
+] as const
+
+function pickUpsellMode(jobId: string) {
+  const hash = jobId.charCodeAt(jobId.length - 1) + jobId.charCodeAt(0)
+  return UPSELL_MODES[hash % UPSELL_MODES.length]
+}
 
 interface Props {
   job: Generation
@@ -15,6 +29,8 @@ interface Props {
   onRegenerate: () => void
   onHD: () => void
   hdLoading?: boolean
+  photoshootMode?: string
+  onTryMode?: (modeKey: string) => void
 }
 
 async function buildStoryBlob(imageUrl: string): Promise<Blob | null> {
@@ -36,7 +52,6 @@ async function buildStoryBlob(imageUrl: string): Promise<Blob | null> {
       img.onerror = rej
       img.src = imageUrl
     })
-    // Center image, maintain aspect ratio, fill 900×900 area
     const size = 900
     const x = (1080 - size) / 2
     const y = 200
@@ -47,7 +62,6 @@ async function buildStoryBlob(imageUrl: string): Promise<Blob | null> {
     ctx.drawImage(img, x, y, size, size)
     ctx.restore()
 
-    // Brand text
     ctx.fillStyle = 'rgba(255,255,255,0.95)'
     ctx.font = 'bold 64px -apple-system, Helvetica Neue, sans-serif'
     ctx.textAlign = 'center'
@@ -62,19 +76,35 @@ async function buildStoryBlob(imageUrl: string): Promise<Blob | null> {
   }
 }
 
-export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Props) {
+export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, photoshootMode, onTryMode }: Props) {
   const [shareLoading, setShareLoading] = useState(false)
   const [saveLoading, setSaveLoading] = useState(false)
   const user = useAppStore((s) => s.user) as ({ bot_link?: string } | null)
+  const updateCredits = useAppStore((s) => s.updateCredits)
   const botLink = (user as { bot_link?: string } | null)?.bot_link ?? 'https://t.me/imodelapp_bot'
   const outputUrl = job.hd_url ?? job.output_url ?? ''
+  const toast = useToast()
+
+  const upsellMode = pickUpsellMode(job.job_id)
+  const showUpsell = (photoshootMode === 'everyday' || !photoshootMode) && !!onTryMode
+
+  async function claimShareReward() {
+    try {
+      const result = await api.post<{ ok: boolean; credits: number; earned: number }>('/api/v1/share-reward')
+      if (result.ok) {
+        updateCredits(result.credits)
+        toast.success(`+${result.earned}⚡ earned for sharing!`, { icon: '🎁' })
+      }
+    } catch {
+      // Already claimed today — silent
+    }
+  }
 
   async function handleShare() {
     if (!outputUrl) return
     tg?.HapticFeedback?.impactOccurred('medium')
     setShareLoading(true)
     try {
-      // Method 1: Telegram native shareToStory (v7.8+, mobile only)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tgAny = tg as any
       if (tgAny && typeof tgAny.shareToStory === 'function') {
@@ -83,10 +113,10 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
           text: '✦ Made with iModel Studio',
           widget_link: { url: botLink, name: 'Try it free →' },
         })
+        await claimShareReward()
         return
       }
 
-      // Method 2: Build branded story card and download + show share link
       track('share_tapped', { method: 'story_canvas' })
       const blob = await buildStoryBlob(outputUrl)
       if (blob) {
@@ -98,10 +128,10 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
         URL.revokeObjectURL(blobUrl)
       }
 
-      // Also open Telegram share dialog as fallback
       const shareText = encodeURIComponent('Look what AI made from my selfie! 🤩')
       const shareUrl = encodeURIComponent(botLink)
       tg?.openLink(`https://t.me/share/url?url=${shareUrl}&text=${shareText}`)
+      await claimShareReward()
     } finally {
       setShareLoading(false)
     }
@@ -141,7 +171,7 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
           {shareLoading
             ? <Sparkles size={15} className="animate-spin" />
             : <Share2 size={15} />}
-          Story
+          Story · +2⚡
         </motion.button>
         <motion.button
           whileTap={{ scale: 0.96 }}
@@ -152,7 +182,6 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
             try {
               await saveImageToPhone(outputUrl)
             } catch {
-              /* fallback: open in tab */
               window.open(outputUrl, '_blank')
             } finally { setSaveLoading(false) }
           }}
@@ -190,6 +219,42 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading }: Pr
           {job.hd_url ? 'HD ✓' : 'HD · 2⚡'}
         </motion.button>
       </div>
+
+      {/* Premium mode upsell — only after everyday mode */}
+      {showUpsell && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="flex items-center gap-3 px-3.5 py-3 rounded-[16px] border"
+          style={{
+            background: 'linear-gradient(135deg, rgba(108,71,255,0.06), rgba(255,45,120,0.06))',
+            borderColor: 'rgba(108,71,255,0.20)',
+          }}
+        >
+          <span className="text-[22px] flex-shrink-0">{upsellMode.emoji}</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-bold text-[#1D1D1F] leading-tight">
+              See this in {upsellMode.label} mode
+            </p>
+            <p className="text-[11px] text-[#6E6E73] truncate">
+              {upsellMode.desc} · {upsellMode.credits}⚡
+            </p>
+          </div>
+          <motion.button
+            whileTap={{ scale: 0.94 }}
+            onClick={() => {
+              tg?.HapticFeedback?.impactOccurred('medium')
+              track('upsell_mode_tapped', { from: 'result_card', mode: upsellMode.key })
+              onTryMode!(upsellMode.key)
+            }}
+            className="px-3 py-1.5 rounded-[10px] text-white text-[12px] font-bold flex-shrink-0"
+            style={{ background: 'linear-gradient(135deg, #6C47FF, #FF2D78)' }}
+          >
+            Try →
+          </motion.button>
+        </motion.div>
+      )}
     </motion.div>
   )
 }
