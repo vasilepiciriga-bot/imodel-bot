@@ -6684,8 +6684,17 @@ async def webapp_index():
 
 @app.post("/api/v1/webapp/session")
 async def api_webapp_session(request: Request):
-    data = await request.json()
-    validated = validate_webapp_init_data(str(data.get("initData") or ""))
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    init_data = str(data.get("initData") or "")
+    # fallback: accept initData from Authorization: tma header
+    if not init_data:
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("tma "):
+            init_data = auth.split(" ", 1)[1].strip()
+    validated = validate_webapp_init_data(init_data)
     if not validated:
         return JSONResponse({"error": "invalid_init_data"}, status_code=403)
     uid = int(validated["uid"])
@@ -6708,11 +6717,22 @@ async def api_me(request: Request):
     uid = int(user["uid"])
     username = str(user.get("username") or "")
     ensure_user_credit(uid)
+    _touch_user(uid, username)
     ui = STATS_USERS_INFO.get(uid) or {}
+    active_sub = get_active_sub(uid)
+    _plan_raw = (active_sub or {}).get("plan", "free")
+    _plan = "sub_weekly" if _plan_raw == "weekly" else _plan_raw
+    _plan_expiry = None
+    if active_sub:
+        import datetime as _dt
+        _plan_expiry = _dt.datetime.utcfromtimestamp(active_sub["expires"]).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
+        "uid": uid,
         "chat_id": uid,
         "username": username,
         "credits": USER_CREDITS.get(uid, FREE_QUOTA),
+        "plan": _plan,
+        "plan_expiry": _plan_expiry,
         "role": role_for_user(uid, username),
         "grants": sorted(grants_for_user(uid, username)),
         "bot_link": f"https://t.me/{BOT_USERNAME_GLOBAL}" if BOT_USERNAME_GLOBAL else None,

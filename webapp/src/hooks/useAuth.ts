@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
-import { createSession } from '../api/session'
+import { getMe } from '../api/session'
 
 export function useAuth() {
   const setUser = useAppStore((s) => s.setUser)
@@ -9,7 +9,7 @@ export function useAuth() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    createSession()
+    getMe()
       .then((u) => {
         setUser(u)
         setLoading(false)
