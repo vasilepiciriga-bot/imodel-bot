@@ -937,6 +937,48 @@ def ensure_user_credit(uid: int):
 
 _credits_load()
 
+def _ref_save():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = REF_FILE + ".tmp"
+        payload = json.dumps({
+            "map":   {str(k): int(v) for k, v in REF_MAP.items()},
+            "stats": {str(k): v for k, v in REF_STATS.items()},
+        }, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, REF_FILE)
+        _s3_put_text(STATE_PREFIX + "referrals.json", payload)
+    except Exception as e:
+        print("[ref] save error:", str(e)[:160])
+
+def _ref_load():
+    try:
+        txt = _s3_get_text(STATE_PREFIX + "referrals.json")
+        if not txt and os.path.exists(REF_FILE):
+            with open(REF_FILE, "r", encoding="utf-8") as f:
+                txt = f.read()
+        if not txt:
+            return
+        data = json.loads(txt)
+        for k, v in (data.get("map") or {}).items():
+            try:
+                REF_MAP[int(k)] = int(v)
+            except Exception:
+                continue
+        for k, v in (data.get("stats") or {}).items():
+            try:
+                REF_STATS[int(k)] = {
+                    "count":  int(v.get("count", 0)),
+                    "earned": int(v.get("earned", 0)),
+                }
+            except Exception:
+                continue
+    except Exception as e:
+        print("[ref] load error:", str(e)[:160])
+
+_ref_load()
+
 SUBS_FILE = os.getenv("SUBS_FILE", os.path.join(DATA_DIR, "subscriptions.json"))
 
 def _subs_save():
@@ -1121,6 +1163,28 @@ async def _refund_credits_n(uid: int, n: int, username: Optional[str] = None):
         USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + n
     _credits_save()
 
+async def _maybe_give_milestone_bonus(ref_id: int, new_count: int):
+    """Award milestone bonus to referrer and notify them."""
+    bonus = REFERRAL_MILESTONES.get(new_count, 0)
+    if not bonus:
+        return
+    async with _credits_lock:
+        USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, 0) + bonus
+    _credits_save()
+    stats_incr(f"ref_milestone_{new_count}", 1)
+    lang = USER_LANG.get(ref_id, LANG_DEFAULT)
+    msg = {
+        "ru": f"🏆 Milestone! Вы пригласили {new_count} друзей — +{bonus} кредитов в подарок!",
+        "en": f"🏆 Milestone! {new_count} friends joined via your link — +{bonus} bonus credits!",
+        "ro": f"🏆 Milestone! {new_count} prieteni s-au alăturat — +{bonus} credite bonus!",
+        "de": f"🏆 Meilenstein! {new_count} Freunde beigetreten — +{bonus} Bonus-Credits!",
+        "ar": f"🏆 إنجاز! انضم {new_count} أصدقاء — +{bonus} رصيد مجاني!",
+    }.get(lang, f"🏆 Milestone! {new_count} friends joined — +{bonus} bonus credits!")
+    try:
+        await bot.send_message(ref_id, msg)
+    except Exception:
+        pass
+
 # публикация до/после
 LAST_REF: Dict[int, bytes]   = {}
 LAST_PHOTO: Dict[int, bytes] = {}
@@ -1169,6 +1233,9 @@ REF_BONUS_NEW  = int(os.getenv("REF_BONUS_NEW", "3"))
 REF_BONUS_REF  = int(os.getenv("REF_BONUS_REF", "3"))
 REF_MAP: Dict[int, int] = {}
 REF_STATS: Dict[int, Dict[str, int]] = {}
+# Milestone bonuses: invited count → bonus credits awarded to referrer
+REFERRAL_MILESTONES: Dict[int, int] = {3: 5, 5: 8, 10: 15, 25: 30}
+REF_FILE = os.getenv("REF_FILE", os.path.join(DATA_DIR, "referrals.json"))
 
 BOT_USERNAME_GLOBAL = None
 
@@ -3756,9 +3823,26 @@ async def cmd_start(m: Message):
                 REF_STATS[ref_id]["earned"] += REF_BONUS_REF
                 USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
                 _credits_save()
+                _ref_save()
                 stats_incr("referrals", 1)
                 stats_incr("ref_bonus_ref", REF_BONUS_REF)
                 stats_incr("ref_bonus_invited", REF_BONUS_NEW)
+                new_count = REF_STATS[ref_id]["count"]
+                # Notify referrer
+                ref_lang = USER_LANG.get(ref_id, LANG_DEFAULT)
+                notif = {
+                    "ru": f"🎉 По вашей ссылке зарегистрировался новый друг! +{REF_BONUS_REF} кредита. Всего приглашено: {new_count}",
+                    "en": f"🎉 Someone joined via your link! +{REF_BONUS_REF} credits added. Total invited: {new_count}",
+                    "ro": f"🎉 Cineva s-a alăturat prin linkul tău! +{REF_BONUS_REF} credite. Total invitați: {new_count}",
+                    "de": f"🎉 Jemand ist über deinen Link beigetreten! +{REF_BONUS_REF} Credits. Eingeladen gesamt: {new_count}",
+                    "ar": f"🎉 انضم شخص عبر رابطك! +{REF_BONUS_REF} رصيد. إجمالي المدعوين: {new_count}",
+                }.get(ref_lang, f"🎉 Someone joined via your link! +{REF_BONUS_REF} credits. Total: {new_count}")
+                try:
+                    await bot.send_message(ref_id, notif)
+                except Exception:
+                    pass
+                # Milestone bonus (fire-and-forget)
+                asyncio.create_task(_maybe_give_milestone_bonus(ref_id, new_count))
         except Exception:
             pass
 
@@ -4064,8 +4148,49 @@ async def cmd_refer(m: Message):
     my_id = m.chat.id
     link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{my_id}"
     st = REF_STATS.get(my_id, {"count": 0, "earned": 0})
-    msg = L(m.chat.id)["refer_msg"].format(link=link, count=st["count"], earned=st["earned"])
-    await safe_answer(m, msg)
+    count = st["count"]
+    earned = st["earned"]
+
+    # Find next milestone
+    next_ms = next((n for n in sorted(REFERRAL_MILESTONES) if n > count), None)
+    lang = USER_LANG.get(my_id, LANG_DEFAULT)
+    if next_ms:
+        ms_bonus = REFERRAL_MILESTONES[next_ms]
+        ms_hint = {
+            "ru": f"\n🎯 До следующей награды: {next_ms - count} приглашений → +{ms_bonus} кредитов",
+            "en": f"\n🎯 Next milestone: {next_ms - count} more invite(s) → +{ms_bonus} credits",
+            "ro": f"\n🎯 Până la următoarea recompensă: {next_ms - count} invitații → +{ms_bonus} credite",
+            "de": f"\n🎯 Nächste Belohnung: noch {next_ms - count} Einladung(en) → +{ms_bonus} Credits",
+            "ar": f"\n🎯 الهدف التالي: {next_ms - count} دعوات → +{ms_bonus} رصيد",
+        }.get(lang, f"\n🎯 Next milestone: {next_ms - count} more → +{ms_bonus} credits")
+    else:
+        ms_hint = ""
+
+    msg = L(m.chat.id)["refer_msg"].format(link=link, count=count, earned=earned) + ms_hint
+
+    from urllib.parse import quote as _quote
+    share_text = {
+        "ru": f"Попробуй AI-фотосессии — создаёт крутые фото из твоего селфи!",
+        "en": f"Try AI photoshoots — turns your selfie into stunning photos!",
+        "ro": f"Încearcă ședințele foto AI — transformă selfie-ul tău în poze uimitoare!",
+        "de": f"Probiere KI-Fotoshootings — verwandelt dein Selfie in tolle Fotos!",
+        "ar": f"جرّب جلسات التصوير بالذكاء الاصطناعي — تحوّل صورة السيلفي إلى صور رائعة!",
+    }.get(lang, "Try AI photoshoots — turns your selfie into stunning photos!")
+    share_url = f"https://t.me/share/url?url={_quote(link)}&text={_quote(share_text)}"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text={
+                "ru": f"📤 Поделиться (+{REF_BONUS_REF} вам)",
+                "en": f"📤 Share link (+{REF_BONUS_REF} you)",
+                "ro": f"📤 Distribuie (+{REF_BONUS_REF} ție)",
+                "de": f"📤 Teilen (+{REF_BONUS_REF} dir)",
+                "ar": f"📤 مشاركة الرابط (+{REF_BONUS_REF} لك)",
+            }.get(lang, f"📤 Share link (+{REF_BONUS_REF} you)"),
+            url=share_url,
+        )],
+    ])
+    await safe_answer(m, msg, reply_markup=kb)
 
 # ======= INLINE callbacks =======
 @dp.callback_query(F.data == "help_open")
@@ -5844,6 +5969,35 @@ async def api_profile_stats(request: Request):
         "subscription": get_active_sub(uid),
         "credits": USER_CREDITS.get(uid, 0),
         "username": info.get("username", ""),
+    }
+
+@app.get("/api/v1/referral")
+async def api_referral(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    if not BOT_USERNAME_GLOBAL:
+        return JSONResponse({"error": "bot_not_ready"}, status_code=503)
+    st = REF_STATS.get(uid, {"count": 0, "earned": 0})
+    count = int(st.get("count", 0))
+    earned = int(st.get("earned", 0))
+    link = f"https://t.me/{BOT_USERNAME_GLOBAL}?start=ref_{uid}"
+    # Next milestone
+    next_ms = next((n for n in sorted(REFERRAL_MILESTONES) if n > count), None)
+    milestones = [
+        {"count": n, "bonus": b, "reached": count >= n}
+        for n, b in sorted(REFERRAL_MILESTONES.items())
+    ]
+    return {
+        "link": link,
+        "invited_count": count,
+        "credits_earned": earned,
+        "bonus_per_invite": REF_BONUS_REF,
+        "bonus_for_new": REF_BONUS_NEW,
+        "next_milestone": next_ms,
+        "next_milestone_bonus": REFERRAL_MILESTONES.get(next_ms, 0) if next_ms else 0,
+        "milestones": milestones,
     }
 
 @app.get("/metrics")

@@ -14,3 +14,16 @@ export const claimDaily = () =>
 
 export const getStats = () =>
   api.get<{ total_generated: number; streak: number; friends_invited: number }>('/api/v1/profile/stats')
+
+export interface ReferralData {
+  link: string
+  invited_count: number
+  credits_earned: number
+  bonus_per_invite: number
+  bonus_for_new: number
+  next_milestone: number | null
+  next_milestone_bonus: number
+  milestones: Array<{ count: number; bonus: number; reached: boolean }>
+}
+
+export const getReferral = () => api.get<ReferralData>('/api/v1/referral')

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Users, Camera, CheckCircle2 } from 'lucide-react'
+import { Flame, Users, Camera, CheckCircle2, Copy, Share2 } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
-import { claimDaily, getChallenge } from '../api/session'
+import { claimDaily, getChallenge, getReferral } from '../api/session'
 import type { Challenge } from '../types'
+import type { ReferralData } from '../api/session'
 
 const tg = window.Telegram?.WebApp
 
@@ -25,11 +26,14 @@ export default function Profile() {
   const [dailyClaimed, setDailyClaimed] = useState(false)
   const [nextBonusIn, setNextBonusIn] = useState<number | null>(null)
   const [claimLoading, setClaimLoading] = useState(false)
+  const [referral, setReferral] = useState<ReferralData | null>(null)
+  const [copied, setCopied] = useState(false)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
 
   useEffect(() => {
     getChallenge().then(setChallenge).catch(() => null)
+    getReferral().then(setReferral).catch(() => null)
   }, [])
 
   useEffect(() => {
@@ -58,6 +62,22 @@ export default function Profile() {
     } finally {
       setClaimLoading(false)
     }
+  }
+
+  function handleCopyLink() {
+    if (!referral) return
+    navigator.clipboard.writeText(referral.link).catch(() => null)
+    setCopied(true)
+    tg?.HapticFeedback?.notificationOccurred('success')
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  function handleShareLink() {
+    if (!referral) return
+    tg?.HapticFeedback?.impactOccurred('light')
+    const text = encodeURIComponent('Try AI photoshoots — turns your selfie into stunning photos!')
+    const url = encodeURIComponent(referral.link)
+    tg?.openLink(`https://t.me/share/url?url=${url}&text=${text}`)
   }
 
   const streak = user?.streak ?? 0
@@ -207,6 +227,69 @@ export default function Profile() {
                 )}
               </div>
               <CheckCircle2 size={20} className="text-[#6C47FF]" />
+            </div>
+          </div>
+        )}
+
+        {/* Referral card */}
+        {referral && (
+          <div className="rounded-card bg-white shadow-sm overflow-hidden">
+            <div className="px-4 pt-4 pb-3 bg-gradient-to-r from-[#6C47FF]/8 to-[#FF2D78]/8">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-[15px] font-bold text-[#1D1D1F]">👥 Invite Friends</p>
+                <span className="text-[12px] font-semibold text-[#6C47FF]">
+                  +{referral.bonus_per_invite}⚡ you · +{referral.bonus_for_new}⚡ them
+                </span>
+              </div>
+              <p className="text-[12px] text-[#6E6E73]">
+                {referral.invited_count} invited · {referral.credits_earned} credits earned
+              </p>
+            </div>
+
+            {/* Milestone progress */}
+            {referral.milestones.length > 0 && (
+              <div className="px-4 py-3 border-b border-black/[0.04]">
+                <div className="flex gap-2">
+                  {referral.milestones.map((ms) => (
+                    <div key={ms.count} className="flex-1 flex flex-col items-center gap-1">
+                      <div className={`w-full h-1.5 rounded-full ${ms.reached ? 'bg-[#6C47FF]' : 'bg-[#F5F5F7]'}`} />
+                      <span className={`text-[9px] font-medium ${ms.reached ? 'text-[#6C47FF]' : 'text-[#6E6E73]'}`}>
+                        {ms.count} · +{ms.bonus}⚡
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {referral.next_milestone && (
+                  <p className="text-[11px] text-[#6E6E73] mt-1.5">
+                    {referral.next_milestone - referral.invited_count} more to unlock +{referral.next_milestone_bonus}⚡ bonus
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Link + buttons */}
+            <div className="px-4 py-3">
+              <div className="flex items-center gap-2 px-3 py-2 bg-[#F5F5F7] rounded-[10px] mb-2">
+                <span className="flex-1 text-[11px] text-[#6E6E73] truncate">{referral.link}</span>
+              </div>
+              <div className="flex gap-2">
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
+                  onClick={handleCopyLink}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-[10px] bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-semibold"
+                >
+                  <Copy size={13} />
+                  {copied ? 'Copied!' : 'Copy link'}
+                </motion.button>
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
+                  onClick={handleShareLink}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-[10px] bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white text-[12px] font-semibold"
+                >
+                  <Share2 size={13} />
+                  Share
+                </motion.button>
+              </div>
             </div>
           </div>
         )}
