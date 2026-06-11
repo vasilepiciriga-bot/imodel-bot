@@ -1003,7 +1003,13 @@ def audit_log(actor_uid: Optional[int], action: str, target_uid: Optional[int] =
 
 def _job_result_json(job: Dict[str, Any]) -> str:
     result = {}
-    for key in ("output_url", "output_s3_key", "output_bytes", "delivery_message_id", "output_urls", "step_label"):
+    for key in (
+        "output_url", "output_s3_key", "output_bytes",
+        "delivery_message_id", "output_urls", "step_label",
+        # gallery display metadata — must survive DB round-trip
+        "photoshoot_mode", "mode", "preset_key", "age_key",
+        "bonus_credits", "lang",
+    ):
         if key in job:
             result[key] = job.get(key)
     return json.dumps(result, ensure_ascii=False)
@@ -8333,6 +8339,46 @@ async def api_admin_debug_stats(request: Request):
                 key=lambda x: x["gens"], reverse=True
             )[:20],
         },
+        "s3_state": USE_S3_STATE,
+    }
+
+
+@app.get("/api/v1/admin/debug-gallery")
+async def api_admin_debug_gallery(request: Request):
+    """Gallery diagnostics: DB row counts + latest items without exposing presigned URLs."""
+    if not _check_admin_auth(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    db_total = 0
+    latest_rows: List[Dict[str, Any]] = []
+    if DB_READY:
+        rows = _db_fetchall(
+            "SELECT job_id, chat_id, username, prompt, status, created_at, result_json "
+            "FROM imodel_jobs WHERE status='ready' ORDER BY updated_at DESC LIMIT 20"
+        )
+        db_total_rows = _db_fetchall("SELECT COUNT(*) FROM imodel_jobs WHERE status='ready'")
+        db_total = int(db_total_rows[0][0]) if db_total_rows else 0
+        for row in rows:
+            job_id, chat_id, username, prompt, status, created_at, result_json_str = row
+            try:
+                rj = json.loads(result_json_str or "{}")
+            except Exception:
+                rj = {}
+            latest_rows.append({
+                "job_id": str(job_id),
+                "chat_id": int(chat_id) if chat_id else None,
+                "username": str(username or ""),
+                "prompt": str(prompt or "")[:80],
+                "photoshoot_mode": rj.get("photoshoot_mode") or rj.get("mode") or "everyday",
+                "has_s3_key": bool(rj.get("output_s3_key")),
+                "s3_key": str(rj.get("output_s3_key") or ""),
+                "created_at": float(created_at or 0),
+            })
+    cache_count = len([j for j in _cache_load_jobs() if j.get("status") == "ready"])
+    return {
+        "db_ready": DB_READY,
+        "db_total_ready_jobs": db_total,
+        "cache_ready_jobs": cache_count,
+        "latest_20": latest_rows,
         "s3_state": USE_S3_STATE,
     }
 
