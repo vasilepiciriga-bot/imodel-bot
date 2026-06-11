@@ -4,6 +4,7 @@ import { X } from 'lucide-react'
 import { track } from '../api/analytics'
 import { claimQuest } from '../api/quests'
 import { hap } from '../lib/haptics'
+import { useBackButton } from '../hooks/useBackButton'
 
 const tg = window.Telegram?.WebApp
 
@@ -21,6 +22,7 @@ const STEPS = [
 export function HomeScreenModal({ onClose, onCompleted }: Props) {
   const [state, setState] = useState<'idle' | 'checking' | 'success' | 'manual'>('idle')
   const [activeStep, setActiveStep] = useState(0)
+  useBackButton(onClose)
 
   async function handleAdd() {
     hap.medium()

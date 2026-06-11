@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 import { shareToCommunity } from '../api/community'
 import { hap } from '../lib/haptics'
+import { useBackButton } from '../hooks/useBackButton'
 import type { Generation } from '../types'
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
 export function CommunityShareModal({ job, onClose, onShared }: Props) {
   const [label, setLabel] = useState('')
   const [state, setState] = useState<'idle' | 'loading' | 'success' | 'duplicate'>('idle')
+  useBackButton(onClose)
 
   const imageUrl = job.hd_url ?? job.output_url ?? ''
 

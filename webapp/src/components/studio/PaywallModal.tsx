@@ -8,6 +8,7 @@ import { useAppStore } from '../../store/appStore'
 import { track } from '../../api/analytics'
 import { useExperiment } from '../../hooks/useExperiment'
 import { useToast } from '../../hooks/useToast'
+import { useBackButton } from '../../hooks/useBackButton'
 
 const tg = window.Telegram?.WebApp
 
@@ -62,6 +63,7 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
   const setTab = useAppStore((s) => s.setTab)
   const [buyingId, setBuyingId] = useState<string | null>(null)
   const toast = useToast()
+  useBackButton(onClose)
 
   const gens = user?.gens_ok ?? 0
   const payments = user?.payments ?? 0

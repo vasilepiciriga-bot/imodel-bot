@@ -191,7 +191,7 @@ export default function Profile() {
   const initials = (tg?.initDataUnsafe?.user?.first_name ?? 'U').charAt(0).toUpperCase()
   const username = tg?.initDataUnsafe?.user?.username
   const displayName = tg?.initDataUnsafe?.user?.first_name ?? 'User'
-  const weekDays = Array.from({ length: 7 }, (_, i) => i < streak % 7)
+  const weekDays = Array.from({ length: 7 }, (_, i) => i < (streak % 7 || (streak > 0 ? 7 : 0)))
   const claimableCount = quests.filter((q) => q.claimable).length
 
   // Next milestone logic
@@ -605,9 +605,9 @@ export default function Profile() {
 
         {/* Links */}
         <div className="flex gap-3 text-[12px] text-[#6E6E73]">
-          <button onClick={() => tg?.openLink('https://t.me/imodelbot')}>Privacy</button>
+          <button onClick={() => tg?.openLink(user?.bot_link ?? 'https://t.me/imodelapp_bot')}>Privacy</button>
           <span>·</span>
-          <button onClick={() => tg?.openLink('https://t.me/imodelbot')}>Terms</button>
+          <button onClick={() => tg?.openLink(user?.bot_link ?? 'https://t.me/imodelapp_bot')}>Terms</button>
         </div>
       </div>
 

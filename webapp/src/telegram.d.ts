@@ -7,6 +7,14 @@ interface TelegramWebAppUser {
   photo_url?: string
 }
 
+interface TelegramBackButton {
+  isVisible: boolean
+  show(): void
+  hide(): void
+  onClick(callback: () => void): void
+  offClick(callback: () => void): void
+}
+
 interface TelegramWebApp {
   ready(): void
   expand(): void
@@ -26,8 +34,15 @@ interface TelegramWebApp {
     notificationOccurred(type: 'error' | 'success' | 'warning'): void
     selectionChanged(): void
   }
+  BackButton: TelegramBackButton
   addToHomeScreen?(): void
   checkHomeScreenStatus?(callback: (status: 'unsupported' | 'unknown' | 'added' | 'missed') => void): void
+  downloadFile?(params: { url: string; file_name: string }): void
+  shareToStory?(media_url: string, params?: { text?: string }): void
+  disableVerticalSwipes?(): void
+  enableClosingConfirmation?(): void
+  onEvent?(eventType: string, eventHandler: () => void): void
+  offEvent?(eventType: string, eventHandler: () => void): void
 }
 
 interface Window {

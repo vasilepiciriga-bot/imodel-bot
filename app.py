@@ -331,6 +331,33 @@ def db_init():
                     )
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_community_votes ON imodel_community_presets(votes DESC)")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_quests (
+                        uid BIGINT NOT NULL,
+                        quest_id TEXT NOT NULL,
+                        progress INT NOT NULL DEFAULT 0,
+                        claimed_date TEXT NOT NULL DEFAULT '',
+                        progress_json TEXT NOT NULL DEFAULT '{}',
+                        PRIMARY KEY (uid, quest_id)
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS imodel_processed_payments (
+                        charge_id TEXT PRIMARY KEY,
+                        uid BIGINT NOT NULL,
+                        payload TEXT NOT NULL,
+                        created_at DOUBLE PRECISION NOT NULL
+                    )
+                """)
+                # Gallery query index — prevents full table scans on every gallery load.
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_jobs_user_gallery "
+                    "ON imodel_jobs(chat_id, status, updated_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_jobs_status_updated "
+                    "ON imodel_jobs(status, updated_at DESC)"
+                )
         DB_READY = True
         log_event("db_ready", backend="postgres")
     except Exception as e:
@@ -423,6 +450,56 @@ def _db_save_credit(uid: int, credits: int):
 
 def _db_load_credits() -> Dict[int, int]:
     return {int(uid): int(credits) for uid, credits in _db_fetchall("SELECT uid, credits FROM imodel_credits")}
+
+
+def _db_save_quest(uid: int, quest_id: str, progress: int, claimed_date: str, progress_json: str = "{}"):
+    _db_execute(
+        "INSERT INTO imodel_quests(uid, quest_id, progress, claimed_date, progress_json) "
+        "VALUES (%s, %s, %s, %s, %s) "
+        "ON CONFLICT (uid, quest_id) DO UPDATE SET "
+        "progress=EXCLUDED.progress, claimed_date=EXCLUDED.claimed_date, progress_json=EXCLUDED.progress_json",
+        (uid, quest_id, progress, claimed_date, progress_json),
+    )
+
+
+def _db_load_quests():
+    """Load quest state into USER_QUEST_PROGRESS and USER_QUEST_CLAIMED."""
+    for uid, quest_id, progress, claimed_date, progress_json_raw in _db_fetchall(
+        "SELECT uid, quest_id, progress, claimed_date, progress_json FROM imodel_quests"
+    ):
+        uid = int(uid)
+        try:
+            pj = json.loads(progress_json_raw or "{}")
+        except Exception:
+            pj = {}
+        if pj:
+            USER_QUEST_PROGRESS.setdefault(uid, {}).update(pj)
+        elif progress:
+            USER_QUEST_PROGRESS.setdefault(uid, {})[str(quest_id)] = int(progress)
+        if claimed_date:
+            USER_QUEST_CLAIMED.setdefault(uid, {})[str(quest_id)] = str(claimed_date)
+
+
+def _db_is_payment_processed(charge_id: str) -> bool:
+    if charge_id in _PROCESSED_PAYMENTS:
+        return True
+    rows = _db_fetchall(
+        "SELECT charge_id FROM imodel_processed_payments WHERE charge_id=%s", (charge_id,)
+    )
+    if rows:
+        _PROCESSED_PAYMENTS.add(charge_id)
+        return True
+    return False
+
+
+def _db_mark_payment_processed(charge_id: str, uid: int, payload: str):
+    _PROCESSED_PAYMENTS.add(charge_id)
+    _db_execute(
+        "INSERT INTO imodel_processed_payments(charge_id, uid, payload, created_at) "
+        "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+        (charge_id, uid, payload, time.time()),
+    )
+
 
 def _db_job_to_dict(row: tuple) -> Dict[str, Any]:
     (
@@ -629,6 +706,21 @@ def stats_load():
             print("[stats] WARNING: no user data found anywhere")
     except Exception as e:
         print("[users] load error:", str(e)[:160])
+    # --- quests ---
+    try:
+        if DB_READY:
+            _db_load_quests()
+            print("[stats] quest state loaded from DB")
+    except Exception as e:
+        print("[quests] load error:", str(e)[:160])
+    # --- processed payments (warm in-memory set) ---
+    try:
+        if DB_READY:
+            for (cid,) in _db_fetchall("SELECT charge_id FROM imodel_processed_payments"):
+                _PROCESSED_PAYMENTS.add(str(cid))
+            print(f"[payments] loaded {len(_PROCESSED_PAYMENTS)} processed charge IDs")
+    except Exception as e:
+        print("[payments] load error:", str(e)[:160])
 
 def stats_incr(key: str, n: int = 1):
     global _STATS_DIRTY
@@ -889,6 +981,27 @@ VIRAL_PACK_STARS    = int(os.getenv("VIRAL_PACK_STARS",    "190"))
 LOCATIONS_PACK_STARS= int(os.getenv("LOCATIONS_PACK_STARS","290"))
 FANTASY_PACK_STARS  = int(os.getenv("FANTASY_PACK_STARS",  "390"))
 
+# Canonical payload → stars map used by pre_checkout validation and payment idempotency.
+# Must be kept in sync with ITEMS in api_shop_invoice and send_stars_invoice.
+def _build_payment_sku_map() -> Dict[str, int]:
+    return {
+        "pack_10":        199,
+        "pack_30":        490,
+        "pack_100":       1290,
+        "pack_300":       2990,
+        "sub_weekly":     SUB_WEEKLY_STARS,
+        "sub_pro":        SUB_PRO_STARS,
+        "sub_elite":      SUB_ELITE_STARS,
+        "premium_pack_1": STYLE_PACK_STARS,
+        "age_pack":       AGE_PACK_STARS,
+        "viral_pack":     VIRAL_PACK_STARS,
+        "locations_pack": LOCATIONS_PACK_STARS,
+        "fantasy_pack":   FANTASY_PACK_STARS,
+    }
+
+# In-memory set of already-processed telegram_payment_charge_ids (survive restarts via DB load).
+_PROCESSED_PAYMENTS: set = set()
+
 # Challenge bonus
 CHALLENGE_BONUS_CREDITS = int(os.getenv("CHALLENGE_BONUS_CREDITS", "2"))
 
@@ -959,6 +1072,15 @@ USER_ROLES: Dict[int, str] = {}
 USER_GRANTS: Dict[int, Set[str]] = {}
 AUDIT_LOG: List[Dict[str, Any]] = []
 JOBS: Dict[str, Dict[str, Any]] = {}
+
+MAX_CONCURRENT_JOBS_PER_USER = 3
+
+def _user_active_jobs_count(uid: int) -> int:
+    """Count queued or running jobs for a user."""
+    return sum(
+        1 for j in JOBS.values()
+        if int(j.get("chat_id") or 0) == uid and j.get("status") in ("queued", "running")
+    )
 
 def is_admin(uid: int, username: Optional[str] = None) -> bool:
     if uid in ADMIN_IDS:
@@ -2548,6 +2670,18 @@ def s3_presign_key(key: str, expires: int = 604800) -> Optional[str]:
         return None
 
 
+def s3_delete_key(key: str) -> bool:
+    """Delete an S3 object by key. Returns True on success."""
+    if not all([S3_BUCKET, S3_KEY_ID, S3_SECRET, S3_ENDPOINT]) or not key:
+        return False
+    try:
+        _s3.delete_object(Bucket=S3_BUCKET, Key=key)
+        return True
+    except Exception as e:
+        print(f"[s3] delete_object error for {key}: {str(e)[:120]}")
+        return False
+
+
 def s3_put_at_key(img_bytes: bytes, key: str, content_type: str = "image/jpeg") -> bool:
     """Upload to S3 at a specific fixed key (no random suffix)."""
     if not all([S3_BUCKET, S3_KEY_ID, S3_SECRET, S3_ENDPOINT]):
@@ -3695,7 +3829,8 @@ async def _send_nudge(uid: int, lang: str):
     granted = 0
 
     if segment == "LAPSE_NOCREDITS":
-        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + 1
+        async with _credits_lock:
+            USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + 1
         _credits_save()
         granted = 1
         text = _pick_nudge_text(segment, lang)
@@ -4550,6 +4685,19 @@ async def cb_sub_plan(c: CallbackQuery):
 
 @dp.pre_checkout_query()
 async def process_pre_checkout_q(pcq: PreCheckoutQuery):
+    known = _build_payment_sku_map()
+    payload = str(pcq.invoice_payload or "")
+    expected_stars = known.get(payload)
+    if (
+        not expected_stars
+        or pcq.currency != "XTR"
+        or pcq.total_amount != expected_stars
+    ):
+        log_event("pre_checkout_rejected", uid=pcq.from_user.id,
+                  payload=payload, amount=pcq.total_amount)
+        await bot.answer_pre_checkout_query(pcq.id, ok=False,
+                                             error_message="Invalid order. Please restart the purchase.")
+        return
     await bot.answer_pre_checkout_query(pcq.id, ok=True)
 
 @dp.message(F.successful_payment)
@@ -4560,6 +4708,12 @@ async def got_payment(m: Message):
     lang = L(uid)
     add = 0
     _touch_user(uid, getattr(m.from_user, "username", None))
+
+    # Idempotency: skip if this charge was already processed
+    charge_id = str(getattr(m.successful_payment, "telegram_payment_charge_id", "") or "")
+    if charge_id and _db_is_payment_processed(charge_id):
+        log_event("payment_duplicate_skipped", uid=uid, charge_id=charge_id, payload=payload)
+        return
 
     is_sub = payload in ("sub_pro", "sub_elite", "sub_weekly")
     if is_sub:
@@ -4576,7 +4730,8 @@ async def got_payment(m: Message):
             "credits_per_month": credits_per_month,
         }
         _subs_save()
-        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
+        async with _credits_lock:
+            USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
         _credits_save()
         is_first = True
         try:
@@ -4607,9 +4762,13 @@ async def got_payment(m: Message):
         elif payload == "pack_30": add = 30
         elif payload == "pack_100": add = 100
         elif payload == "pack_300": add = 300
-        USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
+        async with _credits_lock:
+            USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + add
         _credits_save()
         await safe_answer(m, lang["bought"].format(add=add, all=USER_CREDITS[uid]))
+
+    if charge_id:
+        _db_mark_payment_processed(charge_id, uid, payload)
 
     stats_incr("payments", 1)
     _uadd(uid, "payments", 1)
@@ -4857,14 +5016,19 @@ async def cmd_start(m: Message):
             if ref_id != invited_id and invited_id not in REF_MAP:
                 REF_MAP[invited_id] = ref_id
                 ensure_user_credit(invited_id)
-                USER_CREDITS[invited_id] += REF_BONUS_NEW
+                async with _credits_lock:
+                    USER_CREDITS[invited_id] += REF_BONUS_NEW
                 _credits_save()
                 REF_STATS.setdefault(ref_id, {"count": 0, "earned": 0})
                 REF_STATS[ref_id]["count"] += 1
                 REF_STATS[ref_id]["earned"] += REF_BONUS_REF
-                USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
+                # Sync referrals_sent so invite_1 quest/achievement can read it
+                STATS_USERS_INFO.setdefault(ref_id, {})["referrals_sent"] = REF_STATS[ref_id]["count"]
+                async with _credits_lock:
+                    USER_CREDITS[ref_id] = USER_CREDITS.get(ref_id, FREE_QUOTA) + REF_BONUS_REF
                 _credits_save()
                 _ref_save()
+                _check_and_unlock_achievements(ref_id)
                 stats_incr("referrals", 1)
                 stats_incr("ref_bonus_ref", REF_BONUS_REF)
                 stats_incr("ref_bonus_invited", REF_BONUS_NEW)
@@ -6288,6 +6452,8 @@ async def on_startup():
     missing_vars = [v for v in ["BOT_TOKEN", "REPLICATE_API_TOKEN"] if not os.getenv(v)]
     if missing_vars:
         raise SystemExit(f"❌ Missing required env vars: {missing_vars}")
+    if not os.getenv("WEBHOOK_SECRET"):
+        print("🚨 CRITICAL: WEBHOOK_SECRET is not set — any IP can inject fake Telegram updates including payments!")
     # DB connection pool + init with retry (transient network failures on Railway cold-start)
     _init_db_pool()
     for _db_attempt in range(3):
@@ -6388,7 +6554,8 @@ async def on_shutdown():
 
 def _telegram_webhook_authorized(request: Request) -> bool:
     if not WEBHOOK_SECRET:
-        return True  # секрет не настроен — принимаем все запросы
+        log_event("webhook_no_secret_warning", note="accepting all webhook requests — WEBHOOK_SECRET not set")
+        return True
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     if hmac.compare_digest(header_secret, WEBHOOK_SECRET):
         return True
@@ -6568,12 +6735,20 @@ async def run_webapp_generation_job(job_id: str):
         record_job(job_id, status="failed", error=JOBS.get(job_id, {}).get("error") or "generation_failed")
         return
     output_url, output_s3_key = s3_upload_and_key(final_bytes, key_prefix=f"outputs/webapp/{job_id}_")
+    if not output_url:
+        stats_incr("jobs_failed", 1)
+        record_job(job_id, status="failed", error="s3_upload_failed")
+        credit_cost = get_mode_credit_cost(str(job.get("photoshoot_mode") or "everyday"))
+        if uid:
+            await _refund_credits_n(uid, credit_cost, str(job.get("username") or ""))
+        return
     stats_incr("jobs_done", 1)
     # Variable reward: 10% chance of +1–3 bonus credits
     bonus_credits = 0
     if uid and random.random() < 0.10:
         bonus_credits = random.randint(1, 3)
-        USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + bonus_credits
+        async with _credits_lock:
+            USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + bonus_credits
         analytics_event(uid, "bonus_credits_awarded", {"credits": bonus_credits, "trigger": "generation"})
     # Track last generation timestamp for streak-at-risk
     if uid:
@@ -6584,30 +6759,74 @@ async def run_webapp_generation_job(job_id: str):
     _wjob = JOBS.get(job_id, {})
     analytics_event(_wjob.get("chat_id"), "generation_completed", {"source": "webapp", "mode": "everyday", "job_id": job_id})
     if uid:
+        import datetime as _dt
+        _today = _dt.date.today().isoformat()
+        _quest_incr_daily(uid, "gen_daily_2", _today)
+        _quest_incr_daily(uid, "gen_daily_5", _today)
+        _preset_key = str(job.get("preset_key") or "")
+        if _preset_key:
+            _quest_incr_daily(uid, "try_preset", _today)
+            _ui = STATS_USERS_INFO.setdefault(uid, {})
+            _used = _ui.get("presets_used") if isinstance(_ui.get("presets_used"), list) else []
+            if _preset_key not in _used:
+                _ui["presets_used"] = (_used + [_preset_key])[-50:]
+        # Persist quest progress to DB
+        _pj = USER_QUEST_PROGRESS.get(uid, {})
+        for _qid in ("gen_daily_2", "gen_daily_5", "try_preset"):
+            _db_save_quest(uid, _qid, 0, "", json.dumps(_pj, ensure_ascii=False))
+        _check_and_unlock_achievements(uid)
         _lang = str(job.get("lang") or LANG_DEFAULT)
         asyncio.create_task(_notify_webapp_completion(uid, job_id, [output_url], mode, _lang))
 
 
 async def _run_hd_upscale_job(hd_job_id: str, parent_job_id: str):
+    hd_job = JOBS.get(hd_job_id) or {}
+    uid = int(hd_job.get("chat_id") or 0)
+    username = str(hd_job.get("username") or "")
+    HD_COST = 2
+
+    async def _hd_refund():
+        if uid:
+            await _refund_credits_n(uid, HD_COST, username)
+
     record_job(hd_job_id, status="running")
     try:
         parent = JOBS.get(parent_job_id) or (_db_load_job(parent_job_id) if DB_READY else None)
-        if not parent or not parent.get("output_url"):
+        if not parent:
             record_job(hd_job_id, status="failed", error="parent_not_ready")
+            await _hd_refund()
             return
-        parent_bytes = await asyncio.to_thread(_download_with_retries, parent["output_url"])
+        # Use fresh presigned URL from s3_key to avoid 7-day expiry
+        download_url = None
+        parent_s3_key = parent.get("output_s3_key")
+        if parent_s3_key:
+            download_url = s3_presign_key(parent_s3_key)
+        if not download_url:
+            download_url = parent.get("output_url")
+        if not download_url:
+            record_job(hd_job_id, status="failed", error="parent_not_ready")
+            await _hd_refund()
+            return
+        parent_bytes = await asyncio.to_thread(_download_with_retries, download_url)
         if not parent_bytes:
             record_job(hd_job_id, status="failed", error="download_failed")
+            await _hd_refund()
             return
         hd_bytes = await asyncio.to_thread(enhance_face_codeformer, parent_bytes, 0.6, upscale=4)
         if not hd_bytes:
             record_job(hd_job_id, status="failed", error="enhance_failed")
+            await _hd_refund()
             return
         output_url, output_s3_key = s3_upload_and_key(hd_bytes, key_prefix=f"outputs/webapp/{hd_job_id}_hd_")
+        if not output_url:
+            record_job(hd_job_id, status="failed", error="s3_upload_failed")
+            await _hd_refund()
+            return
         record_job(hd_job_id, status="ready", output_url=output_url, output_s3_key=output_s3_key,
                    output_bytes=len(hd_bytes))
     except Exception as e:
         record_job(hd_job_id, status="failed", error=str(e)[:400])
+        await _hd_refund()
 
 
 async def run_photoshoot_tournament_job(job_id: str):
@@ -7145,6 +7364,11 @@ async def api_gallery_delete(job_id: str, request: Request):
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     uid = int(user["uid"])
+    # Retrieve the job to get s3_key before marking deleted
+    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if job and int(job.get("chat_id") or 0) != uid:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    s3_key = (job or {}).get("output_s3_key")
     if DB_READY:
         _db_execute(
             "UPDATE imodel_jobs SET status='deleted' WHERE job_id=%s AND chat_id=%s",
@@ -7152,6 +7376,9 @@ async def api_gallery_delete(job_id: str, request: Request):
         )
     JOBS.pop(job_id, None)
     _cache_delete_job(job_id)
+    # Remove S3 object so user data is truly deleted (GDPR)
+    if s3_key:
+        await asyncio.to_thread(s3_delete_key, s3_key)
     return {"ok": True}
 
 @app.get("/api/v1/proxy-image")
@@ -7170,21 +7397,42 @@ async def api_proxy_image(url: str, request: Request):
     url = (url or "").strip()
     if not url.startswith("https://"):
         return JSONResponse({"error": "https_only"}, status_code=400)
-    # Basic SSRF guard: block loopback and private network hosts
+    # SSRF guard: resolve hostname to IP and block private/loopback ranges
+    # (also blocks redirect-based SSRF by using allow_redirects=False)
+    import socket as _socket
     try:
         _host = _urlparse(url).hostname or ""
-        if _host in ("localhost", "127.0.0.1", "::1"):
+        if not _host:
+            return JSONResponse({"error": "blocked"}, status_code=400)
+        if _host.lower() in ("localhost", "metadata.google.internal"):
             return JSONResponse({"error": "blocked"}, status_code=400)
         try:
             _addr = _ipaddress.ip_address(_host)
-            if _addr.is_private or _addr.is_loopback:
+            if _addr.is_private or _addr.is_loopback or _addr.is_link_local:
                 return JSONResponse({"error": "blocked"}, status_code=400)
         except ValueError:
-            pass  # hostname — fine
+            # Resolve hostname → check resolved IP
+            try:
+                _resolved = _socket.gethostbyname(_host)
+                _raddr = _ipaddress.ip_address(_resolved)
+                if _raddr.is_private or _raddr.is_loopback or _raddr.is_link_local:
+                    return JSONResponse({"error": "blocked"}, status_code=400)
+            except Exception:
+                pass
     except Exception:
         pass
+
+    def _proxy_download(u: str) -> Optional[bytes]:
+        # allow_redirects=False prevents redirect-based SSRF to internal IPs
+        r = requests.get(u, timeout=30, allow_redirects=False)
+        if r.status_code in (301, 302, 307, 308):
+            return None  # block redirect
+        if r.ok and r.content:
+            return r.content
+        return None
+
     try:
-        data = await asyncio.to_thread(_download_with_retries, url)
+        data = await asyncio.to_thread(_proxy_download, url)
         if not data:
             return JSONResponse({"error": "download_failed"}, status_code=502)
         # Validate content is actually an image (reject HTML pages, etc.)
@@ -7311,8 +7559,12 @@ async def api_community_share(request: Request):
         _save_community_file()
 
     # +5 bonus credits for sharing
-    USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + 5
+    async with _credits_lock:
+        USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + 5
     analytics_event(uid, "community_share", {"key": cp_key, "label": label})
+    import datetime as _dt
+    _quest_incr_daily(uid, "share_photo", _dt.date.today().isoformat())
+    _check_and_unlock_achievements(uid)
     return {"ok": True, "key": cp_key, "already_shared": False}
 
 
@@ -7719,6 +7971,9 @@ async def api_create_generation(request: Request):
     uid = int(user["uid"])
     username = str(user.get("username") or "")
     ensure_user_credit(uid)
+    # Concurrency cap — prevents free users from queuing unlimited Replicate jobs
+    if _user_active_jobs_count(uid) >= MAX_CONCURRENT_JOBS_PER_USER:
+        return JSONResponse({"error": "too_many_active_jobs", "max": MAX_CONCURRENT_JOBS_PER_USER}, status_code=429)
     data = await request.json()
 
     photoshoot_mode = str(data.get("photoshoot_mode") or "everyday").strip()
@@ -8504,7 +8759,8 @@ async def api_claim_daily(request: Request):
     uid = int(user["uid"])
     if is_free_user(uid, str(user.get("username") or "")):
         return JSONResponse({"error": "free_user"}, status_code=400)
-    result = _claim_daily_bonus(uid)
+    async with _credits_lock:
+        result = _claim_daily_bonus(uid)
     if result is None:
         last = USER_LAST_BONUS.get(uid, 0)
         next_at = int(last + DAILY_WINDOW)
@@ -8575,24 +8831,6 @@ async def api_analytics_event(request: Request):
             return JSONResponse({"error": "event required"}, status_code=400)
         props["source"] = "webapp"
         analytics_event(uid, event, props)
-        # Quest progress hooks
-        import datetime as _dt
-        _today = _dt.date.today().isoformat()
-        if event in ("generation_completed", "generation_done"):
-            _quest_incr_daily(uid, "gen_daily_2", _today)
-            _quest_incr_daily(uid, "gen_daily_5", _today)
-            preset_key = props.get("preset_key") or props.get("preset")
-            if preset_key:
-                _quest_incr_daily(uid, "try_preset", _today)
-                # Track presets used for "all_presets" achievement
-                ui = STATS_USERS_INFO.setdefault(uid, {})
-                used = ui.get("presets_used") if isinstance(ui.get("presets_used"), list) else []
-                if preset_key not in used:
-                    ui["presets_used"] = (used + [preset_key])[-50:]
-        elif event == "share_tapped":
-            _quest_incr_daily(uid, "share_photo", _today)
-        elif event == "home_screen_added":
-            USER_QUEST_PROGRESS.setdefault(uid, {})["add_to_home_screen"] = 1
         _check_and_unlock_achievements(uid)
     except Exception:
         pass
@@ -8680,20 +8918,29 @@ async def api_quest_claim(quest_id: str, request: Request):
     uid = int(user["uid"])
     import datetime as _dt
     today = _dt.date.today().isoformat()
-    quests = _quest_progress_for_user(uid, today)
-    quest = next((q for q in quests if q["id"] == quest_id), None)
-    if not quest:
-        return JSONResponse({"error": "quest_not_found"}, status_code=404)
-    if not quest["claimable"]:
-        return JSONResponse({"error": "not_claimable"}, status_code=400)
-    # Grant reward
-    reward = quest["reward"]
-    USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + reward
-    # Mark claimed
-    if uid not in USER_QUEST_CLAIMED:
-        USER_QUEST_CLAIMED[uid] = {}
-    USER_QUEST_CLAIMED[uid][quest_id] = today
+    # For home screen quest, grant progress server-side on claim (no JS hook needed)
+    if quest_id == "add_to_home_screen":
+        USER_QUEST_PROGRESS.setdefault(uid, {})["add_to_home_screen"] = 1
+    async with _credits_lock:
+        quests = _quest_progress_for_user(uid, today)
+        quest = next((q for q in quests if q["id"] == quest_id), None)
+        if not quest:
+            return JSONResponse({"error": "quest_not_found"}, status_code=404)
+        if not quest["claimable"]:
+            return JSONResponse({"error": "not_claimable"}, status_code=400)
+        # Mark claimed atomically before granting
+        if uid not in USER_QUEST_CLAIMED:
+            USER_QUEST_CLAIMED[uid] = {}
+        USER_QUEST_CLAIMED[uid][quest_id] = today
+        # Grant reward
+        reward = quest["reward"]
+        USER_CREDITS[uid] = int(USER_CREDITS.get(uid, 0)) + reward
     analytics_event(uid, "quest_claimed", {"quest_id": quest_id, "reward": reward})
+    # Persist claimed state to DB so it survives restarts
+    _db_save_quest(
+        uid, quest_id, 0, today,
+        json.dumps(USER_QUEST_PROGRESS.get(uid, {}), ensure_ascii=False)
+    )
     # Check achievements after claiming
     _check_and_unlock_achievements(uid)
     return {"ok": True, "credits_added": reward, "new_balance": USER_CREDITS.get(uid, 0)}

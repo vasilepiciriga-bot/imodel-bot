@@ -31,6 +31,10 @@ html, body, #root {
   padding-bottom: env(safe-area-inset-bottom, 8px);
 }
 
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }

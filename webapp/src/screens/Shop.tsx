@@ -170,8 +170,9 @@ export default function Shop() {
                     key={sub.id}
                     whileTap={isActive ? {} : { scale: 0.98 }}
                     className={`rounded-[20px] overflow-hidden border-2 ${
-                      isActive ? 'border-[#34C759]' : meta.badge ? `border-[${meta.color}]/40` : 'border-black/[0.06]'
+                      isActive ? 'border-[#34C759]' : 'border-black/[0.06]'
                     } bg-white`}
+                    style={!isActive && meta.badge ? { borderColor: `${meta.color}66` } : undefined}
                   >
                     {meta.badge && !isActive && (
                       <div className="py-1.5 text-center text-[11px] font-bold text-white"
@@ -393,7 +394,9 @@ export default function Shop() {
         <motion.button
           whileTap={{ scale: 0.98 }}
           onClick={() => {
-            const link = `https://t.me/share/url?url=https://t.me/imodelbot?start=ref_${user?.uid}&text=AI+photo+generator!`
+            const botBase = user?.bot_link ?? 'https://t.me/imodelapp_bot'
+            const refUrl = `${botBase}?start=ref_${user?.uid}`
+            const link = `https://t.me/share/url?url=${encodeURIComponent(refUrl)}&text=${encodeURIComponent('AI photo generator! ✨')}`
             tg?.openLink(link)
             track('referral_share_tapped', { source: 'shop' })
           }}

@@ -287,6 +287,7 @@ export default function Gallery() {
   const setGallery = useAppStore((s) => s.setGallery)
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
+  const setTab = useAppStore((s) => s.setTab)
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [swipeDir, setSwipeDir] = useState(0)
@@ -355,7 +356,9 @@ export default function Gallery() {
   async function handleDelete(jobId: string) {
     try {
       await deletePhoto(jobId)
-      setGallery(gallery.filter((i) => i.job_id !== jobId))
+      const updated = gallery.filter((i) => i.job_id !== jobId)
+      setGallery(updated)
+      setCachedGallery(updated)
       closeLightbox()
       tg?.HapticFeedback?.notificationOccurred('success')
     } catch {
@@ -737,7 +740,10 @@ export default function Gallery() {
                 >
                   <Download size={14} /> {saving ? 'Сохраняю…' : 'Сохранить'}
                 </motion.button>
-                <button className="flex items-center justify-center gap-1.5 py-3 bg-white/[0.18] border border-white/[0.12] rounded-card text-white text-[13px] font-medium">
+                <button
+                  onClick={() => { closeLightbox(); setTab('studio') }}
+                  className="flex items-center justify-center gap-1.5 py-3 bg-white/[0.18] border border-white/[0.12] rounded-card text-white text-[13px] font-medium"
+                >
                   <RefreshCw size={14} /> Redo
                 </button>
                 <button

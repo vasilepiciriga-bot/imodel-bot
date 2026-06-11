@@ -1,6 +1,10 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _tg = () => (window.Telegram?.WebApp as any)
 
+function _authToken(): string {
+  return window.Telegram?.WebApp?.initData ?? ''
+}
+
 /**
  * Save an image to the user's phone.
  *
@@ -25,7 +29,9 @@ export async function saveImageToPhone(url: string): Promise<void> {
 
   // 2. Proxy fetch (same-origin → no CORS in Telegram's WKWebView)
   const proxyUrl = `/api/v1/proxy-image?url=${encodeURIComponent(url)}`
-  const res = await fetch(proxyUrl)
+  const res = await fetch(proxyUrl, {
+    headers: { Authorization: `tma ${_authToken()}` },
+  })
   if (!res.ok) throw new Error(`proxy ${res.status}`)
   const blob = await res.blob()
   const ext = blob.type.includes('png') ? 'png' : 'jpg'
