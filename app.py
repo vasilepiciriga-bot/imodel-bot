@@ -1523,6 +1523,7 @@ T = {
         "menu_lang": "🌐 Язык",
         "onboard_welcome": "📸 *iModel* — профессиональные фото из вашего селфи.\n\nОдин снимок. Тридцать секунд. Результат как у фотографа.\n\n✨ {quota} генерации бесплатно — без регистрации.",
         "onboard_btn": "🚀 Попробовать бесплатно",
+        "onboard_modes_intro": "🎨 *Что умеет iModel:*\n\n{modes_list}\n\nВаш стартовый баланс: *{credits}⚡*",
         "onboard_send_selfie": "📷 Отправьте своё селфи — сделаю первое фото прямо сейчас.\n\n*Совет:* хорошее освещение + лицо крупным планом = лучший результат.",
         "start": "С возвращением ✨\n\nОтправьте селфи — и я создам новое фото.",
         "help": "🆘 Помощь\n\nКак получить лучший результат:\n• Пришлите 1 селфи при ровном свете, без сильных фильтров\n• В описании укажите место, свет, стиль, кадрирование, настроение\n• Быстрый старт: откройте Пресеты и выберите стиль\n• Скопировать сцену: режим ‘Скопировать’ — сначала образец, затем селфи\n\nОплата и баланс:\n• Покупка — раздел ‘Купить’ (Telegram Stars)\n• Списание — только при успешной генерации (кроме whitelist/админ)\n• Промокоды — команда /promo КОД\n\nРеферальная программа:\n• Пригласи друга — ты +{ref_ref}, новый пользователь +{ref_new}\n• Твоя ссылка: /refer\n\nПравила и приватность:\n• Запрещены NSFW/селебы\n• Фото хранятся временно; /clear — очистка, /forget — полное удаление\n\nНужна помощь? Напишите @piciriga — ответим быстро.",
@@ -1625,6 +1626,7 @@ T = {
         "menu_lang": "🌐 Language",
         "onboard_welcome": "📸 *iModel* — professional photos from your selfie.\n\nOne photo. Thirty seconds. Studio-quality result.\n\n✨ {quota} free generations — no sign-up needed.",
         "onboard_btn": "🚀 Try for free",
+        "onboard_modes_intro": "🎨 *What iModel can do:*\n\n{modes_list}\n\nYour starting balance: *{credits}⚡*",
         "onboard_send_selfie": "📷 Send your selfie — I’ll create your first photo right now.\n\n*Tip:* good lighting + face in frame = best result.",
         "start": "Welcome back ✨\n\nSend a selfie and I’ll create a new photo for you.",
         "help": "🆘 Help\n\nBest results:\n• Send 1 selfie in even lighting, minimal filters\n• In your prompt describe location, light, style, framing, mood\n• Quick start: open Presets and pick a style\n• Copy a scene: use ‘Copy’ — first the reference, then your selfie\n\nPayments & balance:\n• Buy in ‘Buy’ (Telegram Stars)\n• Credits are deducted only on successful generation (except whitelist/admin)\n• Promo codes — /promo CODE\n\nReferral program:\n• Invite a friend — you +{ref_ref}, they +{ref_new}\n• Your link: /refer\n\nRules & privacy:\n• NSFW/celebrities are forbidden\n• Photos are stored temporarily; /clear to purge temp, /forget for full delete\n\nNeed help? Message @piciriga — we’ll reply quickly.",
@@ -1727,6 +1729,7 @@ T = {
         "menu_lang": "🌐 Limba",
         "onboard_welcome": "📸 *iModel* — fotografii profesionale din selfie-ul tău.\n\nO poză. Treizeci de secunde. Rezultat de studio.\n\n✨ {quota} generări gratuite — fără înregistrare.",
         "onboard_btn": "🚀 Încearcă gratuit",
+        "onboard_modes_intro": "🎨 *Ce poate face iModel:*\n\n{modes_list}\n\nSoldul tău de start: *{credits}⚡*",
         "onboard_send_selfie": "📷 Trimite selfie-ul tău — creez prima fotografie chiar acum.\n\n*Sfat:* lumină bună + față în cadru = cel mai bun rezultat.",
         "start": "Bun venit înapoi ✨\n\nTrimite un selfie și creez o nouă fotografie pentru tine.",
         "help": "🆘 Ajutor\n\nRezultate mai bune:\n• Trimite 1 selfie cu lumină uniformă, fără filtre puternice\n• În descriere: locație, lumină, stil, încadrare, mood\n• Start rapid: deschide Preseturi și alege un stil\n• Copiere scenă: ‘Copiază’ — mai întâi referința, apoi selfie‑ul\n\nPlăți & sold:\n• Cumpără în ‘Cumpără’ (Stele Telegram)\n• Creditul se scade doar la generare reușită (exceptând whitelist/admin)\n• Cod promo — /promo COD\n\nProgram de recomandări:\n• Invită un prieten — tu +{ref_ref}, el/ea +{ref_new}\n• Linkul tău: /refer\n\nReguli & confidențialitate:\n• NSFW/celebr. interzise\n• Pozele se păstrează temporar; /clear curăță, /forget ștergere totală\n\nAi nevoie de ajutor? Scrie la @piciriga — răspundem rapid.",
@@ -1831,6 +1834,7 @@ T = {
         "menu_lang": "🌐 Sprache",
         "onboard_welcome": "📸 *iModel* — professionelle Fotos aus deinem Selfie.\n\nEin Foto. Dreißig Sekunden. Studio-Qualität.\n\n✨ {quota} kostenlose Generierungen — ohne Anmeldung.",
         "onboard_btn": "🚀 Kostenlos testen",
+        "onboard_modes_intro": "🎨 *Was iModel kann:*\n\n{modes_list}\n\nDein Startguthaben: *{credits}⚡*",
         "onboard_send_selfie": "📷 Schicke dein Selfie — ich erstelle dein erstes Foto jetzt gleich.\n\n*Tipp:* gutes Licht + Gesicht im Bild = bestes Ergebnis.",
         "start": "Willkommen zurück ✨\n\nSchicke ein Selfie und ich erstelle ein neues Foto für dich.",
         "help": "🆘 Hilfe\n\nBeste Ergebnisse:\n• 1 Selfie bei gleichmäßiger Beleuchtung, ohne starke Filter\n• Beschreibe Ort, Licht, Stil, Bildausschnitt, Stimmung\n• Schnellstart: Presets öffnen und Stil wählen\n• Szene kopieren: ‘Kopieren’ — zuerst Referenz, dann Selfie\n\nZahlung & Guthaben:\n• Kaufen in ‘Kaufen’ (Telegram Stars)\n• Abzug nur bei erfolgreicher Generierung (außer Whitelist/Admin)\n• Promo‑Code — /promo CODE\n\nEmpfehlungsprogramm:\n• Freund einladen — du +{ref_ref}, er/sie +{ref_new}\n• Dein Link: /refer\n\nRegeln & Datenschutz:\n• NSFW/Promis verboten\n• Fotos werden temporär gespeichert; /clear löscht temporär, /forget vollständig\n\nBrauchen Sie Hilfe? Schreiben Sie @piciriga — wir antworten schnell.",
@@ -4186,6 +4190,7 @@ async def cmd_start(m: Message):
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
     if m.chat.id not in USER_ONBOARDED:
+        analytics_event(m.chat.id, "onboarding_viewed", {"source": "bot"})
         lang = L(m.chat.id)
         welcome_text = lang["onboard_welcome"].format(quota=FREE_QUOTA)
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -4633,14 +4638,47 @@ async def cb_pricing(c: CallbackQuery):
         hint = lang.get("hint_refer_zero", "Invite a friend: /refer").format(ref_new=REF_BONUS_NEW, ref_ref=REF_BONUS_REF)
         await c.message.answer(hint, reply_markup=kb_invite_buy(c.message.chat.id))
 
+def _build_modes_list(lang_code: str) -> str:
+    """Short mode list for onboarding (top 4 by credit cost ascending)."""
+    label_key = "ru" if lang_code == "ru" else "ro" if lang_code == "ro" else "de" if lang_code == "de" else "en"
+    lines = []
+    for key, cfg in PHOTOSHOOT_MODES.items():
+        if key == "custom":
+            continue
+        label = cfg["label"].get(label_key) or cfg["label"].get("en", key)
+        credits = cfg["credits"]
+        emoji = cfg["emoji"]
+        lines.append((credits, f"{emoji} {label} — {credits}⚡"))
+    lines.sort()
+    return "\n".join(l for _, l in lines[:5])
+
 @dp.callback_query(F.data == "onboard_go")
 async def cb_onboard_go(c: CallbackQuery):
     chat_id = c.message.chat.id
     USER_ONBOARDED.add(chat_id)
     await safe_cb_answer(c)
     lang = L(chat_id)
+    lang_code = USER_LANG.get(chat_id, LANG_DEFAULT)
+    analytics_event(chat_id, "onboarding_started", {"source": "bot"})
+
+    # Step 1: modes overview with credit balance
+    credits = USER_CREDITS.get(chat_id, FREE_QUOTA)
+    modes_list = _build_modes_list(lang_code)
+    modes_text = lang.get("onboard_modes_intro", "🎨 *What iModel can do:*\n\n{modes_list}\n\nYour starting balance: *{credits}⚡*")
+    await c.message.answer(modes_text.format(modes_list=modes_list, credits=credits), parse_mode="Markdown")
+    await asyncio.sleep(0.4)
+
+    # Step 2: selfie prompt + Open Studio button
     selfie_prompt = lang.get("onboard_send_selfie", "📷 Send your selfie — I'll create your first photo right now.")
-    await c.message.answer(selfie_prompt, parse_mode="Markdown")
+    rows = []
+    if WEBHOOK_BASE:
+        rows.append([InlineKeyboardButton(
+            text="📱 Open Studio",
+            web_app=WebAppInfo(url=f"{WEBHOOK_BASE}/webapp"),
+        )])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    await c.message.answer(selfie_prompt, reply_markup=kb, parse_mode="Markdown")
+    analytics_event(chat_id, "onboarding_completed", {"source": "bot"})
 
 
 @dp.callback_query(F.data == "balance")

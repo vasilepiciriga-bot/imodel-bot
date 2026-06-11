@@ -1,7 +1,8 @@
-import { Suspense, lazy, useEffect } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { TabBar } from './components/layout/TabBar'
 import { ScreenSkeleton } from './components/shared/ScreenSkeleton'
+import { OnboardingOverlay, useOnboarding } from './components/shared/OnboardingOverlay'
 import { useAuth } from './hooks/useAuth'
 import { useAppStore } from './store/appStore'
 import { track } from './api/analytics'
@@ -41,11 +42,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 export default function App() {
   const tab = useAppStore((s) => s.tab)
   const Screen = SCREENS[tab]
+  const needsOnboarding = useOnboarding()
+  const [showOnboarding, setShowOnboarding] = useState(needsOnboarding)
 
   useEffect(() => { track('tab_viewed', { tab }) }, [tab])
+  useEffect(() => {
+    if (needsOnboarding) track('onboarding_viewed', { source: 'webapp' })
+  }, [needsOnboarding])
 
   return (
     <AuthGate>
+      <AnimatePresence>
+        {showOnboarding && (
+          <OnboardingOverlay onDone={() => setShowOnboarding(false)} />
+        )}
+      </AnimatePresence>
       <div className="flex flex-col h-screen bg-[#F5F5F7] overflow-hidden" style={{ maxWidth: 480, margin: '0 auto' }}>
         <div className="flex-1 overflow-hidden">
           <AnimatePresence mode="wait">
