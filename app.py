@@ -2817,6 +2817,48 @@ def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = Tru
     final = f"{base}. {IDENTITY_LOCK}".strip()
     return final
 
+# ===== AI Caption Generator =====
+def _fallback_captions(style_label: str) -> List[str]:
+    tag = "#" + style_label.lower().replace(" ", "").replace("-", "")
+    return [
+        f"Living my best life ✨ {tag} #AIPhotos #PortraitPhotography",
+        f"AI did that 🤖📸 {tag} #AIArt #DigitalArt",
+        f"New look, who dis? 👀 {tag} #PhotoEdit #AIGenerated",
+    ]
+
+def generate_captions_gpt(style_label: str, mode_key: str) -> List[str]:
+    if not OPENAI_API_KEY or OpenAI is None:
+        return _fallback_captions(style_label)
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        style_desc = style_label if style_label else mode_key
+        sys_msg = (
+            "You are a social media copywriter for AI portrait photography. "
+            "Write punchy, authentic captions that feel human — not AI-generated. "
+            "Each caption must be under 150 characters including hashtags. "
+            "Include 3–5 relevant hashtags at the end of each caption."
+        )
+        user_msg = (
+            f"Write 3 distinct captions for an AI portrait in the '{style_desc}' style. "
+            "Vary the tone: one playful, one confident, one aspirational. "
+            "Separate each caption with '---' on its own line. No numbering or labels."
+        )
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "system", "content": sys_msg},
+                      {"role": "user", "content": user_msg}],
+            temperature=0.85,
+            max_tokens=400,
+            timeout=30,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        parts = [c.strip() for c in raw.split("---") if c.strip()]
+        return parts[:3] if len(parts) >= 1 else _fallback_captions(style_label)
+    except Exception as e:
+        print("GPT caption error:", str(e)[:200])
+        return _fallback_captions(style_label)
+
+
 # ===== Vision: извлечение «scene spec» из style-рефа =====
 def craft_scene_spec_from_image(style_bytes: bytes) -> Optional[str]:
     if not OPENAI_API_KEY or OpenAI is None:
@@ -6762,6 +6804,23 @@ async def api_gift_create(request: Request):
     bot_username = BOT_USERNAME_GLOBAL or "imodelapp_bot"
     link = f"https://t.me/{bot_username}?start={code}"
     return {"code": code, "credits": amount, "link": link}
+
+
+@app.post("/api/v1/caption/generate")
+async def api_caption_generate(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad_request"}, status_code=400)
+    style = str(data.get("style") or "portrait")
+    mode = str(data.get("mode") or "portrait")
+    captions = await asyncio.to_thread(generate_captions_gpt, style, mode)
+    analytics_event(uid, "caption_generated", {"style": style, "mode": mode})
+    return {"captions": captions}
 
 
 @app.get("/p/{uid}")

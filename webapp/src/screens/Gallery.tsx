@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Download, RefreshCw, Star, Images, Trophy, Share2 } from 'lucide-react'
+import { X, Download, RefreshCw, Star, Images, Trophy, Share2, Pencil, Copy, Check } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { getGallery, getCachedGallery, setCachedGallery, requestHD } from '../api/generations'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { getMe } from '../api/session'
+import { generateCaption } from '../api/caption'
 import { track } from '../api/analytics'
 import type { Generation } from '../types'
 
@@ -80,6 +81,97 @@ function LeaderboardModal({ data, onClose }: { data: LeaderboardData; onClose: (
   )
 }
 
+function CaptionSheet({ captions, onClose, onRegenerate, loading }: {
+  captions: string[]
+  onClose: () => void
+  onRegenerate: () => void
+  loading: boolean
+}) {
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
+
+  function copyCaption(text: string, idx: number) {
+    navigator.clipboard.writeText(text).catch(() => null)
+    tg?.HapticFeedback?.notificationOccurred('success')
+    setCopiedIdx(idx)
+    setTimeout(() => setCopiedIdx(null), 2000)
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[60] flex flex-col bg-black/60"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+        className="mt-auto bg-[#1C1C1E] rounded-t-[24px] pb-safe"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex justify-center pt-3 pb-1">
+          <div className="w-8 h-1 bg-white/20 rounded-full" />
+        </div>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+          <div>
+            <h2 className="text-[17px] font-bold text-white">📝 Caption Ideas</h2>
+            <p className="text-[12px] text-white/50 mt-0.5">Tap to copy · ready for IG & TikTok</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
+            <X size={16} className="text-white/70" />
+          </button>
+        </div>
+        <div className="px-4 py-3 space-y-2">
+          {loading ? (
+            <div className="flex items-center justify-center py-8 gap-3">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+                className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
+              />
+              <span className="text-[13px] text-white/60">Writing captions…</span>
+            </div>
+          ) : (
+            captions.map((cap, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.06 }}
+                className="flex items-start gap-3 p-3 rounded-[14px] bg-white/8"
+              >
+                <p className="flex-1 text-[13px] text-white/90 leading-relaxed">{cap}</p>
+                <button
+                  onClick={() => copyCaption(cap, i)}
+                  className="shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center mt-0.5"
+                >
+                  {copiedIdx === i
+                    ? <Check size={13} className="text-[#34C759]" />
+                    : <Copy size={13} className="text-white/60" />
+                  }
+                </button>
+              </motion.div>
+            ))
+          )}
+        </div>
+        <div className="px-4 pb-5 pt-1">
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={onRegenerate}
+            disabled={loading}
+            className="w-full py-3 rounded-[14px] bg-[#6C47FF]/20 text-[#A88FFF] text-[14px] font-semibold disabled:opacity-40"
+          >
+            {loading ? 'Regenerating…' : '✨ Regenerate captions'}
+          </motion.button>
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
+
 export default function Gallery() {
   const gallery = useAppStore((s) => s.gallery)
   const setGallery = useAppStore((s) => s.setGallery)
@@ -90,6 +182,9 @@ export default function Gallery() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [showLeaderboard, setShowLeaderboard] = useState(false)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
+  const [captions, setCaptions] = useState<string[]>([])
+  const [captionLoading, setCaptionLoading] = useState(false)
+  const [showCaptions, setShowCaptions] = useState(false)
 
   useEffect(() => {
     const cached = getCachedGallery()
@@ -114,6 +209,36 @@ export default function Gallery() {
       alert(msg)
     } finally {
       setHdLoading(false)
+    }
+  }
+
+  async function handleCaption(job: Generation) {
+    tg?.HapticFeedback?.impactOccurred('light')
+    setShowCaptions(true)
+    setCaptionLoading(true)
+    const style = job.preset_key ?? job.photoshoot_mode ?? job.mode ?? 'portrait'
+    const mode = job.photoshoot_mode ?? job.mode ?? 'portrait'
+    try {
+      const { captions: caps } = await generateCaption(style, mode)
+      setCaptions(caps)
+      track('caption_viewed', { style, mode })
+    } catch {
+      setCaptions(['Could not generate captions. Try again.'])
+    } finally {
+      setCaptionLoading(false)
+    }
+  }
+
+  async function regenerateCaption(job: Generation) {
+    setCaptionLoading(true)
+    const style = job.preset_key ?? job.photoshoot_mode ?? job.mode ?? 'portrait'
+    const mode = job.photoshoot_mode ?? job.mode ?? 'portrait'
+    try {
+      const { captions: caps } = await generateCaption(style, mode)
+      setCaptions(caps)
+      track('caption_regenerated', { style })
+    } catch { /* noop */ } finally {
+      setCaptionLoading(false)
     }
   }
 
@@ -283,7 +408,7 @@ export default function Gallery() {
               />
             </motion.div>
 
-            <div className="grid grid-cols-3 gap-2 p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="grid grid-cols-2 gap-2 p-4" onClick={(e) => e.stopPropagation()}>
               <a
                 href={lightbox.hd_url ?? lightbox.output_url}
                 download
@@ -303,6 +428,12 @@ export default function Gallery() {
               >
                 <Star size={14} /> {lightbox.hd_url ? 'HD ✓' : 'HD · 2⚡'}
               </button>
+              <button
+                onClick={() => handleCaption(lightbox)}
+                className="flex items-center justify-center gap-1.5 py-3 bg-[#FF9500]/20 rounded-card text-[#FF9500] text-[13px] font-medium"
+              >
+                <Pencil size={14} /> Caption
+              </button>
             </div>
           </motion.div>
         )}
@@ -312,6 +443,18 @@ export default function Gallery() {
       <AnimatePresence>
         {showLeaderboard && leaderboard && (
           <LeaderboardModal data={leaderboard} onClose={() => setShowLeaderboard(false)} />
+        )}
+      </AnimatePresence>
+
+      {/* Caption sheet */}
+      <AnimatePresence>
+        {showCaptions && (
+          <CaptionSheet
+            captions={captions}
+            loading={captionLoading}
+            onClose={() => { setShowCaptions(false); setCaptions([]) }}
+            onRegenerate={() => lightbox && regenerateCaption(lightbox)}
+          />
         )}
       </AnimatePresence>
     </div>
