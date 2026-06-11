@@ -1,11 +1,12 @@
 import { useState, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { X, Zap, Crown, Star } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { createInvoice } from '../../api/shop'
 import { getMe } from '../../api/session'
 import { useAppStore } from '../../store/appStore'
 import { track } from '../../api/analytics'
+import { useExperiment } from '../../hooks/useExperiment'
 
 const tg = window.Telegram?.WebApp
 
@@ -25,11 +26,26 @@ function getSegment(gens: number, payments: number): Segment {
   return 'blocked'
 }
 
+// control copy (segment-aware)
 const COPY: Record<Segment, { headline: string; sub: string }> = {
   first:   { headline: '✨ Free credits used', sub: 'Liked what you saw? The best results are still ahead.' },
   active:  { headline: '⚡ Out of generations', sub: "You're on a roll — keep creating with a pack." },
   paid:    { headline: '💎 Credits used up', sub: "You already know the quality. Don't stop now." },
   blocked: { headline: '💎 Out of credits', sub: 'Pick a plan to keep generating.' },
+}
+// urgency variant
+const COPY_URGENCY: Record<Segment, { headline: string; sub: string }> = {
+  first:   { headline: '⏳ Don\'t lose your momentum', sub: 'Get more credits now and keep your creative streak going.' },
+  active:  { headline: '🔥 Keep the streak alive', sub: 'You\'re generating great photos — don\'t stop here.' },
+  paid:    { headline: '⚡ Recharge before you forget', sub: 'Top up now and jump back in instantly.' },
+  blocked: { headline: '⏳ Credits needed', sub: 'Grab a pack and generate your next photo right away.' },
+}
+// social proof variant
+const COPY_SOCIAL: Record<Segment, { headline: string; sub: string }> = {
+  first:   { headline: '✨ Join 10,000+ creators', sub: 'Most users upgrade after their first result. See why.' },
+  active:  { headline: '⭐ Top creators generate daily', sub: 'Pick up a pack and stay ahead of the leaderboard.' },
+  paid:    { headline: '💎 Power users never run dry', sub: 'Stay in the top 10% — recharge now.' },
+  blocked: { headline: '📈 Thousands generate every day', sub: 'Pick a plan and keep creating with them.' },
 }
 
 interface Props {
@@ -48,11 +64,15 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
   const gens = user?.gens_ok ?? 0
   const payments = user?.payments ?? 0
   const segment = getSegment(gens, payments)
-  const { headline, sub } = COPY[segment]
+  const paywallVariant = useExperiment('paywall_copy')
+  const copyMap = paywallVariant === 'urgency' ? COPY_URGENCY
+    : paywallVariant === 'social_proof' ? COPY_SOCIAL
+    : COPY
+  const { headline, sub } = copyMap[segment]
 
   const handleBuy = useCallback(async (packId: string, stars: number) => {
     tg?.HapticFeedback?.impactOccurred('medium')
-    track('paywall_buy_tapped', { pack: packId, stars, segment })
+    track('paywall_buy_tapped', { pack: packId, stars, segment, variant: paywallVariant })
     setBuyingId(packId)
     try {
       const { invoice_url } = await createInvoice(packId)
@@ -60,7 +80,7 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
         if (status === 'paid') {
           confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
           tg?.HapticFeedback?.notificationOccurred('success')
-          track('paywall_converted', { pack: packId, stars, segment })
+          track('paywall_converted', { pack: packId, stars, segment, variant: paywallVariant })
           const updated = await getMe()
           setUser(updated)
           updateCredits(updated.credits)

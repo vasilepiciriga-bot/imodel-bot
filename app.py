@@ -71,6 +71,7 @@ from photoshoot_modes import (
     _score_candidate,
     step_label_text,
 )
+from experiments import get_variant, all_variants, nudge_interval_hours, EXPERIMENTS
 
 # ===================== ENV ==========================
 BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
@@ -1523,6 +1524,7 @@ T = {
         "menu_lang": "🌐 Язык",
         "onboard_welcome": "📸 *iModel* — профессиональные фото из вашего селфи.\n\nОдин снимок. Тридцать секунд. Результат как у фотографа.\n\n✨ {quota} генерации бесплатно — без регистрации.",
         "onboard_btn": "🚀 Попробовать бесплатно",
+        "onboard_btn_examples": "📸 Посмотреть примеры →",
         "onboard_modes_intro": "🎨 *Что умеет iModel:*\n\n{modes_list}\n\nВаш стартовый баланс: *{credits}⚡*",
         "onboard_send_selfie": "📷 Отправьте своё селфи — сделаю первое фото прямо сейчас.\n\n*Совет:* хорошее освещение + лицо крупным планом = лучший результат.",
         "start": "С возвращением ✨\n\nОтправьте селфи — и я создам новое фото.",
@@ -1629,6 +1631,7 @@ T = {
         "menu_lang": "🌐 Language",
         "onboard_welcome": "📸 *iModel* — professional photos from your selfie.\n\nOne photo. Thirty seconds. Studio-quality result.\n\n✨ {quota} free generations — no sign-up needed.",
         "onboard_btn": "🚀 Try for free",
+        "onboard_btn_examples": "📸 See AI examples →",
         "onboard_modes_intro": "🎨 *What iModel can do:*\n\n{modes_list}\n\nYour starting balance: *{credits}⚡*",
         "onboard_send_selfie": "📷 Send your selfie — I’ll create your first photo right now.\n\n*Tip:* good lighting + face in frame = best result.",
         "start": "Welcome back ✨\n\nSend a selfie and I’ll create a new photo for you.",
@@ -2928,9 +2931,10 @@ def _nudge_eligible(uid: int) -> bool:
     total = int(ni.get("count", 0))
     if total >= NUDGE_MAX_TOTAL:
         return False
-    # Minimum gap since last nudge
+    # Minimum gap since last nudge (per-user via experiment)
     last_sent = float(ni.get("last_sent", 0))
-    if last_sent and now - last_sent < NUDGE_MIN_GAP_HOURS * 3600:
+    gap_hours = nudge_interval_hours(uid)  # 24h or 48h via experiment
+    if last_sent and now - last_sent < gap_hours * 3600:
         return False
     # Weekly cap: count sends in last 7 days
     sent_timestamps = ni.get("sent_timestamps") or []
@@ -3179,7 +3183,10 @@ async def _send_nudge(uid: int, lang: str):
         week_ago = now - 7 * 24 * 3600
         ni["sent_timestamps"] = [t for t in stamps if float(t) > week_ago]
         _nudge_save()
-        analytics_event(uid, "nudge_sent", {"segment": segment, "granted": granted})
+        analytics_event(uid, "nudge_sent", {
+            "segment": segment, "granted": granted,
+            "variant_nudge_interval": get_variant(uid, "nudge_interval"),
+        })
         stats_incr("nudges_sent", 1)
         stats_incr(f"nudge_{segment.lower()}", 1)
         if granted:
@@ -4214,11 +4221,17 @@ async def cmd_start(m: Message):
     ensure_user_credit(m.chat.id)
     USER_SEEN_TEXT.discard(m.chat.id)
     if m.chat.id not in USER_ONBOARDED:
-        analytics_event(m.chat.id, "onboarding_viewed", {"source": "bot"})
+        _onb_variant = get_variant(m.chat.id, "onboarding_cta")
+        analytics_event(m.chat.id, "onboarding_viewed", {"source": "bot", "variant": _onb_variant})
         lang = L(m.chat.id)
         welcome_text = lang["onboard_welcome"].format(quota=FREE_QUOTA)
+        _onb_btn = (
+            lang.get("onboard_btn_examples", "📸 See AI examples →")
+            if _onb_variant == "see_examples"
+            else lang["onboard_btn"]
+        )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=lang["onboard_btn"], callback_data="onboard_go")],
+            [InlineKeyboardButton(text=_onb_btn, callback_data="onboard_go")],
             [
                 InlineKeyboardButton(text="🇷🇺", callback_data="set_lang_ru"),
                 InlineKeyboardButton(text="🇬🇧", callback_data="set_lang_en"),
@@ -6039,6 +6052,18 @@ def _leaderboard_display_name(uid: int, username: str) -> str:
         return f"@{visible}***"
     return f"User #{uid % 10000:04d}"
 
+@app.get("/api/v1/experiments")
+async def api_experiments(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    assignments = all_variants(uid)
+    # Log exposure for any newly-seen variants
+    for exp_name, variant in assignments.items():
+        analytics_event(uid, "experiment_exposure", {"experiment": exp_name, "variant": variant})
+    return {"assignments": assignments}
+
 @app.get("/api/v1/leaderboard")
 async def api_leaderboard(request: Request):
     user = webapp_user_from_request(request)
@@ -6595,6 +6620,60 @@ async def http_metrics(request: Request):
     resp["db_ready"] = DB_READY
     return resp
 
+def _admin_experiments_section() -> str:
+    """Experiment results: exposures + downstream conversion per variant."""
+    if not DB_READY:
+        return ""
+    try:
+        # For each active experiment, get exposure counts per variant
+        # and purchase_completed counts for users who saw each variant
+        rows = _db_fetchall(
+            "SELECT props_json, COUNT(*) FROM imodel_events "
+            "WHERE event='experiment_exposure' GROUP BY props_json",
+            (),
+        )
+        # Aggregate: {experiment: {variant: exposure_count}}
+        exp_counts: Dict[str, Dict[str, int]] = {}
+        for props_json, cnt in rows:
+            try:
+                import json as _json
+                p = _json.loads(props_json)
+                exp = p.get("experiment", "")
+                var = p.get("variant", "")
+                if exp and var:
+                    exp_counts.setdefault(exp, {}).setdefault(var, 0)
+                    exp_counts[exp][var] += int(cnt)
+            except Exception:
+                continue
+        if not exp_counts:
+            return ""
+        sections = []
+        for exp_name, variant_counts in exp_counts.items():
+            exp_cfg = EXPERIMENTS.get(exp_name, {})
+            desc = exp_cfg.get("description", exp_name)
+            status = "🟢 active" if exp_cfg.get("active") else "🔴 off"
+            traffic = int(float(exp_cfg.get("traffic", 1.0)) * 100)
+            trs = "".join(
+                f"<tr><td>{var}</td><td>{cnt:,}</td></tr>"
+                for var, cnt in sorted(variant_counts.items(), key=lambda x: -x[1])
+            )
+            sections.append(
+                f"<div style='margin-bottom:16px'>"
+                f"<div style='margin-bottom:6px'><b>{exp_name}</b> <span class='muted'>{desc}</span> "
+                f"<span class='pill'>{status}</span> <span class='pill'>{traffic}% traffic</span></div>"
+                f"<table><tr><th>Variant</th><th>Exposures</th></tr>{trs}</table>"
+                f"</div>"
+            )
+        return f"""
+      <div class="section">
+        <div class="card">
+          <div class="muted">A/B Experiments</div>
+          <div style="margin-top:12px">{''.join(sections)}</div>
+        </div>
+      </div>"""
+    except Exception as e:
+        return f'<div class="section"><div class="card muted">Experiment data unavailable: {str(e)[:80]}</div></div>'
+
 def _pct(num: float | None) -> str:
     if num is None:
         return "—"
@@ -6994,6 +7073,7 @@ async def admin_panel(request: Request):
 
       {_admin_funnel_section()}
       {_admin_nudge_section()}
+      {_admin_experiments_section()}
       {_admin_daily_trend_section()}
 
     </div>
