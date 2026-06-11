@@ -23,6 +23,7 @@ export interface UserProfile {
   payments?: number
   portfolio_public?: boolean
   portfolio_url?: string
+  role?: string
 }
 
 export interface Preset {

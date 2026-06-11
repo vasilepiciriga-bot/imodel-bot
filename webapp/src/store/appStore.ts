@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { UserProfile, Preset, Generation, GenerationMode, PhotoshootModeKey, Challenge } from '../types'
 
-type Tab = 'studio' | 'styles' | 'gallery' | 'shop' | 'profile'
+type Tab = 'studio' | 'styles' | 'gallery' | 'shop' | 'profile' | 'admin'
 
 interface AppState {
   tab: Tab

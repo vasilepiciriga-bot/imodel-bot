@@ -7279,10 +7279,88 @@ async def api_photoshoot_modes(request: Request):
     return {"modes": result}
 
 
+def _check_admin_auth(request: Request) -> bool:
+    """Accept either X-Admin-Secret header OR a TMA-authenticated admin user."""
+    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
+    if ADMIN_PANEL_SECRET and secret == ADMIN_PANEL_SECRET:
+        return True
+    user = webapp_user_from_request(request)
+    if user:
+        uid = int(user["uid"])
+        username = str(user.get("username") or "")
+        if "admin.view" in grants_for_user(uid, username):
+            return True
+    return False
+
+
+@app.get("/api/v1/admin/dashboard")
+async def api_admin_dashboard(request: Request):
+    if not _check_admin_auth(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    now = time.time()
+    users_total = len(STATS_USERS_INFO)
+    users_active_24h = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 86400)
+    users_active_7d  = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 7*86400)
+    users_online_5m  = sum(1 for u in STATS_USERS_INFO.values() if now - float(u.get("last_seen", 0)) <= 300)
+
+    def sum_daily(keys: List[str], days: int) -> int:
+        out = 0
+        for d in range(days):
+            dk = _date_key(now - d * 86400)
+            dm = STATS_DAILY.get(dk) or {}
+            for k in keys:
+                out += int(dm.get(k, 0))
+        return out
+
+    def range_m(days: int) -> Dict[str, int]:
+        return {
+            "gens": sum_daily(["gens_ok", "gens_copy_ok"], days),
+            "payments": sum_daily(["payments"], days),
+            "new_users": sum_daily(["new_users"], days),
+            "referrals": sum_daily(["referrals"], days),
+        }
+
+    day_m   = range_m(1)
+    week_m  = range_m(7)
+    month_m = range_m(30)
+
+    top_gens = sorted(
+        [
+            {
+                "uid": uid,
+                "username": u.get("username") or "",
+                "gens": int(u.get("gens_ok", 0)) + int(u.get("gens_copy_ok", 0)),
+                "payments": int(u.get("payments", 0)),
+                "last_seen": float(u.get("last_seen", 0)),
+            }
+            for uid, u in STATS_USERS_INFO.items()
+        ],
+        key=lambda x: x["gens"],
+        reverse=True,
+    )[:10]
+
+    total_gens = int(STATS.get("gens_ok", 0)) + int(STATS.get("gens_copy_ok", 0))
+    total_payments = sum(int(u.get("payments", 0)) for u in STATS_USERS_INFO.values())
+
+    return {
+        "users_total": users_total,
+        "users_active_24h": users_active_24h,
+        "users_active_7d": users_active_7d,
+        "users_online_5m": users_online_5m,
+        "total_gens": total_gens,
+        "total_payments": total_payments,
+        "today": day_m,
+        "week": week_m,
+        "month": month_m,
+        "top_gens": top_gens,
+        "broadcast_running": bool(_broadcast_running.get("status") == "running"),
+        "broadcast_history": BROADCAST_HISTORY[:5],
+    }
+
+
 @app.get("/api/v1/admin/broadcast")
 async def api_admin_broadcast_status(request: Request):
-    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
-    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+    if not _check_admin_auth(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     segments = {k: {"desc": v, "size": len(_broadcast_segment_uids(k))} for k, v in BROADCAST_SEGMENTS.items()}
     return {
@@ -7293,8 +7371,7 @@ async def api_admin_broadcast_status(request: Request):
 
 @app.post("/api/v1/admin/broadcast")
 async def api_admin_broadcast_send(request: Request):
-    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
-    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+    if not _check_admin_auth(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     if _broadcast_running.get("status") == "running":
         return JSONResponse({"error": "campaign_already_running"}, status_code=409)
@@ -7335,8 +7412,7 @@ async def api_admin_broadcast_send(request: Request):
 
 @app.delete("/api/v1/admin/broadcast")
 async def api_admin_broadcast_cancel(request: Request):
-    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
-    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+    if not _check_admin_auth(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     if _broadcast_running.get("status") == "running":
         _broadcast_running["status"] = "cancelled"
@@ -7360,8 +7436,7 @@ def _admin_resolve_user(q: str) -> Optional[int]:
 
 @app.get("/api/v1/admin/user")
 async def api_admin_user_lookup(request: Request):
-    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
-    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+    if not _check_admin_auth(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     q = str(request.query_params.get("q") or "").strip()
     if not q:
@@ -7393,8 +7468,7 @@ async def api_admin_user_lookup(request: Request):
 
 @app.post("/api/v1/admin/user/credits")
 async def api_admin_user_credits(request: Request):
-    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
-    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+    if not _check_admin_auth(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()
@@ -7418,8 +7492,7 @@ async def api_admin_user_credits(request: Request):
 
 @app.post("/api/v1/admin/user/message")
 async def api_admin_user_message(request: Request):
-    secret = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
-    if not ADMIN_PANEL_SECRET or secret != ADMIN_PANEL_SECRET:
+    if not _check_admin_auth(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()

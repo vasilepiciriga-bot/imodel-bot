@@ -12,8 +12,9 @@ const Styles  = lazy(() => import('./screens/Styles'))
 const Gallery = lazy(() => import('./screens/Gallery'))
 const Shop    = lazy(() => import('./screens/Shop'))
 const Profile = lazy(() => import('./screens/Profile'))
+const Admin   = lazy(() => import('./screens/Admin'))
 
-const SCREENS = { studio: Studio, styles: Styles, gallery: Gallery, shop: Shop, profile: Profile }
+const SCREENS = { studio: Studio, styles: Styles, gallery: Gallery, shop: Shop, profile: Profile, admin: Admin }
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { loading, error } = useAuth()
@@ -41,7 +42,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const tab = useAppStore((s) => s.tab)
-  const Screen = SCREENS[tab]
+  const Screen = SCREENS[tab as keyof typeof SCREENS] ?? SCREENS.studio
   const needsOnboarding = useOnboarding()
   const [showOnboarding, setShowOnboarding] = useState(needsOnboarding)
 
