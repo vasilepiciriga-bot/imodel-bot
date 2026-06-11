@@ -1,5 +1,6 @@
 """
 Photoshoot Mode System — single source of truth for all mode configs.
+Phase 2: added style_variants (sub-style branching) and negative_layer per mode.
 Imported by app.py.
 """
 from __future__ import annotations
@@ -17,6 +18,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_factor": 2,
         "upscale_fidelity": 0.8,
         "prompt_layer": None,
+        "negative_layer": None,
+        "style_variants": {},
         "is_premium": False,
         "requires_custom_prompt": False,
         "badge": None,
@@ -31,7 +34,22 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale": True,
         "upscale_factor": 2,
         "upscale_fidelity": 0.8,
-        "prompt_layer": None,
+        "prompt_layer": "professional portrait photography, studio lighting, sharp focus, magazine quality",
+        "negative_layer": "snapshot, casual, blur, overexposed, grainy",
+        "style_variants": {
+            "studio": {
+                "label": {"en": "Studio", "ru": "Студия"},
+                "prompt_suffix": "neutral studio backdrop, soft box lighting, clean background",
+            },
+            "outdoor": {
+                "label": {"en": "Outdoor", "ru": "На улице"},
+                "prompt_suffix": "golden hour natural light, outdoor lifestyle, bokeh background",
+            },
+            "moody": {
+                "label": {"en": "Moody", "ru": "Атмосферный"},
+                "prompt_suffix": "dramatic shadows, cinematic Rembrandt lighting, rich tones",
+            },
+        },
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "popular",
@@ -53,6 +71,24 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
             "editorial Vogue magazine quality, high fashion avant-garde styling, "
             "luxury brand campaign, art director composition, ultra-premium photoshoot"
         ),
+        "negative_layer": (
+            "casual clothing, outdoor snapshot, low contrast, amateur, overprocessed, "
+            "flat lighting, Instagram filter"
+        ),
+        "style_variants": {
+            "editorial": {
+                "label": {"en": "Editorial", "ru": "Редакционный"},
+                "prompt_suffix": "editorial spread, strong shadows, dramatic geometric composition, bold colors",
+            },
+            "street_fashion": {
+                "label": {"en": "Street Fashion", "ru": "Уличный стиль"},
+                "prompt_suffix": "street style, urban backdrop, motion blur background, candid elegance",
+            },
+            "minimal": {
+                "label": {"en": "Minimalist", "ru": "Минимализм"},
+                "prompt_suffix": "clean white studio, minimalist aesthetic, pure elegance, negative space",
+            },
+        },
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "best_quality",
@@ -74,6 +110,24 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
             "corporate executive portrait, confident leadership presence, "
             "tailored business suit, authoritative gaze, LinkedIn-ready, boardroom or studio"
         ),
+        "negative_layer": (
+            "casual outfit, t-shirt, unformal, blurry, overexposed, cluttered background, "
+            "low resolution, distorted face"
+        ),
+        "style_variants": {
+            "formal": {
+                "label": {"en": "Formal Office", "ru": "Офис"},
+                "prompt_suffix": "boardroom interior, floor-to-ceiling windows, city skyline behind",
+            },
+            "founder": {
+                "label": {"en": "Founder", "ru": "Founder"},
+                "prompt_suffix": "startup vibe, casual blazer, open-plan office, approachable leadership",
+            },
+            "outdoor": {
+                "label": {"en": "Outdoor Executive", "ru": "На природе"},
+                "prompt_suffix": "rooftop or garden terrace, natural light, relaxed confidence",
+            },
+        },
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "for_business",
@@ -95,6 +149,24 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
             "natural warm smile, approachable likeable personality, "
             "candid lifestyle photography, authentic relaxed look, social media quality"
         ),
+        "negative_layer": (
+            "serious expression, stiff pose, corporate look, dark background, "
+            "overfiltered, artificial makeup"
+        ),
+        "style_variants": {
+            "casual": {
+                "label": {"en": "Casual & Warm", "ru": "Повседневный"},
+                "prompt_suffix": "coffee shop or park, casual outfit, genuine laugh, warm tones",
+            },
+            "travel": {
+                "label": {"en": "Travel Vibe", "ru": "Путешествие"},
+                "prompt_suffix": "scenic travel backdrop, adventure spirit, wanderlust lifestyle",
+            },
+            "social": {
+                "label": {"en": "Social Media", "ru": "Соцсети"},
+                "prompt_suffix": "Instagram-ready, lifestyle flat lay aesthetic, trendy location",
+            },
+        },
         "is_premium": False,
         "requires_custom_prompt": False,
         "badge": None,
@@ -116,6 +188,24 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
             "ultra-luxury lifestyle editorial, five-star ambiance, "
             "old money elegance, opulent environment, Instagram-worthy, fashion forward"
         ),
+        "negative_layer": (
+            "budget setting, casual clothes, plain background, tourist snapshot, "
+            "overexposed, low quality"
+        ),
+        "style_variants": {
+            "old_money": {
+                "label": {"en": "Old Money", "ru": "Old Money"},
+                "prompt_suffix": "estate garden, equestrian aesthetic, classic tailoring, muted palette",
+            },
+            "yacht": {
+                "label": {"en": "Yacht & Travel", "ru": "Яхта & Travel"},
+                "prompt_suffix": "Mediterranean coast, yacht deck, golden hour, azure sea backdrop",
+            },
+            "penthouse": {
+                "label": {"en": "Penthouse", "ru": "Пентхаус"},
+                "prompt_suffix": "luxury penthouse interior, city skyline at night, designer decor",
+            },
+        },
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "viral",
@@ -134,6 +224,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_factor": 2,
         "upscale_fidelity": 0.8,
         "prompt_layer": None,
+        "negative_layer": "blurry, low quality, distorted face, bad anatomy",
+        "style_variants": {},
         "is_premium": True,
         "requires_custom_prompt": True,
         "badge": None,
@@ -158,19 +250,45 @@ def get_mode_label(key: str, lang: str = "en") -> str:
     return str(cfg["label"].get(lang, cfg["label"].get("en", key)))
 
 
-def apply_prompt_layer(base_prompt: str, mode_key: str) -> str:
+def get_mode_negative(key: str) -> str:
+    """Return negative prompt layer for a mode, or empty string."""
+    cfg = get_mode_config(key)
+    return str(cfg.get("negative_layer") or "")
+
+
+def get_style_variants(key: str) -> Dict[str, Any]:
+    """Return style_variants dict for a mode."""
+    cfg = get_mode_config(key)
+    return cfg.get("style_variants", {})
+
+
+def apply_prompt_layer(
+    base_prompt: str,
+    mode_key: str,
+    style_variant: Optional[str] = None,
+) -> str:
+    """Combine base prompt with mode prompt_layer and optional sub-style suffix."""
     cfg = get_mode_config(mode_key)
     layer = cfg.get("prompt_layer")
     if layer:
         sep = ", " if base_prompt else ""
-        return f"{base_prompt}{sep}{layer}"
-    return base_prompt
+        result = f"{base_prompt}{sep}{layer}"
+    else:
+        result = base_prompt
+    # Apply sub-style variant suffix if specified
+    if style_variant:
+        variants = cfg.get("style_variants", {})
+        variant_cfg = variants.get(style_variant, {})
+        suffix = str(variant_cfg.get("prompt_suffix", ""))
+        if suffix:
+            result = f"{result}, {suffix}" if result else suffix
+    return result
 
 
 def _score_candidate(img_bytes: bytes) -> float:
     """
     Stub candidate scorer for Generation Tournament.
-    TODO: replace with GPT-4o Vision or CLIP-based judge.
+    TODO Phase 3: replace with GPT-4o Vision or CLIP-based judge.
     Heuristic: larger JPEG = more detail retained by encoder = rough quality proxy.
     """
     if not img_bytes:
@@ -181,11 +299,12 @@ def _score_candidate(img_bytes: bytes) -> float:
 
 
 STEP_LABELS: Dict[str, Dict[str, str]] = {
-    "analyzing":      {"en": "Analyzing your selfie...", "ru": "Анализируем фото..."},
-    "crafting_prompt":{"en": "Building your prompt...", "ru": "Создаём промпт..."},
-    "selecting":      {"en": "Selecting best shots...", "ru": "Выбираем лучшие..."},
-    "upscaling":      {"en": "Enhancing quality...",    "ru": "Улучшаем качество..."},
-    "ready":          {"en": "Done!",                   "ru": "Готово!"},
+    "analyzing":        {"en": "Analyzing your selfie...",    "ru": "Анализируем фото..."},
+    "identity_scan":    {"en": "Reading your features...",    "ru": "Определяем черты лица..."},
+    "crafting_prompt":  {"en": "Building your prompt...",     "ru": "Создаём промпт..."},
+    "selecting":        {"en": "Selecting best shots...",     "ru": "Выбираем лучшие..."},
+    "upscaling":        {"en": "Enhancing quality...",        "ru": "Улучшаем качество..."},
+    "ready":            {"en": "Done!",                       "ru": "Готово!"},
 }
 
 

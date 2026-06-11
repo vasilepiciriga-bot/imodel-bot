@@ -1,7 +1,7 @@
 
 # prompt_engine.py
-# Robust prompt crafting for Copy mode using OpenAI Vision with strict schema.
-from typing import Optional, Dict, Any
+# Prompt crafting utilities: Copy mode vision analysis + Photoshoot Prompt Builder 2.0
+from typing import Optional, Dict, Any, Tuple
 import base64, json, os
 
 try:
@@ -30,6 +30,199 @@ NEGATIVE_DEFAULTS = (
 
 def _b64(img_bytes: bytes) -> str:
     return base64.b64encode(img_bytes).decode("utf-8")
+
+def _craft_simple_prompt(user_text: str, gender: str = "") -> str:
+    """Light GPT refinement of free-text into a photoshoot prompt line."""
+    if not OPENAI_API_KEY or OpenAI is None:
+        return user_text
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    gender_hint = f"The subject is {gender}. " if gender else ""
+    system = (
+        "You are a prompt engineer for face-preserving portrait photo generation. "
+        "Rewrite the user description into ONE LINE of precise English: "
+        "environment, mood, lighting, lens type, pose, attire, background. "
+        "Never mention real people or brands. Subject: 'adult person'. "
+        "Output ONLY the prompt text, no quotes, no JSON."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL_VISION,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"{gender_hint}{user_text}"},
+            ],
+            temperature=0.3,
+            max_tokens=200,
+        )
+        result = (resp.choices[0].message.content or "").strip().strip('"')
+        return " ".join(result.split()) or user_text
+    except Exception:
+        return user_text
+
+
+def _aspect_to_wh(aspect_ratio: str) -> Tuple[int, int]:
+    """Map aspect ratio string to (width, height) at ~768px base."""
+    return {
+        "1:1":  (768, 768),
+        "16:9": (1024, 576),
+        "9:16": (576, 1024),
+        "4:3":  (1024, 768),
+        "3:4":  (768, 1024),
+    }.get(aspect_ratio, (768, 768))
+
+
+def analyze_selfie_identity(selfie_bytes: bytes) -> Dict[str, str]:
+    """
+    Identity Passport — Phase 2 feature.
+    Analyze a selfie to extract appearance attributes for prompt personalization.
+
+    Returns dict with keys:
+        gender, age_range, skin_tone, hair_color, identity_layer (ready-to-inject string)
+    Returns empty dict on any failure (caller must handle gracefully).
+    """
+    if not selfie_bytes or not OPENAI_API_KEY or OpenAI is None:
+        return {}
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    img_url = f"data:image/jpeg;base64,{_b64(selfie_bytes)}"
+    system = (
+        "You analyze portrait photos to extract appearance attributes for AI photo generation prompts. "
+        "Return ONLY a compact JSON object with these exact fields: "
+        "{\"gender\": \"man\" or \"woman\" or \"person\", "
+        "\"age_range\": \"20s\" or \"30s\" or \"40s\" or \"50s+\", "
+        "\"skin_tone\": \"fair\" or \"medium\" or \"olive\" or \"dark\", "
+        "\"hair_color\": \"dark\" or \"blonde\" or \"red\" or \"gray\" or \"none\"}. "
+        "No other text. No code fences. No explanation. Just the JSON."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL_VISION,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Analyze this portrait photo."},
+                    {"type": "image_url", "image_url": {"url": img_url, "detail": "low"}},
+                ]},
+            ],
+            temperature=0.1,
+            max_tokens=80,
+            timeout=15,
+        )
+        raw = (resp.choices[0].message.content or "").strip().strip("`\n")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+        data = json.loads(raw)
+        gender = str(data.get("gender", "person")).strip()
+        age_range = str(data.get("age_range", "")).strip()
+        skin_tone = str(data.get("skin_tone", "")).strip()
+        hair_color = str(data.get("hair_color", "")).strip()
+        # Build ready-to-inject identity_layer for the generation prompt
+        parts = []
+        if gender and gender != "person":
+            parts.append(gender)
+        if age_range:
+            parts.append(f"in their {age_range}")
+        if skin_tone:
+            parts.append(f"{skin_tone} skin")
+        if hair_color and hair_color != "none":
+            parts.append(f"{hair_color} hair")
+        identity_layer = ", ".join(parts)
+        return {
+            "gender": gender,
+            "age_range": age_range,
+            "skin_tone": skin_tone,
+            "hair_color": hair_color,
+            "identity_layer": identity_layer,
+        }
+    except Exception:
+        return {}
+
+
+def build_photoshoot_prompt(
+    mode: str,
+    style: str = "",
+    user_request: str = "",
+    gender: str = "",
+    aspect_ratio: str = "1:1",
+    identity_passport: Optional[Dict[str, str]] = None,
+    style_variant: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Photoshoot Prompt Builder 2.0 — independent module.
+    Phase 2: adds identity_passport injection and style_variant support.
+
+    Args:
+        mode:             One of everyday | premium | vogue | ceo | dating | luxury | custom
+        style:            Optional style description / reference text
+        user_request:     Free-text vision from user
+        gender:           Optional subject gender hint for GPT refinement
+        aspect_ratio:     Target aspect ratio string e.g. "1:1", "9:16"
+        identity_passport: Dict from analyze_selfie_identity() — injects identity_layer
+        style_variant:    Sub-style key within the mode (e.g. "editorial" for vogue)
+
+    Returns:
+        { finalPrompt, negativePrompt, modelParams, aspectRatio, styleName }
+    """
+    try:
+        from photoshoot_modes import apply_prompt_layer, get_mode_config, get_mode_negative
+    except ImportError:
+        return {
+            "finalPrompt": user_request or style or "",
+            "negativePrompt": NEGATIVE_DEFAULTS,
+            "modelParams": {},
+            "aspectRatio": aspect_ratio,
+            "styleName": mode,
+        }
+
+    cfg = get_mode_config(mode) or {}
+    base_text = (user_request or style or "").strip()
+
+    # Identity layer from passport (Phase 2)
+    identity_layer = ""
+    if identity_passport:
+        identity_layer = str(identity_passport.get("identity_layer", "")).strip()
+        if not gender and identity_passport.get("gender"):
+            gender = str(identity_passport["gender"])
+
+    # Build base prompt:
+    # 1. GPT refine user request if provided
+    # 2. Inject identity_layer as enrichment
+    if base_text:
+        base_prompt = _craft_simple_prompt(base_text, gender)
+    elif identity_layer:
+        base_prompt = identity_layer
+    else:
+        base_prompt = ""
+
+    # Enrich with identity layer if not already used as base
+    if identity_layer and base_text:
+        base_prompt = f"{base_prompt}, {identity_layer}"
+
+    # Apply mode-specific prompt layer + optional sub-style variant
+    final_prompt = apply_prompt_layer(base_prompt, mode, style_variant=style_variant)
+
+    # Negative prompt: mode-specific layer > NEGATIVE_DEFAULTS
+    mode_negative = get_mode_negative(mode)
+    negative_prompt = f"{mode_negative}, {NEGATIVE_DEFAULTS}" if mode_negative else NEGATIVE_DEFAULTS
+
+    # Model params
+    w, h = _aspect_to_wh(aspect_ratio)
+    mode_label = cfg.get("label", {})
+    style_name = mode_label.get("en", mode) if isinstance(mode_label, dict) else str(mode_label or mode)
+
+    return {
+        "finalPrompt": final_prompt,
+        "negativePrompt": negative_prompt,
+        "modelParams": {
+            "width": w,
+            "height": h,
+            "num_outputs": cfg.get("n_generations", 1),
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
+        },
+        "aspectRatio": aspect_ratio,
+        "styleName": style_name,
+    }
+
 
 def craft_prompt_from_style_image(style_bytes: bytes) -> Optional[Dict[str, str]]:
     """Return {'prompt': str, 'negative': str} from a style image via OpenAI Vision."""

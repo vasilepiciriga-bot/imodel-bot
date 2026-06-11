@@ -6908,16 +6908,46 @@ async def run_photoshoot_tournament_job(job_id: str):
     record_job(job_id, status="running", step_label="analyzing")
     job_event(job_id, "tournament_start", mode=mode_key, n_gen=n_gen, select_k=select_k)
 
+    # ── Identity Passport (Phase 2) ──────────────────────────────────────────
+    # Analyze selfie to detect gender/age/skin-tone and personalize the prompt.
+    identity_passport: Dict[str, Any] = job.get("identity_passport") or {}
+    if not identity_passport:
+        record_job(job_id, step_label="identity_scan")
+        try:
+            from prompt_engine import analyze_selfie_identity as _analyze_identity
+            identity_passport = await asyncio.to_thread(_analyze_identity, img_bytes)
+            if identity_passport:
+                record_job(job_id, identity_passport=identity_passport)
+                job_event(job_id, "identity_analyzed",
+                          gender=identity_passport.get("gender", ""),
+                          age_range=identity_passport.get("age_range", ""),
+                          skin_tone=identity_passport.get("skin_tone", ""))
+        except Exception as _e:
+            job_event(job_id, "identity_analysis_skipped", error=str(_e)[:80])
+
+    # Inject identity_layer into base_prompt to personalize every generation
+    identity_layer = str(identity_passport.get("identity_layer", "")).strip()
+    if identity_layer:
+        if base_prompt:
+            base_prompt = f"{base_prompt}, {identity_layer}"
+        else:
+            base_prompt = identity_layer
+    # ─────────────────────────────────────────────────────────────────────────
+
     # For custom mode: build GPT prompt from user's vision description
     if mode_key == "custom" and custom_desc:
         record_job(job_id, step_label="crafting_prompt")
         try:
             base_prompt = await asyncio.to_thread(craft_prompt_gpt, custom_desc, lang, True)
+            # Re-inject identity layer after GPT refine
+            if identity_layer and identity_layer not in base_prompt:
+                base_prompt = f"{base_prompt}, {identity_layer}"
             job_event(job_id, "custom_prompt_crafted", prompt=base_prompt[:200])
         except Exception as e:
             job_event(job_id, "custom_prompt_error", error=str(e)[:120])
 
-    effective_prompt = apply_prompt_layer(base_prompt, mode_key)
+    style_variant: str = str(job.get("style_variant") or "")
+    effective_prompt = apply_prompt_layer(base_prompt, mode_key, style_variant=style_variant)
 
     candidates: List[tuple] = []  # List of (score, img_bytes)
 
@@ -8035,7 +8065,23 @@ async def api_create_generation(request: Request):
     if photoshoot_mode not in PHOTOSHOOT_MODES:
         photoshoot_mode = "everyday"
     custom_desc = str(data.get("custom_desc") or "").strip()[:1000]
+    style_variant = str(data.get("style_variant") or "").strip()
+    # Validate style_variant exists in the mode's style_variants dict
+    from photoshoot_modes import get_style_variants as _get_svariants
+    if style_variant and style_variant not in _get_svariants(photoshoot_mode):
+        style_variant = ""
+
     credit_cost = get_mode_credit_cost(photoshoot_mode)
+    # Plan-based discount (Phase 2): active subscribers save 1 credit on modes costing ≥ 4
+    _sub = get_active_sub(uid)
+    if _sub and _sub.get("plan") in ("pro", "creator", "elite") and credit_cost >= 4:
+        credit_cost = max(credit_cost - 1, 2)
+        analytics_event(uid, "sub_discount_applied", {
+            "mode": photoshoot_mode,
+            "original": get_mode_credit_cost(photoshoot_mode),
+            "discounted": credit_cost,
+            "plan": _sub.get("plan"),
+        })
 
     # Check and deduct credits (n credits for photoshoot modes)
     if not await _try_use_credits_n(uid, credit_cost, username):
@@ -8088,6 +8134,7 @@ async def api_create_generation(request: Request):
             lang=str(data.get("lang") or LANG_DEFAULT),
             photoshoot_mode=photoshoot_mode,
             custom_desc=custom_desc,
+            style_variant=style_variant,
         )
         stats_incr("jobs_created", 1)
         asyncio.create_task(run_photoshoot_tournament_job(str(job["job_id"])))
@@ -8208,6 +8255,62 @@ async def api_get_generation(job_id: str, request: Request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     return public_job_snapshot(job)
 
+# ── /api/photo-jobs — spec-compliant aliases for Phase 1 photoshoot modes API ──
+
+@app.post("/api/photo-jobs")
+async def api_create_photo_job(request: Request):
+    """Spec-compatible alias for POST /api/v1/generations with field name translation.
+    Accepts: { mode, userPrompt, imageUrl, selfieFileId, aspectRatio, ... }
+    Returns:  { jobId, status, creditCost, photoshootMode }
+    """
+    raw = await request.json()
+    # Translate spec field names → internal field names
+    internal: Dict[str, Any] = {k: v for k, v in raw.items()
+                                 if k not in ("mode", "userPrompt", "imageUrl", "selfieFileId")}
+    if "mode" in raw:
+        internal["photoshoot_mode"] = raw["mode"]
+    if "userPrompt" in raw:
+        internal["prompt"] = raw["userPrompt"]
+    image = raw.get("imageUrl") or raw.get("selfieFileId")
+    if image and "image_b64" not in internal:
+        internal["image_b64"] = image
+    # Override cached request body so api_create_generation reads the translated fields
+    request._body = json.dumps(internal).encode()  # type: ignore[attr-defined]
+    resp = await api_create_generation(request)
+    # Normalize snake_case → camelCase for spec compliance
+    if isinstance(resp, dict):
+        return {
+            "jobId": resp.get("job_id"),
+            "status": resp.get("status"),
+            "creditCost": resp.get("credit_cost"),
+            "photoshootMode": resp.get("photoshoot_mode"),
+        }
+    return resp  # JSONResponse (error) — pass through as-is
+
+@app.get("/api/photo-jobs/{job_id}")
+async def api_get_photo_job(job_id: str, request: Request):
+    """Spec-compatible alias for GET /api/v1/generations/{job_id}."""
+    return await api_get_generation(job_id, request)
+
+@app.post("/api/photo-jobs/{job_id}/cancel")
+async def api_cancel_photo_job(job_id: str, request: Request):
+    """Cancel a queued or running photo job."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if not job:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if int(job.get("chat_id") or 0) != uid:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    current_status = job.get("status", "")
+    if current_status in ("queued", "running"):
+        job["status"] = "cancelled"
+        job["error"] = "cancelled_by_user"
+        _db_save_job(job)
+    return {"ok": True, "jobId": job_id, "status": job.get("status")}
+
 @app.get("/api/v1/presets")
 async def api_presets(request: Request):
     user = webapp_user_from_request(request)
@@ -8287,6 +8390,16 @@ async def api_photoshoot_modes(request: Request):
     lang = USER_LANG.get(uid, LANG_DEFAULT)
     result = []
     for key, cfg in PHOTOSHOOT_MODES.items():
+        # Serialize style_variants with localized labels for this user's language
+        raw_variants = cfg.get("style_variants") or {}
+        style_variants_out = {}
+        for vk, vc in raw_variants.items():
+            v_label = vc.get("label", {})
+            style_variants_out[vk] = {
+                "label": v_label.get(lang, v_label.get("en", vk)),
+                "label_en": v_label.get("en", vk),
+                "label_ru": v_label.get("ru", vk),
+            }
         result.append({
             "key": key,
             "label": cfg["label"].get(lang, cfg["label"].get("en", key)),
@@ -8301,6 +8414,8 @@ async def api_photoshoot_modes(request: Request):
             "requires_custom_prompt": cfg.get("requires_custom_prompt", False),
             "badge": cfg.get("badge"),
             "short_desc": cfg.get("short_desc", {}).get(lang, cfg.get("short_desc", {}).get("en", "")),
+            "style_variants": style_variants_out,
+            "negative_layer": cfg.get("negative_layer") or "",
         })
     return {"modes": result}
 
