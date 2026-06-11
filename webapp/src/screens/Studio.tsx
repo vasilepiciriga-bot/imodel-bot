@@ -5,6 +5,7 @@ import { SelfieUploader } from '../components/studio/SelfieUploader'
 import { ModeSelector } from '../components/studio/ModeSelector'
 import { GenerateButton } from '../components/studio/GenerateButton'
 import { ProgressRing } from '../components/studio/ProgressRing'
+import { GeneratingCard } from '../components/studio/GeneratingCard'
 import { ResultCard } from '../components/studio/ResultCard'
 import { CreditBadge } from '../components/layout/CreditBadge'
 import { PhotoshootModePicker } from '../components/studio/PhotoshootModePicker'
@@ -350,8 +351,10 @@ export default function Studio() {
         {/* Progress */}
         <AnimatePresence>
           {loading && !currentJob && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <ProgressRing step={progressStep} stepLabel={stepLabel} />
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              {selfiePreview
+                ? <GeneratingCard selfiePreview={selfiePreview} stepLabel={stepLabel} step={progressStep} />
+                : <ProgressRing step={progressStep} stepLabel={stepLabel} />}
             </motion.div>
           )}
         </AnimatePresence>

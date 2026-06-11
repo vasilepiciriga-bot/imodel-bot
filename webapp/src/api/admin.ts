@@ -96,3 +96,9 @@ export const cancelBroadcast = () =>
       Authorization: `tma ${window.Telegram?.WebApp?.initData ?? ''}`,
     },
   }).then((r) => r.json())
+
+export const generatePresetThumbs = (reference_url?: string) =>
+  api.post<{ queued: number; keys: string[] }>(
+    '/api/v1/admin/generate-preset-thumbs',
+    reference_url ? { reference_url } : {},
+  )

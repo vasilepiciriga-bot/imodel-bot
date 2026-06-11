@@ -74,12 +74,34 @@ function PresetCard({ preset, active, index, onTap, onLongPress }: {
           />
         ) : (
           <div
-            className="w-full h-full flex flex-col items-center justify-center gap-2"
+            className="w-full h-full relative flex flex-col items-center justify-center gap-2"
             style={{ background: `linear-gradient(160deg, ${g1}, ${g2})` }}
           >
-            <span className="text-[40px] drop-shadow-lg">{preset.emoji}</span>
+            {/* Bokeh glow circles */}
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{ background: `radial-gradient(circle at 80% 20%, ${accent}30 0%, transparent 55%)` }}
+            />
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{ background: `radial-gradient(circle at 20% 75%, ${accent}20 0%, transparent 45%)` }}
+            />
+            {/* Decorative star */}
             <span
-              className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full"
+              className="absolute top-2.5 left-2.5 text-[10px] opacity-30 pointer-events-none select-none"
+              style={{ color: accent }}
+            >
+              ✦
+            </span>
+            {/* Main emoji with glow */}
+            <span
+              className="text-[52px] drop-shadow-lg relative z-10"
+              style={{ filter: `drop-shadow(0 0 14px ${accent}99)` }}
+            >
+              {preset.emoji}
+            </span>
+            <span
+              className="relative z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full"
               style={{ background: `${accent}33`, color: accent }}
             >
               {preset.category}

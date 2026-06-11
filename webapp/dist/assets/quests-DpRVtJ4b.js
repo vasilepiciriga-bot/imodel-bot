@@ -1,1 +1,0 @@
-import{c as e}from"./index-EuCcQobx.js";var t=t=>e.post(`/api/v1/portfolio/visibility`,{public:t}),n=()=>e.get(`/api/v1/quests`),r=t=>e.post(`/api/v1/quests/${t}/claim`),i=()=>e.get(`/api/v1/achievements`),a=t=>e.post(`/api/v1/me/language`,{language:t}),o=(t,n)=>e.post(`/api/v1/gallery/${t}/react`,{emoji:n});export{a,o as i,i as n,t as o,n as r,r as t};

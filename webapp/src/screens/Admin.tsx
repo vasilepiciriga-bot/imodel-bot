@@ -1,16 +1,16 @@
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Users, Zap, TrendingUp, Radio, Search, Send, Plus, Minus, RefreshCw, ChevronDown } from 'lucide-react'
+import { Users, Zap, TrendingUp, Radio, Search, Send, Plus, Minus, RefreshCw, ChevronDown, Layers } from 'lucide-react'
 import {
   getDashboard, lookupUser, grantCredits, sendUserMessage,
-  getBroadcastStatus, sendBroadcast, cancelBroadcast,
+  getBroadcastStatus, sendBroadcast, cancelBroadcast, generatePresetThumbs,
   type AdminDashboard, type AdminUser, type BroadcastStatus,
 } from '../api/admin'
 import { track } from '../api/analytics'
 
 const tg = window.Telegram?.WebApp
 
-type AdminTab = 'dashboard' | 'users' | 'broadcast'
+type AdminTab = 'dashboard' | 'users' | 'broadcast' | 'tools'
 
 function timeAgo(ts: number): string {
   if (!ts) return 'never'
@@ -504,6 +504,76 @@ function BroadcastTab() {
   )
 }
 
+// ─── Tools tab ────────────────────────────────────────────────────────────────
+function ToolsTab() {
+  const [refUrl, setRefUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ queued: number; keys: string[] } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleGenerate() {
+    setBusy(true)
+    setResult(null)
+    setError(null)
+    try {
+      const res = await generatePresetThumbs(refUrl.trim() || undefined)
+      setResult(res)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 pb-6 pt-3 space-y-4">
+      <div className="bg-white rounded-[16px] p-4 shadow-sm border border-black/[0.05] space-y-3">
+        <div className="flex items-center gap-2">
+          <Layers size={16} className="text-[#6C47FF]" />
+          <p className="text-[14px] font-bold text-[#1D1D1F]">Preset Thumbnails</p>
+        </div>
+        <p className="text-[12px] text-[#6E6E73] leading-relaxed">
+          Generate preview images for all style presets using a reference face photo.
+          Leave blank to use the default stock photo.
+        </p>
+        <input
+          type="url"
+          value={refUrl}
+          onChange={(e) => setRefUrl(e.target.value)}
+          placeholder="https://... (optional reference photo URL)"
+          className="w-full px-3 py-2.5 rounded-[10px] bg-[#F5F5F7] text-[13px] text-[#1D1D1F] placeholder-[#AEAEB2] outline-none"
+        />
+        <motion.button
+          whileTap={{ scale: 0.97 }}
+          onClick={handleGenerate}
+          disabled={busy}
+          className="w-full py-3 rounded-[12px] bg-[#6C47FF] text-white text-[14px] font-semibold disabled:opacity-50"
+        >
+          {busy ? 'Queuing...' : 'Generate All Thumbnails'}
+        </motion.button>
+        {result && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-3 rounded-[10px] bg-[#34C759]/10 border border-[#34C759]/30"
+          >
+            <p className="text-[13px] font-semibold text-[#34C759]">
+              ✓ Queued {result.queued} presets
+            </p>
+            <p className="text-[11px] text-[#6E6E73] mt-0.5">
+              Generation runs in background — refresh Styles in ~5 min.
+            </p>
+          </motion.div>
+        )}
+        {error && (
+          <p className="text-[12px] text-[#FF3B30] font-medium">{error}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 // ─── Main Admin screen ─────────────────────────────────────────────────────────
 export default function Admin() {
   const [tab, setTab] = useState<AdminTab>('dashboard')
@@ -516,6 +586,7 @@ export default function Admin() {
     { key: 'dashboard', label: 'Dashboard', icon: TrendingUp },
     { key: 'users', label: 'Users', icon: Users },
     { key: 'broadcast', label: 'Broadcast', icon: Radio },
+    { key: 'tools', label: 'Tools', icon: Layers },
   ]
 
   return (
@@ -562,6 +633,7 @@ export default function Admin() {
           {tab === 'dashboard' && <DashboardTab />}
           {tab === 'users' && <UsersTab />}
           {tab === 'broadcast' && <BroadcastTab />}
+          {tab === 'tools' && <ToolsTab />}
         </motion.div>
       </AnimatePresence>
 
