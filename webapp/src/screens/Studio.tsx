@@ -12,6 +12,7 @@ import { CreditBadge } from '../components/layout/CreditBadge'
 import { PhotoshootModePicker } from '../components/studio/PhotoshootModePicker'
 import { PaywallModal } from '../components/studio/PaywallModal'
 import { FirstGenModal } from '../components/shared/FirstGenModal'
+import { LeaderboardModal } from '../components/shared/LeaderboardModal'
 import { useAppStore } from '../store/appStore'
 import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
@@ -54,10 +55,13 @@ export default function Studio() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [claimableQuest, setClaimableQuest] = useState<QuestItem | null>(null)
   const [claimingQuest, setClaimingQuest] = useState(false)
+  const [questPillDismissedFor, setQuestPillDismissedFor] = useState<string | null>(null)
   const [recentPresets, setRecentPresets] = useState<Preset[]>([])
   const [communityInspiration, setCommunityInspiration] = useState<Preset[]>([])
   const [styleVariant, setStyleVariant] = useState<string>('')
   const [identityPassport, setIdentityPassport] = useState<import('../types').IdentityPassport | null>(null)
+  const [showStreakModal, setShowStreakModal] = useState(false)
+  const [showLeaderboard, setShowLeaderboard] = useState(false)
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -146,6 +150,24 @@ export default function Studio() {
       setRefUrl('')
     }
   }, [mode])
+
+  // Streak-at-risk modal: show when streak >= 3 and last gen was 18+ hours ago
+  useEffect(() => {
+    if (!user?.last_gen_at || (user.streak ?? 0) < 3) return
+    const hoursSince = (Date.now() / 1000 - user.last_gen_at) / 3600
+    if (hoursSince < 18) return
+    const snoozedAt = Number(localStorage.getItem('streak_risk_snoozed') ?? 0)
+    if (Date.now() - snoozedAt < 2 * 60 * 60 * 1000) return
+    setShowStreakModal(true)
+  }, [user?.last_gen_at, user?.streak])
+
+  // Fetch claimable quests on mount (complements post-generation fetch)
+  useEffect(() => {
+    getQuests().then(({ quests }) => {
+      const claimable = quests.find((q) => q.claimable)
+      setClaimableQuest(claimable ?? null)
+    }).catch(() => null)
+  }, [])
 
   const modeConfig = photoshootModes.find((m) => m.key === photoshootMode)
   const baseCost = modeConfig?.credits ?? (photoshootMode === 'everyday' ? 1 : 1)
@@ -459,21 +481,64 @@ export default function Studio() {
         {/* Leaderboard strip */}
         <AnimatePresence>
           {leaderboard && leaderboard.entries.length >= 2 && (
-            <motion.div
+            <motion.button
               initial={{ opacity: 0, y: -4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-[#F5F5F7]"
+              whileTap={{ scale: 0.98 }}
+              onClick={() => { tg?.HapticFeedback?.selectionChanged(); track('leaderboard_strip_tapped'); setShowLeaderboard(true) }}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-[12px] bg-[#F5F5F7] text-left"
             >
-              <span className="text-[11px]">🏆</span>
-              {leaderboard.entries.slice(0, 2).map((e) => (
-                <span key={e.rank} className="text-[11px] text-[#1D1D1F] font-medium truncate max-w-[80px]">
-                  {e.display_name} · {e.gens}
+              <span className="text-[13px] flex-shrink-0">🏆</span>
+              <div className="flex items-center gap-1.5 flex-1 min-w-0 overflow-hidden">
+                {leaderboard.entries.slice(0, 3).map((e, i) => (
+                  <span
+                    key={e.rank}
+                    className={`text-[11px] font-medium truncate max-w-[72px] ${e.is_me ? 'text-[#6C47FF]' : 'text-[#1D1D1F]'}`}
+                  >
+                    {['🥇','🥈','🥉'][i]} {e.display_name}
+                  </span>
+                ))}
+              </div>
+              {leaderboard.my_rank ? (
+                <span className="text-[11px] font-semibold text-[#6C47FF] flex-shrink-0">
+                  #{leaderboard.my_rank} →
                 </span>
-              ))}
-              {leaderboard.my_rank && (
-                <span className="text-[11px] text-[#6E6E73] ml-auto shrink-0">You: #{leaderboard.my_rank}</span>
+              ) : (
+                <span className="text-[11px] text-[#AEAEB2] flex-shrink-0">View →</span>
               )}
+            </motion.button>
+          )}
+        </AnimatePresence>
+
+        {/* Persistent quest notification pill — shown on mount when quest is claimable */}
+        <AnimatePresence>
+          {claimableQuest && !currentJob && questPillDismissedFor !== claimableQuest.id && (
+            <motion.div
+              initial={{ opacity: 0, y: -6, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ delay: 0.4, type: 'spring', stiffness: 300, damping: 28 }}
+              className="flex items-center gap-3 px-4 py-3 rounded-card bg-gradient-to-r from-[#6C47FF]/10 to-[#FF2D78]/10 border border-[#6C47FF]/20"
+            >
+              <span className="text-[20px]">⚡</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-semibold text-[#1D1D1F]">Quest ready: {claimableQuest.title}</p>
+                <p className="text-[11px] text-[#6E6E73]">+{claimableQuest.reward}⚡ waiting for you</p>
+              </div>
+              <button
+                onClick={() => handleQuestClaim(claimableQuest.id)}
+                disabled={claimingQuest}
+                className="px-3 py-1.5 rounded-full bg-[#6C47FF] text-white text-[11px] font-bold disabled:opacity-60 shrink-0"
+              >
+                {claimingQuest ? '…' : `Claim +${claimableQuest.reward}⚡`}
+              </button>
+              <button
+                onClick={() => setQuestPillDismissedFor(claimableQuest.id)}
+                className="w-6 h-6 flex items-center justify-center text-[#AEAEB2] shrink-0 -mr-1"
+              >
+                ✕
+              </button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -602,33 +667,7 @@ export default function Studio() {
           )}
         </AnimatePresence>
 
-        {/* Streak at risk banner */}
-        {user?.last_gen_at && (Date.now() / 1000 - user.last_gen_at) > 18 * 3600 && streak >= 3 && (
-          <motion.div
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex items-center gap-2.5 px-4 py-3 rounded-card bg-orange-50 border border-orange-200"
-          >
-            <motion.div
-              animate={{ scale: [1, 1.2, 1] }}
-              transition={{ repeat: Infinity, duration: 1.2 }}
-            >
-              <Flame size={20} className="text-orange-500 flex-shrink-0" fill="currentColor" />
-            </motion.div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[13px] font-bold text-orange-700">🔥 {streak}-day streak at risk!</p>
-              <p className="text-[11px] text-orange-500">Generate now to keep it alive</p>
-            </div>
-            {selfieB64 && (
-              <button
-                onClick={() => generate()}
-                className="px-3 py-1.5 rounded-[10px] bg-orange-500 text-white text-[11px] font-bold flex-shrink-0"
-              >
-                Generate →
-              </button>
-            )}
-          </motion.div>
-        )}
+        {/* Streak at risk — handled by modal overlay, no inline banner */}
 
         {/* Daily Challenge Badge */}
         {challenge && (
@@ -992,6 +1031,13 @@ export default function Studio() {
         )}
       </AnimatePresence>
 
+      {/* Leaderboard modal */}
+      <AnimatePresence>
+        {showLeaderboard && leaderboard && (
+          <LeaderboardModal data={leaderboard} onClose={() => setShowLeaderboard(false)} />
+        )}
+      </AnimatePresence>
+
       {/* First-generation celebration modal */}
       <AnimatePresence>
         {showFirstGen && (
@@ -1001,6 +1047,127 @@ export default function Studio() {
             onUpgrade={() => { setShowFirstGen(false); setShowPaywall(true) }}
           />
         )}
+      </AnimatePresence>
+
+      {/* Streak-at-risk modal */}
+      <AnimatePresence>
+        {showStreakModal && (() => {
+          const lastGen = user?.last_gen_at ?? 0
+          const hoursSince = (Date.now() / 1000 - lastGen) / 3600
+          const hoursLeft = Math.max(0, Math.ceil(24 - hoursSince))
+          const hasSelfie = !!selfieB64
+          function dismiss() { setShowStreakModal(false) }
+          function snooze() {
+            localStorage.setItem('streak_risk_snoozed', String(Date.now()))
+            setShowStreakModal(false)
+            track('streak_modal_snoozed', { streak, hours_since: Math.round(hoursSince) })
+          }
+          function handleGenerate() {
+            dismiss()
+            track('streak_modal_generate', { streak })
+            generate()
+          }
+          function handleUpload() {
+            dismiss()
+            track('streak_modal_upload', { streak })
+            ;(document.getElementById('selfie-file-input') as HTMLInputElement | null)?.click()
+          }
+          return (
+            <motion.div
+              key="streak-modal"
+              className="fixed inset-0 z-[80] flex flex-col justify-end"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              {/* Backdrop */}
+              <motion.div
+                className="absolute inset-0 bg-black/50"
+                onClick={snooze}
+              />
+              {/* Sheet */}
+              <motion.div
+                initial={{ y: '100%' }}
+                animate={{ y: 0 }}
+                exit={{ y: '100%' }}
+                transition={{ type: 'spring', stiffness: 340, damping: 38 }}
+                className="relative bg-white rounded-t-[28px] px-5 pt-5 pb-8"
+              >
+                {/* Handle */}
+                <div className="w-10 h-1 rounded-full bg-[#D1D1D6] mx-auto mb-5" />
+
+                {/* Flame + streak count */}
+                <div className="flex flex-col items-center gap-2 mb-4">
+                  <motion.div
+                    animate={{ scale: [1, 1.18, 1] }}
+                    transition={{ repeat: Infinity, duration: 1.1, ease: 'easeInOut' }}
+                    className="text-[52px] leading-none"
+                  >
+                    🔥
+                  </motion.div>
+                  <p className="text-[22px] font-bold text-[#1D1D1F] text-center">
+                    {streak}-day streak at risk!
+                  </p>
+                  <p className="text-[14px] text-[#6E6E73] text-center">
+                    {hoursLeft > 0
+                      ? `Only ${hoursLeft}h left — generate now to keep it alive`
+                      : 'Generate right now before your streak breaks!'}
+                  </p>
+                </div>
+
+                {/* Streak dots */}
+                <div className="flex justify-center gap-1.5 mb-6">
+                  {Array.from({ length: Math.min(streak, 7) }, (_, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ scale: 0.7 }}
+                      animate={{ scale: 1 }}
+                      transition={{ delay: i * 0.04, type: 'spring', stiffness: 400 }}
+                      className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center"
+                    >
+                      <span className="text-[13px]">🔥</span>
+                    </motion.div>
+                  ))}
+                  {streak > 7 && (
+                    <div className="w-7 h-7 rounded-lg bg-orange-100 flex items-center justify-center">
+                      <span className="text-[10px] font-bold text-orange-500">+{streak - 7}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* CTAs */}
+                <div className="space-y-2.5">
+                  {hasSelfie ? (
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={handleGenerate}
+                      className="w-full py-4 rounded-[16px] text-white text-[15px] font-bold"
+                      style={{ background: 'linear-gradient(135deg, #FF6B35, #FF9500)' }}
+                    >
+                      Generate Now →
+                    </motion.button>
+                  ) : (
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={handleUpload}
+                      className="w-full py-4 rounded-[16px] text-white text-[15px] font-bold flex items-center justify-center gap-2"
+                      style={{ background: 'linear-gradient(135deg, #FF6B35, #FF9500)' }}
+                    >
+                      <Upload size={17} />
+                      Upload Selfie to Generate
+                    </motion.button>
+                  )}
+                  <button
+                    onClick={snooze}
+                    className="w-full py-3 text-[13px] text-[#6E6E73] font-medium"
+                  >
+                    Remind me later
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )
+        })()}
       </AnimatePresence>
     </div>
   )

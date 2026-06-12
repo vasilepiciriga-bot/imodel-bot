@@ -124,7 +124,7 @@ export function SelfieUploader() {
           </motion.button>
         )}
       </AnimatePresence>
-      <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
+      <input ref={inputRef} id="selfie-file-input" type="file" accept="image/*" className="hidden" onChange={onFile} />
     </div>
   )
 }
