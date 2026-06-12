@@ -31,6 +31,7 @@ export interface UserProfile {
   first_seen?: number | null
   recent_presets?: string[]
   recent_modes?: string[]
+  auto_recharge?: { pack: string; threshold: number; enabled: boolean } | null
 }
 
 export interface Preset {

@@ -106,6 +106,8 @@ export default function Shop() {
   const [activeSubTab, setActiveSubTab] = useState<'monthly' | 'packs'>('monthly')
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly')
   const [autoRechargeEnabled, setAutoRechargeEnabled] = useState(false)
+  const [autoRechargePack, setAutoRechargePack] = useState<'pack_30' | 'pack_100'>('pack_30')
+  const [showPostPurchaseAR, setShowPostPurchaseAR] = useState(false)
   const bundleVariant = useExperiment('bundle_position')
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
@@ -116,6 +118,15 @@ export default function Shop() {
     getShopCached().then(setShop).catch(() => null)
     track('shop_opened', { variant: getVariantSync('bundle_position') })
   }, [])
+
+  // Sync toggle state with saved user preference
+  useEffect(() => {
+    if (user?.auto_recharge?.enabled) {
+      setAutoRechargeEnabled(true)
+      const savedPack = user.auto_recharge.pack
+      if (savedPack === 'pack_30' || savedPack === 'pack_100') setAutoRechargePack(savedPack)
+    }
+  }, [user?.auto_recharge?.enabled, user?.auto_recharge?.pack])
 
   const handleBuy = useCallback(async (itemId: string, stars?: number) => {
     hap.medium()
@@ -133,6 +144,7 @@ export default function Shop() {
           const freshShop = await getShop()
           setShop(freshShop)
           toast.success('Purchase successful!', { icon: '🎉', sub: 'Credits added to your balance' })
+          if (!updated.auto_recharge?.enabled) setShowPostPurchaseAR(true)
         }
       })
     } catch (e: unknown) {
@@ -141,20 +153,23 @@ export default function Shop() {
     }
   }, [setUser, updateCredits, toast])
 
-  const handleAutoRechargeToggle = useCallback(async () => {
-    const next = !autoRechargeEnabled
+  const handleAutoRechargeToggle = useCallback(async (pack?: 'pack_30' | 'pack_100') => {
+    const usePack = pack ?? autoRechargePack
+    const next = pack ? true : !autoRechargeEnabled
     setAutoRechargeEnabled(next)
+    if (pack) setAutoRechargePack(pack)
     hap.select()
-    track('auto_recharge_toggled', { enabled: next })
+    track('auto_recharge_toggled', { enabled: next, pack: usePack })
     try {
-      await setAutoRecharge('pack_30', 5, next)
+      await setAutoRecharge(usePack, 5, next)
       toast.success(next ? 'Auto-recharge enabled' : 'Auto-recharge disabled', {
-        sub: next ? 'We\'ll remind you when credits run low' : undefined,
+        sub: next ? "We'll remind you when credits drop below 5" : undefined,
       })
+      if (next) setShowPostPurchaseAR(false)
     } catch {
       setAutoRechargeEnabled(!next)
     }
-  }, [autoRechargeEnabled, toast])
+  }, [autoRechargeEnabled, autoRechargePack, toast])
 
   const credits = user?.credits ?? 0
   const activePlan = shop?.subscription
@@ -501,29 +516,100 @@ export default function Shop() {
                 </div>
               )}
 
-              {/* Auto-recharge toggle */}
-              <motion.button
-                whileTap={{ scale: 0.98 }}
-                onClick={handleAutoRechargeToggle}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-[16px] border transition-colors ${
-                  autoRechargeEnabled
-                    ? 'bg-[#6C47FF]/8 border-[#6C47FF]/30'
-                    : 'bg-white border-black/[0.06]'
-                }`}
-              >
-                <RotateCw size={18} className={autoRechargeEnabled ? 'text-[#6C47FF]' : 'text-[#6E6E73]'} />
-                <div className="flex-1 text-left">
-                  <p className="text-[13px] font-semibold text-[#1D1D1F]">Auto-recharge</p>
-                  <p className="text-[11px] text-[#6E6E73]">Get notified when credits drop below 5</p>
-                </div>
-                <div className={`w-11 h-6 rounded-full transition-colors relative ${autoRechargeEnabled ? 'bg-[#6C47FF]' : 'bg-[#D1D1D6]'}`}>
+              {/* Auto-recharge card */}
+              <div className={`rounded-[16px] border transition-colors overflow-hidden ${autoRechargeEnabled ? 'bg-[#6C47FF]/8 border-[#6C47FF]/30' : 'bg-white border-black/[0.06]'}`}>
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-3"
+                  onClick={() => handleAutoRechargeToggle()}
+                >
+                  <RotateCw size={18} className={autoRechargeEnabled ? 'text-[#6C47FF]' : 'text-[#6E6E73]'} />
+                  <div className="flex-1 text-left">
+                    <p className="text-[13px] font-semibold text-[#1D1D1F]">Auto-recharge</p>
+                    <p className="text-[11px] text-[#6E6E73]">
+                      {autoRechargeEnabled
+                        ? `Enabled · ${autoRechargePack === 'pack_30' ? '30 gens (490★)' : '100 gens (1290★)'}`
+                        : 'Notify me when credits drop below 5'}
+                    </p>
+                  </div>
+                  <div className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${autoRechargeEnabled ? 'bg-[#6C47FF]' : 'bg-[#D1D1D6]'}`}>
+                    <motion.div
+                      animate={{ x: autoRechargeEnabled ? 22 : 2 }}
+                      transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                      className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm"
+                    />
+                  </div>
+                </button>
+                <AnimatePresence>
+                  {autoRechargeEnabled && (
+                    <motion.div
+                      key="pack-select"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="px-4 pb-3 flex gap-2">
+                        {(['pack_30', 'pack_100'] as const).map((p) => (
+                          <button
+                            key={p}
+                            onClick={() => { hap.select(); handleAutoRechargeToggle(p) }}
+                            className={`flex-1 py-2 rounded-[10px] text-[11px] font-semibold border transition-colors ${
+                              autoRechargePack === p
+                                ? 'bg-[#6C47FF] text-white border-[#6C47FF]'
+                                : 'bg-white text-[#1D1D1F] border-black/10'
+                            }`}
+                          >
+                            {p === 'pack_30' ? '30 gens · 490★' : '100 gens · 1290★'}
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {/* Post-purchase auto-recharge prompt */}
+              <AnimatePresence>
+                {showPostPurchaseAR && (
                   <motion.div
-                    animate={{ x: autoRechargeEnabled ? 22 : 2 }}
-                    transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                    className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm"
-                  />
-                </div>
-              </motion.button>
+                    key="ar-prompt"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="rounded-[16px] border border-[#6C47FF]/25 overflow-hidden"
+                    style={{ background: 'linear-gradient(135deg, rgba(108,71,255,0.07), rgba(255,45,120,0.07))' }}
+                  >
+                    <div className="px-4 pt-3 pb-2">
+                      <p className="text-[13px] font-bold text-[#1D1D1F]">⚡ Never run out of credits</p>
+                      <p className="text-[11px] text-[#6E6E73] mt-0.5">Enable auto-recharge — we'll send you an invoice when credits drop below 5</p>
+                    </div>
+                    <div className="px-4 pb-3 flex gap-2">
+                      {(['pack_30', 'pack_100'] as const).map((p) => (
+                        <motion.button
+                          key={p}
+                          whileTap={{ scale: 0.96 }}
+                          onClick={() => { hap.medium(); track('auto_recharge_prompt_tapped', { pack: p }); handleAutoRechargeToggle(p) }}
+                          className={`flex-1 py-2 rounded-[10px] text-[11px] font-bold border ${
+                            p === 'pack_30'
+                              ? 'bg-[#6C47FF] text-white border-[#6C47FF]'
+                              : 'bg-white text-[#1D1D1F] border-black/10'
+                          }`}
+                        >
+                          {p === 'pack_30' ? '30 gens · 490★' : '100 gens · 1290★'}
+                        </motion.button>
+                      ))}
+                      <motion.button
+                        whileTap={{ scale: 0.96 }}
+                        onClick={() => { hap.select(); setShowPostPurchaseAR(false) }}
+                        className="px-3 py-2 rounded-[10px] text-[11px] text-[#6E6E73] bg-white border border-black/10"
+                      >
+                        Skip
+                      </motion.button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* Free features */}
               <div className="rounded-[16px] bg-white border border-black/[0.06] p-4">

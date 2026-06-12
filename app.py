@@ -704,6 +704,11 @@ def stats_load():
                 users_save()
         else:
             print("[stats] WARNING: no user data found anywhere")
+        # Rebuild USER_AUTO_RECHARGE from persisted user info
+        for _uid, _info in STATS_USERS_INFO.items():
+            _ar = _info.get("auto_recharge")
+            if _ar and _ar.get("enabled"):
+                USER_AUTO_RECHARGE[int(_uid)] = _ar
     except Exception as e:
         print("[users] load error:", str(e)[:160])
     # --- quests ---
@@ -1487,6 +1492,7 @@ USER_LAST_SHARE_REWARD: Dict[int, str] = {}  # uid → ISO date of last share-re
 STATS_PRESET_USAGE:   Dict[str, int]   = {}  # preset_key → uses this week (resets weekly)
 _preset_usage_reset_at: float = time.time()
 USER_AUTO_RECHARGE: Dict[int, Dict]    = {}  # uid → {"pack": "pack_30", "threshold": 5, "enabled": bool}
+_AUTO_RECHARGE_LAST_SENT: Dict[int, float] = {}  # uid → timestamp of last reminder (1h cooldown)
 USER_STYLE_HISTORY: Dict[int, List[str]] = {}  # uid → last-5 preset_keys
 USER_MODE_HISTORY:  Dict[int, List[str]] = {}  # uid → last-3 photoshoot modes
 USER_REENGAGEMENT:  Dict[int, Dict]      = {}  # uid → {seq: int, last_at: float} re-engagement sequence state
@@ -1851,6 +1857,11 @@ async def _try_use_credits_n(uid: int, n: int, username: Optional[str] = None) -
     return True
 
 async def _send_auto_recharge_reminder(uid: int, pack_id: str):
+    # 1-hour cooldown to avoid duplicate reminders in the same session
+    _now = time.time()
+    if _now - _AUTO_RECHARGE_LAST_SENT.get(uid, 0) < 3600:
+        return
+    _AUTO_RECHARGE_LAST_SENT[uid] = _now
     try:
         _sku_map = _build_payment_sku_map()
         stars = _sku_map.get(pack_id, 490)
@@ -7908,6 +7919,7 @@ async def api_me(request: Request):
         "first_seen": float(ui.get("first_seen", 0)) or None,
         "recent_presets": USER_STYLE_HISTORY.get(uid, []),
         "recent_modes": USER_MODE_HISTORY.get(uid, []),
+        "auto_recharge": USER_AUTO_RECHARGE.get(uid),
     }
 
 @app.post("/api/v1/me/language")
@@ -10422,6 +10434,15 @@ async def api_gift_sub(request: Request):
     return {"ok": True, "share_link": share_link, "gift_days": SUB_GIFT_DAYS, "gifter_bonus": SUB_GIFT_BONUS}
 
 
+@app.get("/api/v1/auto-recharge")
+async def api_get_auto_recharge(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    return {"auto_recharge": USER_AUTO_RECHARGE.get(uid)}
+
+
 @app.post("/api/v1/auto-recharge")
 async def api_set_auto_recharge(request: Request):
     """Enable or update auto-recharge settings for a user."""
@@ -10435,10 +10456,15 @@ async def api_set_auto_recharge(request: Request):
     threshold = int(data.get("threshold", 5))
     if pack not in _build_payment_sku_map():
         return JSONResponse({"error": "invalid_pack"}, status_code=400)
+    ui = STATS_USERS_INFO.setdefault(uid, {})
     if enabled:
-        USER_AUTO_RECHARGE[uid] = {"pack": pack, "threshold": threshold, "enabled": True}
+        ar = {"pack": pack, "threshold": threshold, "enabled": True}
+        USER_AUTO_RECHARGE[uid] = ar
+        ui["auto_recharge"] = ar
     else:
         USER_AUTO_RECHARGE.pop(uid, None)
+        ui.pop("auto_recharge", None)
+    users_save(uid)
     return {"ok": True, "auto_recharge": USER_AUTO_RECHARGE.get(uid)}
 
 
