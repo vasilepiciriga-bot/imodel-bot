@@ -1252,6 +1252,19 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_HARD_CAP = int(os.getenv("JOBS_HARD_CAP", "2000"))  # max jobs kept in memory
 
 MAX_CONCURRENT_JOBS_PER_USER = 3
+_GEN_RATE_LIMIT_PER_MINUTE = 8  # max single-gen starts per 60 s per user
+_USER_GEN_TIMESTAMPS: Dict[int, List[float]] = {}
+
+def _check_gen_rate_limit(uid: int) -> bool:
+    """Returns True if user is within rate limit, False if they've exceeded it.
+    Stamps the current timestamp on success (call only when returning True)."""
+    now = time.time()
+    window = [t for t in _USER_GEN_TIMESTAMPS.get(uid, []) if now - t < 60]
+    if len(window) >= _GEN_RATE_LIMIT_PER_MINUTE:
+        return False
+    window.append(now)
+    _USER_GEN_TIMESTAMPS[uid] = window
+    return True
 
 def _user_active_jobs_count(uid: int) -> int:
     """Count queued or running jobs for a user."""
@@ -9040,6 +9053,9 @@ async def api_create_generation(request: Request):
     # Concurrency cap — prevents free users from queuing unlimited Replicate jobs
     if _user_active_jobs_count(uid) >= MAX_CONCURRENT_JOBS_PER_USER:
         return JSONResponse({"error": "too_many_active_jobs", "max": MAX_CONCURRENT_JOBS_PER_USER}, status_code=429)
+    # Burst rate limit — prevents more than 8 generation starts per minute
+    if not _check_gen_rate_limit(uid):
+        return JSONResponse({"error": "rate_limited", "retry_after": 60}, status_code=429)
     data = await request.json()
 
     photoshoot_mode = str(data.get("photoshoot_mode") or "everyday").strip()
@@ -9151,6 +9167,8 @@ async def api_create_batch(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     uid = int(user["uid"])
     username = str(user.get("username") or "")
+    if _user_active_jobs_count(uid) >= MAX_CONCURRENT_JOBS_PER_USER:
+        return JSONResponse({"error": "too_many_active_jobs", "max": MAX_CONCURRENT_JOBS_PER_USER}, status_code=429)
     BATCH_COST = 3
     async with _credits_lock:
         if not is_free_user(uid, username):
@@ -9315,62 +9333,6 @@ async def api_get_generation(job_id: str, request: Request):
     if int(job.get("chat_id") or 0) != uid and not has_grant(uid, str(user.get("username") or ""), "jobs.view"):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     return public_job_snapshot(job)
-
-# ── /api/photo-jobs — spec-compliant aliases for Phase 1 photoshoot modes API ──
-
-@app.post("/api/photo-jobs")
-async def api_create_photo_job(request: Request):
-    """Spec-compatible alias for POST /api/v1/generations with field name translation.
-    Accepts: { mode, userPrompt, imageUrl, selfieFileId, aspectRatio, ... }
-    Returns:  { jobId, status, creditCost, photoshootMode }
-    """
-    raw = await request.json()
-    # Translate spec field names → internal field names
-    internal: Dict[str, Any] = {k: v for k, v in raw.items()
-                                 if k not in ("mode", "userPrompt", "imageUrl", "selfieFileId")}
-    if "mode" in raw:
-        internal["photoshoot_mode"] = raw["mode"]
-    if "userPrompt" in raw:
-        internal["prompt"] = raw["userPrompt"]
-    image = raw.get("imageUrl") or raw.get("selfieFileId")
-    if image and "image_b64" not in internal:
-        internal["image_b64"] = image
-    # Override cached request body so api_create_generation reads the translated fields
-    request._body = json.dumps(internal).encode()  # type: ignore[attr-defined]
-    resp = await api_create_generation(request)
-    # Normalize snake_case → camelCase for spec compliance
-    if isinstance(resp, dict):
-        return {
-            "jobId": resp.get("job_id"),
-            "status": resp.get("status"),
-            "creditCost": resp.get("credit_cost"),
-            "photoshootMode": resp.get("photoshoot_mode"),
-        }
-    return resp  # JSONResponse (error) — pass through as-is
-
-@app.get("/api/photo-jobs/{job_id}")
-async def api_get_photo_job(job_id: str, request: Request):
-    """Spec-compatible alias for GET /api/v1/generations/{job_id}."""
-    return await api_get_generation(job_id, request)
-
-@app.post("/api/photo-jobs/{job_id}/cancel")
-async def api_cancel_photo_job(job_id: str, request: Request):
-    """Cancel a queued or running photo job."""
-    user = webapp_user_from_request(request)
-    if not user:
-        return JSONResponse({"error": "unauthorized"}, status_code=403)
-    uid = int(user["uid"])
-    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
-    if not job:
-        return JSONResponse({"error": "not_found"}, status_code=404)
-    if int(job.get("chat_id") or 0) != uid:
-        return JSONResponse({"error": "forbidden"}, status_code=403)
-    current_status = job.get("status", "")
-    if current_status in ("queued", "running"):
-        job["status"] = "cancelled"
-        job["error"] = "cancelled_by_user"
-        _db_save_job(job)
-    return {"ok": True, "jobId": job_id, "status": job.get("status")}
 
 @app.get("/api/v1/presets")
 async def api_presets(request: Request):

@@ -33,13 +33,13 @@ function fireConfetti() {
   confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
 }
 
-const SUB_META: Record<string, { color: string; label: string; emoji: string; badge?: string }> = {
-  sub_weekly:          { color: '#34C759',  label: 'Weekly',        emoji: '⚡' },
-  sub_pro:             { color: '#6C47FF',  label: 'Pro',           emoji: '🚀', badge: 'Most Popular' },
-  sub_creator:         { color: '#FF2D78',  label: 'Creator',       emoji: '🔥', badge: 'Best Value' },
-  sub_elite:           { color: '#FF9500',  label: 'Elite',         emoji: '👑' },
-  sub_pro_annual:      { color: '#6C47FF',  label: 'Pro Annual',    emoji: '🚀', badge: 'Save 20%' },
-  sub_creator_annual:  { color: '#FF2D78',  label: 'Creator Annual',emoji: '🔥', badge: 'Best Deal ✓' },
+const SUB_META: Record<string, { color: string; label: string; emoji: string; tagline: string; badge?: string }> = {
+  sub_weekly:          { color: '#34C759',  label: 'Weekly',         emoji: '⚡', tagline: 'Try it risk-free for 7 days' },
+  sub_pro:             { color: '#6C47FF',  label: 'Pro',            emoji: '🚀', tagline: '90 gens/mo · HD + Batch included', badge: 'Most Popular' },
+  sub_creator:         { color: '#FF2D78',  label: 'Creator',        emoji: '🔥', tagline: '320 gens/mo · 4× more than Pro',   badge: 'Best Value' },
+  sub_elite:           { color: '#FF9500',  label: 'Elite',          emoji: '👑', tagline: 'Unlimited power · priority queue' },
+  sub_pro_annual:      { color: '#6C47FF',  label: 'Pro Annual',     emoji: '🚀', tagline: '90 gens/mo · save 20% vs monthly', badge: 'Save 20%' },
+  sub_creator_annual:  { color: '#FF2D78',  label: 'Creator Annual', emoji: '🔥', tagline: '320 gens/mo · best price per gen',  badge: 'Best Deal ✓' },
 }
 
 const PACK_META: Record<string, { badge?: string; highlight?: boolean }> = {
@@ -198,8 +198,8 @@ export default function Shop() {
       </div>
 
       <div className="flex-1 px-4 pb-8 space-y-4">
-        {/* Bundle at top — experiment: bundle_position=top */}
-        {shop?.bundle && bundleVariant === 'top' && (
+        {/* Bundle — always at top for maximum visibility */}
+        {shop?.bundle && (
           <BundleCard bundle={shop.bundle} onBuy={() => handleBuy(shop!.bundle!.id, shop!.bundle!.stars)} />
         )}
 
@@ -336,7 +336,7 @@ export default function Shop() {
                           <span className="text-[22px]">{meta.emoji}</span>
                           <div>
                             <p className="text-[16px] font-bold text-[#1D1D1F]">{meta.label}</p>
-                            <p className="text-[11px] text-[#6E6E73]">{sub.credits} gens / {sub.period}</p>
+                            <p className="text-[11px] text-[#6E6E73]">{meta.tagline}</p>
                           </div>
                         </div>
                         <div className="text-right">
@@ -406,11 +406,6 @@ export default function Shop() {
               transition={{ duration: 0.15 }}
               className="space-y-4"
             >
-              {/* Bundle of the week — shown in-tab only for control variant */}
-              {shop?.bundle && bundleVariant !== 'top' && (
-                <BundleCard bundle={shop.bundle} onBuy={() => handleBuy(shop!.bundle!.id, shop!.bundle!.stars)} />
-              )}
-
               {/* Credit packs grid */}
               <div className="grid grid-cols-2 gap-3">
                 {(shop?.packs ?? []).map((pack) => {
@@ -461,6 +456,59 @@ export default function Shop() {
                 <p className="text-[12px] text-[#1D1D1F]">
                   <span className="font-bold">100-pack saves 40%</span> vs buying 10 at a time
                 </p>
+              </div>
+
+              {/* Auto-recharge — placed here so users see it right after choosing a pack size */}
+              <div className={`rounded-[16px] border transition-colors overflow-hidden ${autoRechargeEnabled ? 'bg-[#6C47FF]/8 border-[#6C47FF]/30' : 'bg-white border-black/[0.06]'}`}>
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-3"
+                  onClick={() => handleAutoRechargeToggle()}
+                >
+                  <RotateCw size={18} className={autoRechargeEnabled ? 'text-[#6C47FF]' : 'text-[#6E6E73]'} />
+                  <div className="flex-1 text-left">
+                    <p className="text-[13px] font-semibold text-[#1D1D1F]">Auto-recharge</p>
+                    <p className="text-[11px] text-[#6E6E73]">
+                      {autoRechargeEnabled
+                        ? `Enabled · ${autoRechargePack === 'pack_30' ? '30 gens (490★)' : '100 gens (1290★)'}`
+                        : 'Notify me when credits drop below 5'}
+                    </p>
+                  </div>
+                  <div className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${autoRechargeEnabled ? 'bg-[#6C47FF]' : 'bg-[#D1D1D6]'}`}>
+                    <motion.div
+                      animate={{ x: autoRechargeEnabled ? 22 : 2 }}
+                      transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                      className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm"
+                    />
+                  </div>
+                </button>
+                <AnimatePresence>
+                  {autoRechargeEnabled && (
+                    <motion.div
+                      key="pack-select"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="px-4 pb-3 flex gap-2">
+                        {(['pack_30', 'pack_100'] as const).map((p) => (
+                          <button
+                            key={p}
+                            onClick={() => { hap.select(); handleAutoRechargeToggle(p) }}
+                            className={`flex-1 py-2 rounded-[10px] text-[11px] font-semibold border transition-colors ${
+                              autoRechargePack === p
+                                ? 'bg-[#6C47FF] text-white border-[#6C47FF]'
+                                : 'bg-white text-[#1D1D1F] border-black/10'
+                            }`}
+                          >
+                            {p === 'pack_30' ? '30 gens · 490★' : '100 gens · 1290★'}
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {/* Style packs */}
@@ -515,59 +563,6 @@ export default function Shop() {
                   </div>
                 </div>
               )}
-
-              {/* Auto-recharge card */}
-              <div className={`rounded-[16px] border transition-colors overflow-hidden ${autoRechargeEnabled ? 'bg-[#6C47FF]/8 border-[#6C47FF]/30' : 'bg-white border-black/[0.06]'}`}>
-                <button
-                  className="w-full flex items-center gap-3 px-4 py-3"
-                  onClick={() => handleAutoRechargeToggle()}
-                >
-                  <RotateCw size={18} className={autoRechargeEnabled ? 'text-[#6C47FF]' : 'text-[#6E6E73]'} />
-                  <div className="flex-1 text-left">
-                    <p className="text-[13px] font-semibold text-[#1D1D1F]">Auto-recharge</p>
-                    <p className="text-[11px] text-[#6E6E73]">
-                      {autoRechargeEnabled
-                        ? `Enabled · ${autoRechargePack === 'pack_30' ? '30 gens (490★)' : '100 gens (1290★)'}`
-                        : 'Notify me when credits drop below 5'}
-                    </p>
-                  </div>
-                  <div className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${autoRechargeEnabled ? 'bg-[#6C47FF]' : 'bg-[#D1D1D6]'}`}>
-                    <motion.div
-                      animate={{ x: autoRechargeEnabled ? 22 : 2 }}
-                      transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                      className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm"
-                    />
-                  </div>
-                </button>
-                <AnimatePresence>
-                  {autoRechargeEnabled && (
-                    <motion.div
-                      key="pack-select"
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.2 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="px-4 pb-3 flex gap-2">
-                        {(['pack_30', 'pack_100'] as const).map((p) => (
-                          <button
-                            key={p}
-                            onClick={() => { hap.select(); handleAutoRechargeToggle(p) }}
-                            className={`flex-1 py-2 rounded-[10px] text-[11px] font-semibold border transition-colors ${
-                              autoRechargePack === p
-                                ? 'bg-[#6C47FF] text-white border-[#6C47FF]'
-                                : 'bg-white text-[#1D1D1F] border-black/10'
-                            }`}
-                          >
-                            {p === 'pack_30' ? '30 gens · 490★' : '100 gens · 1290★'}
-                          </button>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
 
               {/* Post-purchase auto-recharge prompt */}
               <AnimatePresence>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target, Trophy, Wallet } from 'lucide-react'
+import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target, Trophy, Wallet, Settings } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
 import { claimDaily, getChallenge, getReferral, getMe, getMeFresh, getCreditHistory } from '../api/session'
@@ -98,6 +98,7 @@ export default function Profile() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [creditHistory, setCreditHistory] = useState<CreditHistory | null>(null)
   const [walletExpanded, setWalletExpanded] = useState(false)
+  const [settingsExpanded, setSettingsExpanded] = useState(false)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
   const challenge = useAppStore((s) => s.challenge)
@@ -566,56 +567,7 @@ export default function Profile() {
           </div>
         )}
 
-        {/* Gift Credits */}
-        <AnimatePresence mode="wait">
-          {giftSent ? (
-            <motion.div key="giftsent" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              className="flex items-center gap-3 p-4 rounded-card bg-[#FF2D78]/10 border border-[#FF2D78]/20">
-              <Gift size={22} className="text-[#FF2D78]" />
-              <div>
-                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift sent! 🎉</p>
-                <p className="text-[12px] text-[#6E6E73]">Share the link so your friend can claim it</p>
-              </div>
-            </motion.div>
-          ) : giftAmount ? (
-            <motion.div key="giftpick" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              className="p-4 rounded-card bg-white shadow-sm">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[14px] font-semibold text-[#1D1D1F]">🎁 Send {giftAmount}⚡ as gift</p>
-                <button onClick={() => setGiftAmount(null)} className="text-[12px] text-[#6E6E73]">Cancel</button>
-              </div>
-              <p className="text-[12px] text-[#6E6E73] mb-3">
-                Your balance: {user?.credits ?? 0}⚡ → {(user?.credits ?? 0) - giftAmount}⚡ after gift
-              </p>
-              <motion.button whileTap={{ scale: 0.97 }} onClick={() => handleSendGift(giftAmount)}
-                disabled={giftLoading || (user?.credits ?? 0) < giftAmount}
-                className="w-full py-3 rounded-[12px] bg-gradient-to-r from-[#FF2D78] to-[#6C47FF] text-white text-[14px] font-bold disabled:opacity-40">
-                {giftLoading ? 'Creating link…' : 'Create & Share Gift →'}
-              </motion.button>
-            </motion.div>
-          ) : (
-            <motion.div key="giftcard" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className="p-4 rounded-card bg-white shadow-sm">
-              <div className="flex items-center gap-2 mb-3">
-                <Gift size={16} className="text-[#FF2D78]" />
-                <p className="text-[14px] font-semibold text-[#1D1D1F]">Gift Credits to a Friend</p>
-              </div>
-              <p className="text-[12px] text-[#6E6E73] mb-3">They get credits instantly · you get +1⚡ when they claim</p>
-              <div className="flex gap-2">
-                {[5, 10, 25].map((amt) => (
-                  <motion.button key={amt} whileTap={{ scale: 0.93 }}
-                    onClick={() => { hap.light(); setGiftAmount(amt) }}
-                    disabled={(user?.credits ?? 0) < amt}
-                    className="flex-1 py-2.5 rounded-[10px] bg-[#FF2D78]/10 border border-[#FF2D78]/20 text-[#FF2D78] text-[13px] font-bold disabled:opacity-30">
-                    {amt}⚡
-                  </motion.button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Referral card */}
+        {/* Referral card (includes Gift Credits) */}
         {referral && (
           <div className="rounded-card bg-white shadow-sm overflow-hidden">
             {/* Header with dual-avatar visual */}
@@ -710,76 +662,143 @@ export default function Profile() {
                 🎁 Gift your friend 7 days of Pro →
               </motion.button>
             </div>
+            {/* Gift Credits sub-section */}
+            <div className="border-t border-black/[0.04] px-4 py-3">
+              <AnimatePresence mode="wait">
+                {giftSent ? (
+                  <motion.div key="giftsent" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                    className="flex items-center gap-2 py-1">
+                    <span className="text-[16px]">🎉</span>
+                    <p className="text-[13px] font-semibold text-[#1D1D1F]">Gift sent! Share the link with your friend.</p>
+                  </motion.div>
+                ) : giftAmount ? (
+                  <motion.div key="giftpick" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[12px] font-medium text-[#1D1D1F]">
+                        Send {giftAmount}⚡ · balance after: {(user?.credits ?? 0) - giftAmount}⚡
+                      </p>
+                      <button onClick={() => setGiftAmount(null)} className="text-[11px] text-[#6E6E73]">Cancel</button>
+                    </div>
+                    <motion.button whileTap={{ scale: 0.97 }} onClick={() => handleSendGift(giftAmount)}
+                      disabled={giftLoading || (user?.credits ?? 0) < giftAmount}
+                      className="w-full py-2.5 rounded-[10px] bg-gradient-to-r from-[#FF2D78] to-[#6C47FF] text-white text-[13px] font-bold disabled:opacity-40">
+                      {giftLoading ? 'Creating link…' : 'Create & Share Gift →'}
+                    </motion.button>
+                  </motion.div>
+                ) : (
+                  <motion.div key="giftcard" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <p className="text-[11px] text-[#6E6E73] mb-2">🎁 Gift credits — they get instant access, you get +1⚡</p>
+                    <div className="flex gap-2">
+                      {[5, 10, 25].map((amt) => (
+                        <motion.button key={amt} whileTap={{ scale: 0.93 }}
+                          onClick={() => { hap.light(); setGiftAmount(amt) }}
+                          disabled={(user?.credits ?? 0) < amt}
+                          className="flex-1 py-2 rounded-[10px] bg-[#FF2D78]/10 border border-[#FF2D78]/20 text-[#FF2D78] text-[12px] font-bold disabled:opacity-30">
+                          {amt}⚡
+                        </motion.button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         )}
 
-        {/* Language selector */}
-        <div>
-          <p className="text-[12px] text-[#6E6E73] font-medium mb-2">Language</p>
-          <div className="flex gap-2">
-            {LANGS.map((flag, i) => (
-              <motion.button
-                key={LANG_CODES[i]}
-                whileTap={{ scale: 0.88 }}
-                onClick={() => handleLanguage(LANG_CODES[i])}
-                className={`w-10 h-10 rounded-xl text-xl transition-all ${
-                  user?.language === LANG_CODES[i]
-                    ? 'ring-2 ring-[#6C47FF] bg-[#6C47FF]/10'
-                    : 'bg-[#F5F5F7]'
-                }`}
-              >
-                {flag}
-              </motion.button>
-            ))}
-          </div>
-        </div>
-
-        {/* Portfolio visibility */}
-        <div className="p-4 rounded-card bg-[#F5F5F7]">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[14px] font-semibold text-[#1D1D1F]">🔗 Public Portfolio</p>
-              <p className="text-[11px] text-[#6E6E73] mt-0.5">Share your AI photos with a link</p>
+        {/* Settings (collapsed) */}
+        <div className="rounded-card bg-white shadow-sm overflow-hidden">
+          <button
+            className="w-full px-4 pt-4 pb-3 flex items-center justify-between"
+            onClick={() => { hap.select(); setSettingsExpanded((v) => !v) }}
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={15} className="text-[#6E6E73]" />
+              <p className="text-[15px] font-bold text-[#1D1D1F]">Settings</p>
             </div>
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={async () => {
-                const next = !user?.portfolio_public
-                try {
-                  await setPortfolioVisibility(next)
-                  const updated = await getMeFresh()
-                  setUser(updated)
-                } catch { /* noop */ }
-              }}
-              className={`w-12 h-6 rounded-full transition-colors ${user?.portfolio_public ? 'bg-[#34C759]' : 'bg-[#D1D1D6]'}`}
+            <motion.span
+              animate={{ rotate: settingsExpanded ? 90 : 0 }}
+              transition={{ duration: 0.2 }}
+              className="text-[#AEAEB2] text-[13px]"
             >
+              →
+            </motion.span>
+          </button>
+          <AnimatePresence>
+            {settingsExpanded && (
               <motion.div
-                animate={{ x: user?.portfolio_public ? 24 : 2 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-                className="w-5 h-5 rounded-full bg-white shadow-sm"
-              />
-            </motion.button>
-          </div>
-          {user?.portfolio_public && user?.portfolio_url && (
-            <motion.button
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              onClick={() => {
-                const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(user.portfolio_url!)}&text=${encodeURIComponent('My AI portfolio ✨')}`
-                tg?.openLink(shareUrl)
-              }}
-              className="mt-3 w-full py-2 rounded-[10px] bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-semibold"
-            >
-              Share portfolio →
-            </motion.button>
-          )}
-        </div>
-
-        {/* Links */}
-        <div className="flex gap-3 text-[12px] text-[#6E6E73]">
-          <button onClick={() => tg?.openLink(user?.bot_link ?? 'https://t.me/imodelapp_bot')}>Privacy</button>
-          <span>·</span>
-          <button onClick={() => tg?.openLink(user?.bot_link ?? 'https://t.me/imodelapp_bot')}>Terms</button>
+                key="settings-body"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.22, ease: 'easeInOut' }}
+                className="overflow-hidden"
+              >
+                <div className="px-4 pb-4 space-y-4 border-t border-black/[0.04] pt-3">
+                  <div>
+                    <p className="text-[12px] text-[#6E6E73] font-medium mb-2">Language</p>
+                    <div className="flex gap-2">
+                      {LANGS.map((flag, i) => (
+                        <motion.button
+                          key={LANG_CODES[i]}
+                          whileTap={{ scale: 0.88 }}
+                          onClick={() => handleLanguage(LANG_CODES[i])}
+                          className={`w-10 h-10 rounded-xl text-xl transition-all ${
+                            user?.language === LANG_CODES[i]
+                              ? 'ring-2 ring-[#6C47FF] bg-[#6C47FF]/10'
+                              : 'bg-[#F5F5F7]'
+                          }`}
+                        >
+                          {flag}
+                        </motion.button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-[14px] font-semibold text-[#1D1D1F]">🔗 Public Portfolio</p>
+                      <p className="text-[11px] text-[#6E6E73] mt-0.5">Share your AI photos with a link</p>
+                    </div>
+                    <motion.button
+                      whileTap={{ scale: 0.9 }}
+                      onClick={async () => {
+                        const next = !user?.portfolio_public
+                        try {
+                          await setPortfolioVisibility(next)
+                          const updated = await getMeFresh()
+                          setUser(updated)
+                        } catch { /* noop */ }
+                      }}
+                      className={`w-12 h-6 rounded-full transition-colors flex-shrink-0 ${user?.portfolio_public ? 'bg-[#34C759]' : 'bg-[#D1D1D6]'}`}
+                    >
+                      <motion.div
+                        animate={{ x: user?.portfolio_public ? 24 : 2 }}
+                        transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                        className="w-5 h-5 rounded-full bg-white shadow-sm"
+                      />
+                    </motion.button>
+                  </div>
+                  {user?.portfolio_public && user?.portfolio_url && (
+                    <motion.button
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      onClick={() => {
+                        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(user.portfolio_url!)}&text=${encodeURIComponent('My AI portfolio ✨')}`
+                        tg?.openLink(shareUrl)
+                      }}
+                      className="w-full py-2 rounded-[10px] bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-semibold"
+                    >
+                      Share portfolio →
+                    </motion.button>
+                  )}
+                  <div className="flex gap-3 text-[12px] text-[#6E6E73]">
+                    <button onClick={() => tg?.openLink(user?.bot_link ?? 'https://t.me/imodelapp_bot')}>Privacy</button>
+                    <span>·</span>
+                    <button onClick={() => tg?.openLink(user?.bot_link ?? 'https://t.me/imodelapp_bot')}>Terms</button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 

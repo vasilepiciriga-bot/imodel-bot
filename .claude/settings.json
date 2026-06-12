@@ -11,7 +11,8 @@
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('photoshoot_modes.py'\\).read\\(\\)\\); print\\('photoshoot_modes.py OK'\\)\")",
       "Bash(git commit -m ' *)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(python -m py_compile app.py)"
     ]
   }
 }
