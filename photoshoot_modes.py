@@ -117,8 +117,9 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "prompt_layer": (
             "editorial Vogue magazine quality, high fashion avant-garde styling, "
             "wearing haute couture avant-garde fashion ensemble, "
-            "luxury brand campaign, full body or 3/4 editorial shot, "
-            "confident angled pose, art director composition, ultra-premium photoshoot"
+            "luxury brand campaign shot in octabox-lit fashion studio, grey seamless backdrop, "
+            "full body or 3/4 editorial shot, confident angled pose, "
+            "art director composition, ultra-premium photoshoot"
         ),
         "negative_layer": (
             "casual clothing, outdoor snapshot, low contrast, amateur, overprocessed, "
@@ -172,7 +173,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "corporate executive portrait, confident leadership presence, "
-            "tailored business suit, authoritative gaze, LinkedIn-ready, boardroom or studio, "
+            "tailored business suit, authoritative gaze, LinkedIn-ready, "
+            "glass-wall corner office interior, city skyline visible through window, "
             "3/4 body portrait, upright confident posture, 85mm lens"
         ),
         "negative_layer": (
@@ -446,7 +448,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "prompt_layer": (
             "ultra-luxury lifestyle editorial, five-star ambiance, "
             "wearing elegant designer luxury attire, couture fashion outfit, "
-            "old money elegance, opulent environment, Instagram-worthy, fashion forward, "
+            "grand marble hotel lobby with warm chandelier light and architectural columns, "
+            "old money elegance, Instagram-worthy, fashion forward, "
             "3/4 body shot, relaxed elegant pose"
         ),
         "negative_layer": (
@@ -498,10 +501,10 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_factor": 2,
         "upscale_fidelity": 0.65,
         "prompt_layer": (
-            "Dubai luxury influencer portrait, ultra-modern skyscraper backdrop, "
-            "Burj Khalifa or Dubai Marina skyline, wearing luxury designer fashion ensemble, "
-            "glamorous opulent styling, social media influencer aesthetic, "
-            "golden hour desert glow, 3/4 body influencer pose"
+            "Dubai luxury influencer portrait, rooftop terrace with Burj Khalifa and Dubai Marina skyline, "
+            "wearing luxury designer fashion ensemble, glamorous opulent styling, "
+            "golden hour desert glow, social media influencer aesthetic, "
+            "3/4 body influencer pose, warm dusk sky backdrop"
         ),
         "negative_layer": "old architecture, casual clothes, cold tones, budget setting",
         "style_variants": {
@@ -636,8 +639,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "old money aesthetic portrait, inherited wealth and understated elegance, "
-            "classic tailored clothing, equestrian countryside or manor house, "
-            "soft English light, quiet luxury, Slim Aarons photography style"
+            "classic tailored clothing, English country estate with manicured lawns and stone manor house, "
+            "soft overcast English light, quiet luxury, Slim Aarons photography style"
         ),
         "negative_layer": "flashy nouveau riche, logo-heavy fashion, urban streetwear, loud colors",
         "style_variants": {
@@ -1324,15 +1327,35 @@ def get_beauty_layer(mode_key: str, skin_tone: str = "") -> str:
     return mode_beauty.get(skin_tone, mode_beauty.get("default", ""))
 
 
+# Female-specific wardrobe terms → gender-neutral male alternatives.
+# Applied when subject is identified as male.
+_MALE_WARDROBE_SUBS: Dict[str, str] = {
+    "wearing elegant romantic dress or stylish date-night outfit": "wearing stylish date-night outfit",
+    "wearing cozy festive Christmas sweater or elegant holiday dress": "wearing cozy festive Christmas sweater or smart holiday outfit",
+    "wearing ethereal fairy dress or enchanted elven gown": "wearing enchanted elven tunic or mystical fantasy robes",
+    "linen and lace or floral dress": "linen shirt and rustic pastoral attire",
+    "sparkly ball gown or royal attire": "royal attire or regal ceremonial costume",
+}
+
+
 def apply_prompt_layer(
     base_prompt: str,
     mode_key: str,
     style_variant: Optional[str] = None,
     skin_tone: str = "",
+    gender: str = "",
 ) -> str:
-    """Combine base prompt with mode prompt_layer, optional beauty_layer, and sub-style suffix."""
+    """Combine base prompt with mode prompt_layer, beauty_layer, and sub-style suffix.
+
+    gender: 'man' or 'woman' — when 'man', replaces female-specific wardrobe with neutral alternatives.
+    """
     cfg = get_mode_config(mode_key)
-    layer = cfg.get("prompt_layer")
+    layer = cfg.get("prompt_layer") or ""
+    # Apply gender-aware wardrobe substitution for male subjects
+    if gender == "man" and layer:
+        for female_term, male_term in _MALE_WARDROBE_SUBS.items():
+            if female_term in layer:
+                layer = layer.replace(female_term, male_term)
     if layer:
         sep = ", " if base_prompt else ""
         result = f"{base_prompt}{sep}{layer}"

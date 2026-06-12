@@ -7457,16 +7457,22 @@ async def run_webapp_generation_job(job_id: str):
                     _identity = {}
             _id_layer = str(_identity.get("identity_layer", "")).strip()
             if _id_layer:
-                prompt = f"{prompt}, {_id_layer}" if prompt else _id_layer
+                # Inject identity at START of prompt — anchors gender/appearance before any style
+                prompt = f"{_id_layer}, {prompt}" if prompt else _id_layer
         # ────────────────────────────────────────────────────────────────────
 
         # Apply photoshoot mode prompt_layer and collect negative_layer
         # (tournament runner has its own apply_prompt_layer call; this covers everyday/portrait)
         _ps_mode = str(job.get("photoshoot_mode") or "everyday")
         _skin_for_layer = str(_identity.get("skin_tone", ""))
+        _gender_for_layer = str(_identity.get("gender", ""))
         if mode not in ("face_swap", "copy_scene"):
-            prompt = apply_prompt_layer(prompt, _ps_mode, skin_tone=_skin_for_layer)
+            prompt = apply_prompt_layer(prompt, _ps_mode, skin_tone=_skin_for_layer, gender=_gender_for_layer)
         _mode_negative = get_mode_negative(_ps_mode)
+        # Prepend gender-specific clothing negative to prevent wrong-gender wardrobe
+        _gender_negative = str(_identity.get("gender_negative", ""))
+        if _gender_negative:
+            _mode_negative = f"{_gender_negative}, {_mode_negative}" if _mode_negative else _gender_negative
 
         if mode == "face_swap" and style_bytes:
             def _do_swap():

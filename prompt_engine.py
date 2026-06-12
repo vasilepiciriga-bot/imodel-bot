@@ -73,11 +73,12 @@ def _aspect_to_wh(aspect_ratio: str) -> Tuple[int, int]:
 
 def analyze_selfie_identity(selfie_bytes: bytes) -> Dict[str, str]:
     """
-    Identity Passport — Phase 2 feature.
-    Analyze a selfie to extract appearance attributes for prompt personalization.
+    Identity Passport — builds a per-user appearance profile for prompt personalization.
 
     Returns dict with keys:
-        gender, age_range, skin_tone, hair_color, identity_layer (ready-to-inject string)
+        gender, age_range, eye_color, skin_tone, hair_color,
+        identity_layer (ready-to-inject prefix string),
+        gender_negative (clothing terms to exclude in negative prompt)
     Returns empty dict on any failure (caller must handle gracefully).
     """
     if not selfie_bytes or not OPENAI_API_KEY or OpenAI is None:
@@ -85,13 +86,18 @@ def analyze_selfie_identity(selfie_bytes: bytes) -> Dict[str, str]:
     client = OpenAI(api_key=OPENAI_API_KEY)
     img_url = f"data:image/jpeg;base64,{_b64(selfie_bytes)}"
     system = (
-        "You analyze portrait photos to extract appearance attributes for AI photo generation prompts. "
-        "Return ONLY a compact JSON object with these exact fields: "
-        "{\"gender\": \"man\" or \"woman\" or \"person\", "
-        "\"age_range\": \"20s\" or \"30s\" or \"40s\" or \"50s+\", "
-        "\"skin_tone\": \"fair\" or \"medium\" or \"olive\" or \"dark\", "
-        "\"hair_color\": \"dark\" or \"blonde\" or \"red\" or \"gray\" or \"none\"}. "
-        "No other text. No code fences. No explanation. Just the JSON."
+        "You are an expert at analyzing portrait photos for AI image generation. "
+        "Study this photo carefully and determine the person's biological characteristics. "
+        "Return ONLY a compact JSON with these exact fields — no other text, no code fences:\n"
+        "{\n"
+        "  \"gender\": \"man\" or \"woman\",\n"
+        "  \"age_range\": \"teens\" or \"20s\" or \"30s\" or \"40s\" or \"50s+\",\n"
+        "  \"eye_color\": \"brown\" or \"blue\" or \"green\" or \"hazel\" or \"gray\" or \"dark\",\n"
+        "  \"skin_tone\": \"fair\" or \"medium\" or \"olive\" or \"dark\",\n"
+        "  \"hair_color\": \"dark\" or \"blonde\" or \"red\" or \"gray\" or \"none\"\n"
+        "}\n"
+        "CRITICAL: gender must be either 'man' or 'woman' — never 'person' or ambiguous. "
+        "Look at facial bone structure, jaw, brow ridge, and overall features to determine gender confidently."
     )
     try:
         resp = client.chat.completions.create(
@@ -99,39 +105,55 @@ def analyze_selfie_identity(selfie_bytes: bytes) -> Dict[str, str]:
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": [
-                    {"type": "text", "text": "Analyze this portrait photo."},
+                    {"type": "text", "text": "Analyze this portrait and return the JSON identity profile."},
                     {"type": "image_url", "image_url": {"url": img_url, "detail": "low"}},
                 ]},
             ],
             temperature=0.1,
-            max_tokens=80,
+            max_tokens=120,
             timeout=15,
         )
         raw = (resp.choices[0].message.content or "").strip().strip("`\n")
         if raw.lower().startswith("json"):
             raw = raw[4:].strip()
         data = json.loads(raw)
-        gender = str(data.get("gender", "person")).strip()
+        gender = str(data.get("gender", "woman")).strip().lower()
+        if gender not in ("man", "woman"):
+            gender = "woman"
         age_range = str(data.get("age_range", "")).strip()
+        eye_color = str(data.get("eye_color", "")).strip()
         skin_tone = str(data.get("skin_tone", "")).strip()
         hair_color = str(data.get("hair_color", "")).strip()
-        # Build ready-to-inject identity_layer for the generation prompt
-        parts = []
-        if gender and gender != "person":
-            parts.append(gender)
+
+        # Build identity_layer — goes at the START of the prompt as an anchor
+        # Format: "adult man in his 30s, blue eyes, medium skin, dark hair"
+        gender_word = "man" if gender == "man" else "woman"
+        pronoun = "his" if gender == "man" else "her"
+        parts = [f"adult {gender_word}"]
         if age_range:
-            parts.append(f"in their {age_range}")
+            parts.append(f"in {pronoun} {age_range}")
+        if eye_color:
+            parts.append(f"{eye_color} eyes")
         if skin_tone:
             parts.append(f"{skin_tone} skin")
         if hair_color and hair_color != "none":
             parts.append(f"{hair_color} hair")
         identity_layer = ", ".join(parts)
+
+        # Gender negative — prevents wrong-gender clothing from appearing
+        gender_negative = ""
+        if gender == "man":
+            gender_negative = "dress, skirt, women's clothing, feminine fashion, female attire, high heels"
+        # For women we don't restrict — women can wear suits, jackets, any style
+
         return {
             "gender": gender,
             "age_range": age_range,
+            "eye_color": eye_color,
             "skin_tone": skin_tone,
             "hair_color": hair_color,
             "identity_layer": identity_layer,
+            "gender_negative": gender_negative,
         }
     except Exception:
         return {}
