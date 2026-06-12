@@ -635,6 +635,19 @@ function AnalyticsTab() {
                 ['Upgrade sheet used', '—', pct(funnel?.upgrade_sheet_rate)],
                 ['Unique generators', num(funnel?.unique_generators), null],
                 ['Unique buyers', num(funnel?.unique_buyers), null],
+                // Divider — notifications
+                ['─ Notifications ─', '', null],
+                ['Streak reminders sent', num(funnel?.streak_reminder_sent), null],
+                ['Daily bonus reminders', num(funnel?.daily_bonus_reminder_sent), pct(funnel?.daily_bonus_reminder_claim_rate)],
+                ['Quest reminders sent', num(funnel?.quest_reminder_sent), null],
+                // Divider — retention
+                ['─ Retention ─', '', null],
+                ['Streak-at-risk modal', num(funnel?.streak_at_risk_modal_shown), null],
+                ['Quests claimed', num(funnel?.quest_claimed), null],
+                ['Daily bonus claimed', num(funnel?.daily_bonus_claimed), null],
+                ['Share rewards claimed', num(funnel?.share_reward_claimed), null],
+                ['Auto-recharge enabled', num(funnel?.auto_recharge_enabled), null],
+                ['Pro trials activated', num(funnel?.pro_trial_activated), null],
               ].map(([label, val, rate]) => (
                 <div key={String(label)} className="flex items-center justify-between px-4 py-2.5">
                   <span className="text-[12px] text-[#1D1D1F]">{label}</span>

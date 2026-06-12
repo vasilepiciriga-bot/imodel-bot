@@ -5,7 +5,8 @@
       "Bash(awk '{if \\($1 > 7900\\) print}')",
       "Bash(python3 -c \"import photoshoot_modes; print\\('OK'\\)\")",
       "Bash(python3 -c \"from PIL import Image, ImageStat, ImageFilter; print\\('PIL OK'\\)\")",
-      "Bash(python3 -c \"import photoshoot_modes; print\\('photoshoot_modes OK'\\)\")"
+      "Bash(python3 -c \"import photoshoot_modes; print\\('photoshoot_modes OK'\\)\")",
+      "Bash(python3 -c \"from photoshoot_modes import PHOTOSHOOT_MODES; [print\\(k, len\\(v.get\\('style_variants',{}\\)\\), 'variants'\\) for k,v in PHOTOSHOOT_MODES.items\\(\\)]\")"
     ]
   }
 }

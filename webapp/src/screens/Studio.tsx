@@ -159,6 +159,7 @@ export default function Studio() {
     const snoozedAt = Number(localStorage.getItem('streak_risk_snoozed') ?? 0)
     if (Date.now() - snoozedAt < 2 * 60 * 60 * 1000) return
     setShowStreakModal(true)
+    track('streak_at_risk_modal_shown', { streak: user.streak })
   }, [user?.last_gen_at, user?.streak])
 
   // Fetch claimable quests on mount (complements post-generation fetch)
@@ -170,7 +171,7 @@ export default function Studio() {
   }, [])
 
   const modeConfig = photoshootModes.find((m) => m.key === photoshootMode)
-  const baseCost = modeConfig?.credits ?? (photoshootMode === 'everyday' ? 1 : 1)
+  const baseCost = modeConfig?.credits_for_user ?? modeConfig?.credits ?? (photoshootMode === 'everyday' ? 1 : 1)
   const cost = batchEnabled ? 3 : baseCost
 
   function isJobDone(job: Generation) {

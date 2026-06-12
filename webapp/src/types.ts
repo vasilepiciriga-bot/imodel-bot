@@ -94,6 +94,7 @@ export interface PhotoshootMode {
   label_ru: string
   emoji: string
   credits: number
+  credits_for_user?: number
   n_generations: number
   select_best: number
   upscale: boolean

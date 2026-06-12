@@ -55,6 +55,14 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
                 "label": {"en": "Moody", "ru": "Атмосферный"},
                 "prompt_suffix": "dramatic shadows, cinematic Rembrandt lighting, rich tones",
             },
+            "color_pop": {
+                "label": {"en": "Color Pop", "ru": "Яркие цвета"},
+                "prompt_suffix": "vibrant saturated colors, bold fashion palette, high-contrast editorial",
+            },
+            "black_white": {
+                "label": {"en": "Black & White", "ru": "Ч/Б"},
+                "prompt_suffix": "classic monochrome photography, fine-grain B&W, timeless elegance",
+            },
         },
         "is_premium": True,
         "requires_custom_prompt": False,
@@ -93,6 +101,18 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
             "minimal": {
                 "label": {"en": "Minimalist", "ru": "Минимализм"},
                 "prompt_suffix": "clean white studio, minimalist aesthetic, pure elegance, negative space",
+            },
+            "dark_art": {
+                "label": {"en": "Dark Art", "ru": "Тёмный арт"},
+                "prompt_suffix": "dark dramatic studio, deep jewel tones, moody avant-garde fashion, bold contrast",
+            },
+            "resort": {
+                "label": {"en": "Resort Season", "ru": "Курорт"},
+                "prompt_suffix": "resort wear editorial, tropical lush background, vibrant summer palette, luxury vacation",
+            },
+            "vintage_couture": {
+                "label": {"en": "Vintage Couture", "ru": "Ретро-кутюр"},
+                "prompt_suffix": "1990s Vogue aesthetic, vintage couture styling, film grain, timeless elegance",
             },
         },
         "is_premium": True,
@@ -133,6 +153,18 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
                 "label": {"en": "Outdoor Executive", "ru": "На природе"},
                 "prompt_suffix": "rooftop or garden terrace, natural light, relaxed confidence",
             },
+            "speaker": {
+                "label": {"en": "Keynote Speaker", "ru": "Спикер"},
+                "prompt_suffix": "conference stage, audience blur in background, dynamic pose, thought leader",
+            },
+            "tech_casual": {
+                "label": {"en": "Tech Casual", "ru": "Тех-casual"},
+                "prompt_suffix": "Silicon Valley smart casual, modern coworking space, relaxed yet sharp",
+            },
+            "creative": {
+                "label": {"en": "Creative Director", "ru": "Арт-директор"},
+                "prompt_suffix": "creative agency studio, artistic backdrop, bold individualistic style",
+            },
         },
         "is_premium": True,
         "requires_custom_prompt": False,
@@ -172,6 +204,14 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
                 "label": {"en": "Social Media", "ru": "Соцсети"},
                 "prompt_suffix": "Instagram-ready, lifestyle flat lay aesthetic, trendy location",
             },
+            "sunset": {
+                "label": {"en": "Golden Hour", "ru": "Золотой час"},
+                "prompt_suffix": "warm sunset light, beach or park, soft backlit glow, magical hour",
+            },
+            "sporty": {
+                "label": {"en": "Active Life", "ru": "Активный"},
+                "prompt_suffix": "athletic lifestyle, outdoor sports vibe, energetic dynamic pose, natural setting",
+            },
         },
         "is_premium": False,
         "requires_custom_prompt": False,
@@ -210,6 +250,18 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
             "penthouse": {
                 "label": {"en": "Penthouse", "ru": "Пентхаус"},
                 "prompt_suffix": "luxury penthouse interior, city skyline at night, designer decor",
+            },
+            "monaco": {
+                "label": {"en": "Monaco", "ru": "Монако"},
+                "prompt_suffix": "Monaco Grand Prix paddock, casino sophistication, European jetset lifestyle",
+            },
+            "florence": {
+                "label": {"en": "Italian Villa", "ru": "Итальянская вилла"},
+                "prompt_suffix": "Tuscany villa courtyard, Renaissance art backdrop, warm golden Italian light",
+            },
+            "ski_chalet": {
+                "label": {"en": "Alpine Chalet", "ru": "Альпийский шале"},
+                "prompt_suffix": "luxury ski chalet, snowy mountains, fireplace warmth, après-ski elegance",
             },
         },
         "is_premium": True,

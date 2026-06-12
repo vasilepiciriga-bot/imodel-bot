@@ -116,6 +116,18 @@ export interface FunnelData {
   purchase_rate: number | null
   nudge_conversion_rate: number | null
   upgrade_sheet_rate: number | null
+  // Notification funnels
+  streak_reminder_sent: number
+  daily_bonus_reminder_sent: number
+  quest_reminder_sent: number
+  daily_bonus_claimed: number
+  daily_bonus_reminder_claim_rate: number | null
+  // Retention events
+  streak_at_risk_modal_shown: number
+  quest_claimed: number
+  share_reward_claimed: number
+  auto_recharge_enabled: number
+  pro_trial_activated: number
   total_stars: number
   revenue_by_segment: Record<string, { purchases: number; stars: number }>
   unique_generators: number

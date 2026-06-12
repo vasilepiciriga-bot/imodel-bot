@@ -66,7 +66,8 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
     setSelectedVariant('')
     if (mode.key !== 'custom') setCustomDesc('')
     // Show inline upgrade sheet when premium mode + low credits
-    if (PREMIUM_MODES.has(mode.key) && userCredits < 10) {
+    const effectiveCost = mode.credits_for_user ?? mode.credits
+    if (PREMIUM_MODES.has(mode.key) && userCredits < effectiveCost + 4) {
       const variant = getVariantSync('upgrade_sheet')
       track('premium_mode_upgrade_shown', { mode: mode.key, credits: userCredits, variant })
       if (variant === 'paywall') {
@@ -151,7 +152,8 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
               {modes.map((mode) => {
                 const isSelected = selected === mode.key
                 const colors = MODE_COLORS[mode.key] ?? MODE_COLORS.everyday
-                const canAfford = userCredits >= mode.credits
+                const effectiveCredits = mode.credits_for_user ?? mode.credits
+                const canAfford = userCredits >= effectiveCredits
                 return (
                   <motion.button
                     key={mode.key}
@@ -190,11 +192,14 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
 
                     {/* Cost + check */}
                     <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                      <span
-                        className={`text-[13px] font-bold ${canAfford ? 'text-[#6C47FF]' : 'text-[#FF3B30]'}`}
-                      >
-                        {mode.credits}⚡
-                      </span>
+                      <div className="flex items-center gap-1">
+                        {mode.credits_for_user != null && mode.credits_for_user < mode.credits && (
+                          <span className="text-[11px] text-[#AEAEB2] line-through">{mode.credits}⚡</span>
+                        )}
+                        <span className={`text-[13px] font-bold ${canAfford ? 'text-[#6C47FF]' : 'text-[#FF3B30]'}`}>
+                          {effectiveCredits}⚡
+                        </span>
+                      </div>
                       {isSelected && (
                         <div className="w-5 h-5 rounded-full bg-[#6C47FF] flex items-center justify-center">
                           <Check size={11} className="text-white" strokeWidth={3} />
@@ -291,7 +296,14 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                       </p>
                       <p className="text-[11px] text-[#6E6E73] truncate">{upgradeMode.short_desc}</p>
                     </div>
-                    <span className="text-[13px] font-bold text-[#FF9500]">{upgradeMode.credits}⚡</span>
+                    <div className="flex items-center gap-1">
+                      {upgradeMode.credits_for_user != null && upgradeMode.credits_for_user < upgradeMode.credits && (
+                        <span className="text-[11px] text-[#AEAEB2] line-through">{upgradeMode.credits}⚡</span>
+                      )}
+                      <span className="text-[13px] font-bold text-[#FF9500]">
+                        {upgradeMode.credits_for_user ?? upgradeMode.credits}⚡
+                      </span>
+                    </div>
                   </div>
                   {/* Two-button choice */}
                   <div className="flex gap-2">
@@ -306,14 +318,14 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                     <motion.button
                       whileTap={{ scale: 0.97 }}
                       onClick={handleUpgradeUseCredits}
-                      disabled={userCredits < upgradeMode.credits}
+                      disabled={userCredits < (upgradeMode.credits_for_user ?? upgradeMode.credits)}
                       className={`flex-1 py-3 rounded-[14px] text-[13px] font-bold border-2 transition-opacity ${
-                        userCredits >= upgradeMode.credits
+                        userCredits >= (upgradeMode.credits_for_user ?? upgradeMode.credits)
                           ? 'border-[#6C47FF] text-[#6C47FF]'
                           : 'border-[#D1D1D6] text-[#6E6E73] opacity-50'
                       }`}
                     >
-                      Use {upgradeMode.credits}⚡
+                      Use {upgradeMode.credits_for_user ?? upgradeMode.credits}⚡
                     </motion.button>
                   </div>
                   <button
@@ -340,7 +352,9 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                     }`}
                     style={{ background: 'linear-gradient(135deg, #6C47FF 0%, #FF2D78 100%)' }}
                   >
-                    {selectedMode ? `Set ${selectedMode.label} · ${selectedMode.credits}⚡` : 'Set Mode'}
+                    {selectedMode
+                      ? `Set ${selectedMode.label} · ${selectedMode.credits_for_user ?? selectedMode.credits}⚡`
+                      : 'Set Mode'}
                   </motion.button>
                 </motion.div>
               )}

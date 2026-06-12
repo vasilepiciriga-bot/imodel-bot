@@ -876,13 +876,25 @@ def _analytics_funnel_counts(days: int = 7) -> Dict[str, Any]:
             "mode_selected":         totals.get("mode_selected", 0),
             "premium_mode_upgrade_shown": totals.get("premium_mode_upgrade_shown", 0),
             "premium_mode_use_credits":   totals.get("premium_mode_use_credits", 0),
+            # Notification funnels
+            "streak_reminder_sent":       totals.get("streak_reminder_sent", 0),
+            "daily_bonus_reminder_sent":  totals.get("daily_bonus_reminder_sent", 0),
+            "quest_reminder_sent":        totals.get("quest_reminder_sent", 0),
+            "daily_bonus_claimed":        totals.get("daily_bonus_claimed", 0),
+            # Retention / engagement events
+            "streak_at_risk_modal_shown": totals.get("streak_at_risk_modal_shown", 0),
+            "quest_claimed":              totals.get("quest_claimed", 0),
+            "share_reward_claimed":       totals.get("share_reward_claimed", 0),
+            "auto_recharge_enabled":      totals.get("auto_recharge_enabled", 0),
+            "pro_trial_activated":        totals.get("pro_trial_activated", 0),
             # Rates
-            "completion_rate":       rate("generation_completed", "generation_started"),
-            "paywall_rate":          rate("paywall_hit", "generation_started"),
-            "purchase_rate":         rate("purchase_completed", "paywall_hit"),
-            "share_rate":            rate("share_tapped", "generation_completed"),
-            "nudge_conversion_rate": rate("nudge_converted", "nudges_sent"),
-            "upgrade_sheet_rate":    rate("premium_mode_use_credits", "premium_mode_upgrade_shown"),
+            "completion_rate":            rate("generation_completed", "generation_started"),
+            "paywall_rate":               rate("paywall_hit", "generation_started"),
+            "purchase_rate":              rate("purchase_completed", "paywall_hit"),
+            "share_rate":                 rate("share_tapped", "generation_completed"),
+            "nudge_conversion_rate":      rate("nudge_converted", "nudges_sent"),
+            "upgrade_sheet_rate":         rate("premium_mode_use_credits", "premium_mode_upgrade_shown"),
+            "daily_bonus_reminder_claim_rate": rate("daily_bonus_claimed", "daily_bonus_reminder_sent"),
             # Revenue
             "total_stars":           total_stars,
             "revenue_by_segment":    revenue_by_segment,
@@ -1487,6 +1499,7 @@ USER_LAST_BONUS: Dict[int, float]  = {}   # timestamp последнего daily
 USER_STREAK: Dict[int, int]        = {}   # streak day count
 USER_STREAK_REMINDED: Dict[int, float] = {}   # uid → timestamp of last streak-at-risk reminder sent
 USER_QUEST_REMINDED:  Dict[int, float] = {}   # uid → timestamp of last quest-expiry reminder sent
+USER_DAILY_BONUS_REMINDED: Dict[int, float] = {}   # uid → timestamp of last daily-bonus-ready reminder sent
 USER_PORTFOLIO_PUBLIC: Dict[int, bool] = {}   # uid → portfolio is public (opt-in)
 USER_LAST_SHARE_REWARD: Dict[int, str] = {}  # uid → ISO date of last share-reward claim
 STATS_PRESET_USAGE:   Dict[str, int]   = {}  # preset_key → uses this week (resets weekly)
@@ -4497,6 +4510,64 @@ async def quest_reminder_loop():
         await asyncio.sleep(1800)
 
 
+async def daily_bonus_reminder_loop():
+    """Every 30 min: remind users whose daily bonus is ready but unclaimed. Sends once per day, 10-14 UTC window."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            now = time.time()
+            sent = 0
+            for uid, last_bonus in list(USER_LAST_BONUS.items()):
+                if NUDGE_INFO.get(uid, {}).get("blocked"):
+                    continue
+                # Skip if reminded in the last 22h (one reminder per day)
+                if now - USER_DAILY_BONUS_REMINDED.get(uid, 0) < 22 * 3600:
+                    continue
+                lang = USER_LANG.get(uid, LANG_DEFAULT)
+                if not _nudge_allowed_now(lang):
+                    continue
+                # Check if bonus is ready using the phase-aware interval
+                credits_per_claim, interval_days, _phase = _get_bonus_phase(uid)
+                claim_interval = DAILY_WINDOW * interval_days
+                elapsed = now - last_bonus
+                if elapsed < claim_interval:
+                    continue
+                # Don't remind if they already have plenty of credits
+                if USER_CREDITS.get(uid, 0) >= 100:
+                    continue
+                # Only remind users who have generated at least once (engaged users)
+                if int(STATS_USERS_INFO.get(uid, {}).get("gens_ok", 0)) < 1:
+                    continue
+                _msgs: Dict[str, str] = {
+                    "ru": f"🎁 Ваш ежедневный бонус готов! Заберите +{credits_per_claim}⚡",
+                    "en": f"🎁 Your daily bonus is ready! Claim +{credits_per_claim}⚡",
+                    "ro": f"🎁 Bonusul tău zilnic e gata! Revendică +{credits_per_claim}⚡",
+                    "de": f"🎁 Dein täglicher Bonus ist bereit! Hol dir +{credits_per_claim}⚡",
+                    "ar": f"🎁 مكافأتك اليومية جاهزة! احصل على +{credits_per_claim}⚡",
+                }
+                text = _msgs.get(lang, _msgs["en"])
+                webapp_url = f"{WEBHOOK_BASE}/webapp"
+                markup = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🎁 Claim bonus", web_app=WebAppInfo(url=webapp_url)),
+                ]])
+                try:
+                    await bot.send_message(uid, text, reply_markup=markup)
+                    USER_DAILY_BONUS_REMINDED[uid] = now
+                    analytics_event(uid, "daily_bonus_reminder_sent", {"credits": credits_per_claim, "phase": _phase})
+                    sent += 1
+                    if NUDGE_SEND_DELAY > 0:
+                        await asyncio.sleep(NUDGE_SEND_DELAY)
+                except (TelegramForbiddenError, TelegramNotFound):
+                    NUDGE_INFO.setdefault(uid, {})["blocked"] = True
+                except Exception:
+                    pass
+            if sent:
+                print(f"[daily_bonus_reminder_loop] sent {sent} reminders")
+        except Exception as e:
+            print("daily_bonus_reminder_loop error:", str(e)[:200])
+        await asyncio.sleep(1800)
+
+
 async def nudge_loop():
     # Run hourly; send up to NUDGE_BATCH_LIMIT eligible nudges
     await asyncio.sleep(5)
@@ -7116,6 +7187,9 @@ async def on_startup():
             t = asyncio.create_task(quest_reminder_loop(), name="quest_reminder_loop")
             t.add_done_callback(_bg_task_error_handler)
             print("Quest reminder loop started")
+            t = asyncio.create_task(daily_bonus_reminder_loop(), name="daily_bonus_reminder_loop")
+            t.add_done_callback(_bg_task_error_handler)
+            print("Daily bonus reminder loop started")
             t = asyncio.create_task(reengagement_loop(), name="reengagement_loop")
             t.add_done_callback(_bg_task_error_handler)
             print("Re-engagement loop started")
@@ -9152,6 +9226,20 @@ def _thumb_url_for_key(key: str) -> str:
     return f"/preset-thumbs/{key}.webp"
 
 
+_PREMIUM_MODE_KEYS = {"vogue", "ceo", "luxury"}
+
+def _mode_credits_for_user(uid: int, mode_key: str, base_credits: int) -> int:
+    """Return per-user credit cost for a photoshoot mode, discounted by subscription tier."""
+    sub = USER_SUBSCRIPTIONS.get(uid)
+    if sub and time.time() < float(sub.get("expires", 0)):
+        plan = str(sub.get("plan", ""))
+        if plan in ("elite", "creator"):
+            return max(1, base_credits - 1)
+        if plan in ("pro",) and mode_key in _PREMIUM_MODE_KEYS:
+            return max(1, base_credits - 1)
+    return base_credits
+
+
 @app.get("/api/v1/photoshoot-modes")
 async def api_photoshoot_modes(request: Request):
     user = webapp_user_from_request(request)
@@ -9178,6 +9266,7 @@ async def api_photoshoot_modes(request: Request):
             "label_ru": cfg["label"].get("ru", key),
             "emoji": cfg.get("emoji", "✦"),
             "credits": cfg["credits"],
+            "credits_for_user": _mode_credits_for_user(uid, key, cfg["credits"]),
             "n_generations": cfg["n_generations"],
             "select_best": cfg["select_best"],
             "upscale": cfg["upscale"],
