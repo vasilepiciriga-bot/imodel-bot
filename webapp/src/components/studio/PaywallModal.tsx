@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { X, Zap, Crown, Star, Users } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { createInvoice } from '../../api/shop'
-import { getMe } from '../../api/session'
+import { getMeFresh } from '../../api/session'
 import { api } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { track } from '../../api/analytics'
@@ -86,7 +86,7 @@ export function PaywallModal({ lastResultUrl, onClose }: Props) {
           confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
           tg?.HapticFeedback?.notificationOccurred('success')
           track('paywall_converted', { pack: packId, stars, segment, variant: paywallVariant })
-          const updated = await getMe()
+          const updated = await getMeFresh()
           setUser(updated)
           updateCredits(updated.credits)
           onClose()

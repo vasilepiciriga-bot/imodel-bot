@@ -1,7 +1,9 @@
-import { api } from './client'
+import { api, invalidateCache } from './client'
 import type { UserProfile, Challenge, DailyBonusResult } from '../types'
 
+/** Always fetch fresh — bypasses the SWR cache (used after purchases/mutations). */
 export const getMe = () => api.get<UserProfile>('/api/v1/me')
+export const getMeFresh = () => { invalidateCache('/api/v1/me'); return api.get<UserProfile>('/api/v1/me') }
 
 export const createSession = () =>
   api.post<UserProfile>('/api/v1/webapp/session')

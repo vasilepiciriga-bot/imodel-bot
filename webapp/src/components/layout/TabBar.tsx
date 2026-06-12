@@ -14,6 +14,23 @@ const TABS = [
 
 const ADMIN_ROLES = new Set(['owner', 'admin', 'operator', 'support'])
 
+// Lazy import map for prefetch on hover/touch
+const PREFETCH_MAP: Record<string, () => Promise<unknown>> = {
+  studio:  () => import('../../screens/Studio'),
+  styles:  () => import('../../screens/Styles'),
+  gallery: () => import('../../screens/Gallery'),
+  shop:    () => import('../../screens/Shop'),
+  profile: () => import('../../screens/Profile'),
+  admin:   () => import('../../screens/Admin'),
+}
+const _prefetched = new Set<string>()
+
+function prefetch(id: string) {
+  if (_prefetched.has(id)) return
+  _prefetched.add(id)
+  PREFETCH_MAP[id]?.()
+}
+
 export function TabBar() {
   const tab    = useAppStore((s) => s.tab)
   const setTab = useAppStore((s) => s.setTab)
@@ -32,6 +49,8 @@ export function TabBar() {
         return (
           <button
             key={id}
+            onMouseEnter={() => prefetch(id)}
+            onTouchStart={() => prefetch(id)}
             onClick={() => {
               tg?.HapticFeedback?.selectionChanged()
               setTab(id)
@@ -72,6 +91,8 @@ export function TabBar() {
 
       {isAdmin && (
         <button
+          onMouseEnter={() => prefetch('admin')}
+          onTouchStart={() => prefetch('admin')}
           onClick={() => {
             tg?.HapticFeedback?.selectionChanged()
             setTab('admin' as Parameters<typeof setTab>[0])

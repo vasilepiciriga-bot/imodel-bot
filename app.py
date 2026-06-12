@@ -1200,6 +1200,7 @@ USER_ROLES: Dict[int, str] = {}
 USER_GRANTS: Dict[int, Set[str]] = {}
 AUDIT_LOG: List[Dict[str, Any]] = []
 JOBS: Dict[str, Dict[str, Any]] = {}
+JOBS_HARD_CAP = int(os.getenv("JOBS_HARD_CAP", "2000"))  # max jobs kept in memory
 
 MAX_CONCURRENT_JOBS_PER_USER = 3
 
@@ -4269,6 +4270,22 @@ async def memory_cleanup_loop():
                 JOBS.pop(jid, None)
             if stale_jobs:
                 print(f"[cleanup] pruned {len(stale_jobs)} old jobs from memory")
+            # Hard cap: if still over limit, evict oldest done jobs first
+            if len(JOBS) > JOBS_HARD_CAP:
+                evict_candidates = sorted(
+                    [(jid, j.get("created_at", 0)) for jid, j in JOBS.items()
+                     if j.get("status") not in ("running", "queued")],
+                    key=lambda x: x[1]
+                )
+                evict_count = len(JOBS) - JOBS_HARD_CAP
+                for jid, _ in evict_candidates[:evict_count]:
+                    JOBS.pop(jid, None)
+                if evict_count > 0:
+                    print(f"[cleanup] hard-cap evicted {evict_count} jobs (cap={JOBS_HARD_CAP})")
+            # Prune exhausted re-engagement sequences for blocked users
+            blocked_uids = {uid for uid, ni in NUDGE_INFO.items() if ni.get("blocked")}
+            for uid in blocked_uids:
+                USER_REENGAGEMENT.pop(uid, None)
         except Exception as e:
             print("[cleanup] error:", str(e)[:160])
         await asyncio.sleep(3600)
@@ -7624,7 +7641,18 @@ async def root_health():
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok"}
+    active_jobs = sum(1 for j in JOBS.values() if j.get("status") in ("running", "queued"))
+    return {
+        "status": "ok",
+        "db": "ok" if DB_READY else "unavailable",
+        "jobs_total": len(JOBS),
+        "jobs_active": active_jobs,
+        "users": len(STATS_USERS_INFO),
+        "credits_loaded": len(USER_CREDITS),
+        "uptime_s": round(time.time() - _START_TIME),
+    }
+
+_START_TIME = time.time()
 
 @app.get("/webapp_legacy_redirect")
 async def webapp_index():

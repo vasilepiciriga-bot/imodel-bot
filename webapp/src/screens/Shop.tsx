@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, Zap, Crown, Star, Check, ChevronRight, RotateCw } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { getShop, createInvoice, setAutoRecharge, type ShopData } from '../api/shop'
-import { getMe } from '../api/session'
+import { getMe, getMeFresh } from '../api/session'
 import { useAppStore } from '../store/appStore'
 import { track } from '../api/analytics'
 import { useExperiment } from '../hooks/useExperiment'
@@ -126,7 +126,7 @@ export default function Shop() {
         if (status === 'paid') {
           fireConfetti()
           hap.success()
-          const updated = await getMe()
+          const updated = await getMeFresh()
           setUser(updated)
           updateCredits(updated.credits)
           localStorage.removeItem(SHOP_CACHE_KEY)

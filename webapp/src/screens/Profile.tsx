@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target, Trophy } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
-import { claimDaily, getChallenge, getReferral, getMe } from '../api/session'
+import { claimDaily, getChallenge, getReferral, getMe, getMeFresh } from '../api/session'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { createGift } from '../api/gift'
 import { createGiftSub } from '../api/shop'
@@ -194,7 +194,7 @@ export default function Profile() {
       const { link } = await createGift(credits)
       setGiftSent(true)
       setGiftAmount(null)
-      const updated = await getMe()
+      const updated = await getMeFresh()
       setUser(updated)
       const text = encodeURIComponent("🎁 I'm gifting you AI photo credits!")
       tg?.openLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${text}`)
@@ -681,7 +681,7 @@ export default function Profile() {
                 const next = !user?.portfolio_public
                 try {
                   await setPortfolioVisibility(next)
-                  const updated = await getMe()
+                  const updated = await getMeFresh()
                   setUser(updated)
                 } catch { /* noop */ }
               }}
@@ -728,7 +728,7 @@ export default function Profile() {
                 setQuests(q)
                 useAppStore.getState().setProfileBadge(claimable)
               }).catch(() => null)
-              if (user) getMe().then((u) => setUser(u)).catch(() => null)
+              if (user) getMeFresh().then((u) => setUser(u)).catch(() => null)
               confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#6C47FF', '#FF2D78', '#FFD700'] })
             }}
           />

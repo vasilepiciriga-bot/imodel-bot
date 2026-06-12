@@ -10,7 +10,7 @@ import { getGallery, getCachedGallery, setCachedGallery, requestHD, deletePhoto 
 import { saveImageToPhone } from '../lib/saveImage'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { setPortfolioVisibility } from '../api/portfolio'
-import { getMe } from '../api/session'
+import { getMe, getMeFresh } from '../api/session'
 import { generateCaption } from '../api/caption'
 import { reactToPhoto } from '../api/quests'
 import { track } from '../api/analytics'
@@ -441,7 +441,7 @@ export default function Gallery() {
       if (!user?.portfolio_public) {
         const res = await setPortfolioVisibility(true)
         url = res.portfolio_url
-        const updated = await getMe()
+        const updated = await getMeFresh()
         setUser(updated)
       }
       if (!url) return

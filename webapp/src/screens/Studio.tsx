@@ -16,7 +16,7 @@ import { useAppStore } from '../store/appStore'
 import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
-import { getChallenge, claimDaily, getMe } from '../api/session'
+import { getChallenge, claimDaily, getMeFresh } from '../api/session'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { getQuests, claimQuest, type QuestItem } from '../api/quests'
 import { getCachedPresets } from '../api/presets'
@@ -78,7 +78,7 @@ export default function Studio() {
       } else {
         toast.success(`+${result.gens_added}⚡ daily bonus claimed!`, { icon: '🎁' })
       }
-      const updated = await getMe()
+      const updated = await getMeFresh()
       setUser(updated)
       updateCredits(updated.credits)
     } catch {
