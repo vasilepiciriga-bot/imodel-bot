@@ -61,6 +61,7 @@ export interface Generation {
   output_urls?: string[]
   hd_url?: string
   hd_job_id?: string
+  animate_job_id?: string
   error?: string
   preset_key?: string
   mode?: string
@@ -73,6 +74,8 @@ export interface Generation {
   candidates_total?: number
   best_score?: number
 }
+
+export type AgeDirection = 'baby' | 'young' | 'older' | 'elder'
 
 export type GenerationMode = 'portrait' | 'copy_scene' | 'copy_image'
 

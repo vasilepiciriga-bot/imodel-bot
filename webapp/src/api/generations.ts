@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { Generation } from '../types'
+import type { AgeDirection, Generation } from '../types'
 
 interface CreateParams {
   image_b64: string
@@ -50,3 +50,9 @@ export function setCachedGallery(items: Generation[]) {
 
 export const deletePhoto = (jobId: string) =>
   api.delete<{ ok: boolean }>(`/api/v1/gallery/${jobId}`)
+
+export const animateGeneration = (jobId: string) =>
+  api.post<{ job_id: string; status: string; credit_cost: number }>(`/api/v1/generations/${jobId}/animate`)
+
+export const createAgeTransform = (jobId: string, direction: AgeDirection) =>
+  api.post<{ job_id: string; status: string; credit_cost: number }>('/api/v1/age-transform', { job_id: jobId, direction })

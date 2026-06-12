@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Download, Share2, RefreshCw, Sparkles, Star, Send, Users } from 'lucide-react'
+import { Download, Share2, RefreshCw, Sparkles, Star, Send, Users, Play } from 'lucide-react'
 import { saveImageToPhone } from '../../lib/saveImage'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { useAppStore } from '../../store/appStore'
@@ -8,7 +8,8 @@ import { api } from '../../api/client'
 import { shareToCommunity } from '../../api/community'
 import { track } from '../../api/analytics'
 import { useToast } from '../../hooks/useToast'
-import type { Generation } from '../../types'
+import { animateGeneration, createAgeTransform, getGeneration } from '../../api/generations'
+import type { AgeDirection, Generation } from '../../types'
 
 const tg = window.Telegram?.WebApp
 
@@ -84,11 +85,99 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
   const [communitySharing, setCommunitySharing] = useState(false)
   const [communityShared, setCommunityShared] = useState(false)
   const [showCommunityInput, setShowCommunityInput] = useState(false)
+
+  // Animate (Talking Photo)
+  const [animating, setAnimating] = useState(false)
+  const [animateJobId, setAnimateJobId] = useState<string | null>(job.animate_job_id ?? null)
+  const [animateStatus, setAnimateStatus] = useState<string>('')
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const animatePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Age transform
+  const [ageDirection, setAgeDirection] = useState<AgeDirection | null>(null)
+  const [ageJobId, setAgeJobId] = useState<string | null>(null)
+  const [ageStatus, setAgeStatus] = useState<string>('')
+  const [ageUrl, setAgeUrl] = useState<string | null>(null)
+  const agePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   const user = useAppStore((s) => s.user) as ({ bot_link?: string } | null)
   const updateCredits = useAppStore((s) => s.updateCredits)
   const botLink = (user as { bot_link?: string } | null)?.bot_link ?? 'https://t.me/imodelapp_bot'
   const outputUrl = job.hd_url ?? job.output_url ?? ''
   const toast = useToast()
+
+  // Poll animate job until ready/failed
+  useEffect(() => {
+    if (!animateJobId || videoUrl || animateStatus === 'failed') return
+    animatePollRef.current = setInterval(async () => {
+      try {
+        const j = await getGeneration(animateJobId)
+        setAnimateStatus(j.status)
+        if (j.status === 'ready' && j.output_url) {
+          setVideoUrl(j.output_url)
+          clearInterval(animatePollRef.current!)
+        } else if (j.status === 'failed' || j.status === 'error') {
+          clearInterval(animatePollRef.current!)
+        }
+      } catch { /* network blip — keep polling */ }
+    }, 3000)
+    return () => clearInterval(animatePollRef.current!)
+  }, [animateJobId])
+
+  // Poll age transform job until ready/failed
+  useEffect(() => {
+    if (!ageJobId || ageUrl || ageStatus === 'failed') return
+    agePollRef.current = setInterval(async () => {
+      try {
+        const j = await getGeneration(ageJobId)
+        setAgeStatus(j.status)
+        if (j.status === 'ready' && j.output_url) {
+          setAgeUrl(j.output_url)
+          clearInterval(agePollRef.current!)
+        } else if (j.status === 'failed' || j.status === 'error') {
+          clearInterval(agePollRef.current!)
+        }
+      } catch { /* network blip */ }
+    }, 3000)
+    return () => clearInterval(agePollRef.current!)
+  }, [ageJobId])
+
+  async function handleAnimate() {
+    if (animating || animateJobId) return
+    tg?.HapticFeedback?.impactOccurred('medium')
+    setAnimating(true)
+    try {
+      const res = await animateGeneration(job.job_id)
+      setAnimateJobId(res.job_id)
+      setAnimateStatus('queued')
+      track('animate_started', { job_id: job.job_id })
+      updateCredits(-res.credit_cost)
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status
+      if (status === 402) toast.error('Not enough credits (10⚡ needed)')
+      else toast.error('Could not start animation — try again')
+    } finally {
+      setAnimating(false)
+    }
+  }
+
+  async function handleAgeTransform(direction: AgeDirection) {
+    if (ageJobId) return
+    tg?.HapticFeedback?.impactOccurred('medium')
+    setAgeDirection(direction)
+    try {
+      const res = await createAgeTransform(job.job_id, direction)
+      setAgeJobId(res.job_id)
+      setAgeStatus('queued')
+      track('age_transform_started', { job_id: job.job_id, direction })
+      updateCredits(-res.credit_cost)
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status
+      if (status === 402) toast.error('Not enough credits (4⚡ needed)')
+      else toast.error('Could not start age transform — try again')
+      setAgeDirection(null)
+    }
+  }
 
   const upsellMode = pickUpsellMode(job.job_id)
   const showUpsell = (photoshootMode === 'everyday' || !photoshootMode) && !!onTryMode
@@ -263,6 +352,135 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
           {job.hd_url ? 'HD ✓' : 'HD · 2⚡'}
         </motion.button>
       </div>
+
+      {/* ── Animate (Talking Photo / AI Alive) ── */}
+      {!videoUrl && (
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={handleAnimate}
+          disabled={animating || !!animateJobId}
+          className={`w-full flex items-center justify-center gap-2 py-3 rounded-card text-[13px] font-semibold transition-colors ${
+            animateJobId && !videoUrl
+              ? 'bg-[#1C1C2E] text-[#A78BFF]'
+              : 'bg-gradient-to-r from-[#2C1654] to-[#1A0A2E] text-white'
+          }`}
+        >
+          {animating || (animateJobId && !videoUrl && animateStatus !== 'failed') ? (
+            <Sparkles size={14} className="animate-spin" />
+          ) : (
+            <Play size={14} />
+          )}
+          {animating
+            ? 'Starting…'
+            : animateJobId && animateStatus !== 'failed' && !videoUrl
+              ? 'Animating… (1-3 min)'
+              : animateStatus === 'failed'
+                ? '⚠ Animation failed — retry?'
+                : '✨ Animate · 10⚡'}
+        </motion.button>
+      )}
+
+      {/* Video player — shown when animate job is ready */}
+      {videoUrl && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="rounded-card overflow-hidden"
+        >
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            loop
+            playsInline
+            className="w-full object-cover"
+          />
+          <div className="flex items-center justify-between px-3 py-2 bg-[#1C1C2E]">
+            <span className="text-[11px] text-[#A78BFF] font-medium">✨ AI Alive</span>
+            <motion.button
+              whileTap={{ scale: 0.94 }}
+              onClick={async () => {
+                tg?.HapticFeedback?.impactOccurred('light')
+                try { await saveImageToPhone(videoUrl) } catch { window.open(videoUrl, '_blank') }
+              }}
+              className="text-[11px] text-white/60 flex items-center gap-1"
+            >
+              <Download size={11} /> Save video
+            </motion.button>
+          </div>
+        </motion.div>
+      )}
+
+      {/* ── Age Transformation ── */}
+      {!ageUrl && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-[#6E6E73] font-medium px-0.5">Age Transform · 4⚡ each</p>
+          <div className="grid grid-cols-4 gap-1.5">
+            {([
+              { dir: 'baby',  label: '👶 Baby',  disabled: !!ageJobId },
+              { dir: 'young', label: '🧑 Young',  disabled: !!ageJobId },
+              { dir: 'older', label: '🧓 +20y',   disabled: !!ageJobId },
+              { dir: 'elder', label: '👴 +40y',   disabled: !!ageJobId },
+            ] as const).map(({ dir, label, disabled }) => (
+              <motion.button
+                key={dir}
+                whileTap={{ scale: 0.93 }}
+                disabled={disabled}
+                onClick={() => handleAgeTransform(dir)}
+                className={`py-2 rounded-[12px] text-[11px] font-medium transition-colors ${
+                  ageDirection === dir && ageJobId
+                    ? 'bg-[#6C47FF]/20 text-[#6C47FF] border border-[#6C47FF]/40'
+                    : 'bg-[#F5F5F7] text-[#1D1D1F] disabled:opacity-40'
+                }`}
+              >
+                {ageDirection === dir && ageJobId && ageStatus !== 'failed' && !ageUrl
+                  ? '…'
+                  : label}
+              </motion.button>
+            ))}
+          </div>
+          {ageDirection && ageJobId && ageStatus !== 'failed' && !ageUrl && (
+            <p className="text-[11px] text-[#6C47FF] text-center animate-pulse">
+              Transforming age… (30–60 sec)
+            </p>
+          )}
+          {ageStatus === 'failed' && (
+            <p className="text-[11px] text-[#FF3B30] text-center">Age transform failed — try again</p>
+          )}
+        </div>
+      )}
+
+      {/* Age transform result */}
+      {ageUrl && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="space-y-1.5"
+        >
+          <p className="text-[11px] text-[#6E6E73] font-medium">Age Transform result</p>
+          <div className="rounded-card overflow-hidden">
+            <img src={ageUrl} alt="age transformed" className="w-full object-cover" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={async () => {
+                try { await saveImageToPhone(ageUrl) } catch { window.open(ageUrl, '_blank') }
+              }}
+              className="flex items-center justify-center gap-1.5 py-2.5 rounded-card bg-[#F5F5F7] text-[#1D1D1F] text-[12px] font-medium"
+            >
+              <Download size={13} /> Save
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={() => { setAgeUrl(null); setAgeJobId(null); setAgeDirection(null); setAgeStatus('') }}
+              className="flex items-center justify-center gap-1.5 py-2.5 rounded-card bg-[#F5F5F7] text-[#1D1D1F] text-[12px] font-medium"
+            >
+              <RefreshCw size={13} /> Try another
+            </motion.button>
+          </div>
+        </motion.div>
+      )}
 
       {/* Premium mode upsell — only after everyday mode */}
       {showUpsell && (

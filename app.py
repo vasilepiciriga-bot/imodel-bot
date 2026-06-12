@@ -1073,6 +1073,12 @@ PHOTOMAKER_MODEL  = os.getenv("PHOTOMAKER_MODEL", "tencentarc/photomaker:ddfc2b0
 GFPGAN_MODEL      = os.getenv("GFPGAN_MODEL",     "tencentarc/gfpgan:0fbacf7afc6c144e5be9767cff80f25aff23e52b0708f17e20f9879b2f21516c")
 CODEFORMER_MODEL  = os.getenv("CODEFORMER_MODEL", "sczhou/codeformer:cc4956dd26fa5a7185d5660cc9100fab1b8070a1d1654a8bb5eb6d443b020bb2")
 FACESWAP_MODEL    = os.getenv("FACESWAP_MODEL",   "codeplugtech/face-swap:278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34")
+AGE_TRANSFORM_MODEL = os.getenv("AGE_TRANSFORM_MODEL", "yuval-alaluf/sam:9222a21c181b707209ef12b5e0d7e94c994b58f")
+FAL_KEY             = os.getenv("FAL_KEY", "")
+
+# Per-feature credit costs
+ANIMATE_CREDITS_COST      = int(os.getenv("ANIMATE_CREDITS_COST",      "10"))
+AGE_TRANSFORM_CREDITS_COST = int(os.getenv("AGE_TRANSFORM_CREDITS_COST", "4"))
 
 # Language / quotas
 LANG_DEFAULT = os.getenv("LANG_DEFAULT", "en")
@@ -7555,6 +7561,123 @@ async def _run_hd_upscale_job(hd_job_id: str, parent_job_id: str):
         await _hd_refund()
 
 
+async def _run_animate_job(animate_job_id: str, image_url: str):
+    """Calls fal.ai Kling 2.1 image-to-video API via raw HTTP (no fal-client SDK required)."""
+    import requests as _req  # already in requirements
+    job = JOBS.get(animate_job_id) or {}
+    uid = int(job.get("chat_id") or 0)
+
+    async def _refund():
+        if uid:
+            await _refund_credits_n(uid, ANIMATE_CREDITS_COST, str(job.get("username") or ""))
+
+    record_job(animate_job_id, status="running")
+    try:
+        if not FAL_KEY:
+            record_job(animate_job_id, status="failed", error="fal_key_missing")
+            await _refund()
+            return
+
+        headers = {"Authorization": f"Key {FAL_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "image_url": image_url,
+            "prompt": "natural subtle facial movements, gentle blinks, warm smile, head slightly tilting",
+            "duration": "5",
+            "aspect_ratio": "9:16",
+        }
+        FAL_BASE = "https://queue.fal.run/fal-ai/kling-video/v2.1/standard/image-to-video"
+
+        def _submit():
+            r = _req.post(FAL_BASE, headers=headers, json=payload, timeout=30)
+            r.raise_for_status()
+            return r.json()
+
+        submit_data = await asyncio.to_thread(_submit)
+        request_id = submit_data.get("request_id")
+        if not request_id:
+            raise ValueError(f"fal.ai returned no request_id: {submit_data}")
+
+        status_url = f"{FAL_BASE}/requests/{request_id}/status"
+        result_url = f"{FAL_BASE}/requests/{request_id}"
+
+        for _attempt in range(72):  # max 6 minutes
+            await asyncio.sleep(5)
+            fal_status = await asyncio.to_thread(
+                lambda: _req.get(status_url, headers=headers, timeout=20).json()
+            )
+            fal_state = fal_status.get("status", "")
+            if fal_state == "COMPLETED":
+                result = await asyncio.to_thread(
+                    lambda: _req.get(result_url, headers=headers, timeout=20).json()
+                )
+                video_url = (result.get("video") or {}).get("url")
+                if not video_url:
+                    raise ValueError(f"fal.ai result has no video.url: {result}")
+
+                vid_bytes = await asyncio.to_thread(_download_with_retries, video_url)
+                if vid_bytes:
+                    out_url, out_key = s3_upload_and_key(
+                        vid_bytes,
+                        key_prefix=f"videos/animate/{animate_job_id}_",
+                        content_type="video/mp4",
+                    )
+                else:
+                    out_url, out_key = video_url, None
+
+                record_job(animate_job_id, status="ready", output_url=out_url, output_s3_key=out_key)
+                analytics_event(uid, "animate_completed", {"job_id": animate_job_id})
+                return
+
+            elif fal_state in ("FAILED", "CANCELLED"):
+                raise ValueError(f"fal.ai job {fal_state}: {fal_status}")
+
+        raise TimeoutError("animate job timed out after 6 minutes")
+
+    except Exception as e:
+        record_job(animate_job_id, status="failed", error=str(e)[:300])
+        analytics_event(uid, "animate_failed", {"job_id": animate_job_id, "error": str(e)[:80]})
+        await _refund()
+
+
+async def _run_age_transform_job(age_job_id: str, image_url: str, direction: str):
+    """Age-transform a photo via Replicate SAM model."""
+    job = JOBS.get(age_job_id) or {}
+    uid = int(job.get("chat_id") or 0)
+
+    async def _refund():
+        if uid:
+            await _refund_credits_n(uid, AGE_TRANSFORM_CREDITS_COST, str(job.get("username") or ""))
+
+    record_job(age_job_id, status="running")
+    try:
+        age_targets = {"baby": 5, "young": 20, "older": 55, "elder": 75}
+        target_age = age_targets.get(direction, 55)
+
+        result_url: Optional[str] = await asyncio.to_thread(
+            replicate_generate,
+            AGE_TRANSFORM_MODEL,
+            {"image": image_url, "target_age": str(target_age)},
+        )
+        if not result_url:
+            raise ValueError("SAM model returned no output")
+
+        img_bytes = await asyncio.to_thread(_download_with_retries, result_url)
+        if img_bytes:
+            out_url, out_key = s3_upload_and_key(
+                img_bytes, key_prefix=f"outputs/age/{age_job_id}_"
+            )
+        else:
+            out_url, out_key = result_url, None
+
+        record_job(age_job_id, status="ready", output_url=out_url, output_s3_key=out_key)
+        analytics_event(uid, "age_transform_completed", {"job_id": age_job_id, "direction": direction})
+
+    except Exception as e:
+        record_job(age_job_id, status="failed", error=str(e)[:300])
+        analytics_event(uid, "age_transform_failed", {"job_id": age_job_id, "error": str(e)[:80]})
+        await _refund()
+
+
 async def run_photoshoot_tournament_job(job_id: str):
     """
     Generation Tournament for multi-level photoshoot modes (premium/vogue/ceo/dating/luxury/custom).
@@ -9062,6 +9185,83 @@ async def api_hd_upscale(job_id: str, request: Request):
     record_job(job_id, hd_job_id=hd_job_id)
     asyncio.create_task(_run_hd_upscale_job(hd_job_id, job_id))
     return {"job_id": hd_job_id, "status": "queued", "credit_cost": HD_COST}
+
+@app.post("/api/v1/generations/{job_id}/animate")
+async def api_animate(job_id: str, request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+    if not job:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if int(job.get("chat_id") or 0) != uid:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if job.get("status") != "ready":
+        return JSONResponse({"error": "job_not_ready"}, status_code=400)
+    if job.get("animate_job_id"):
+        existing = JOBS.get(job["animate_job_id"]) or (_db_load_job(job["animate_job_id"]) if DB_READY else None)
+        if existing:
+            return public_job_snapshot(existing)
+    async with _credits_lock:
+        if not is_free_user(uid, username):
+            available = USER_CREDITS.get(uid, FREE_QUOTA)
+            if available < ANIMATE_CREDITS_COST:
+                return JSONResponse({"error": "no_credits", "required": ANIMATE_CREDITS_COST}, status_code=402)
+            USER_CREDITS[uid] -= ANIMATE_CREDITS_COST
+    _credits_save()
+    # Resolve the best source image URL
+    image_url = None
+    s3_key = job.get("output_s3_key")
+    if s3_key:
+        image_url = s3_presign_key(s3_key)
+    if not image_url:
+        image_url = job.get("hd_url") or job.get("output_url")
+    if not image_url:
+        return JSONResponse({"error": "no_image_url"}, status_code=400)
+    animate_job = record_job(kind="animate", status="queued", chat_id=uid, username=username,
+                             parent_job_id=job_id)
+    animate_job_id = str(animate_job["job_id"])
+    record_job(job_id, animate_job_id=animate_job_id)
+    asyncio.create_task(_run_animate_job(animate_job_id, image_url))
+    return {"job_id": animate_job_id, "status": "queued", "credit_cost": ANIMATE_CREDITS_COST}
+
+@app.post("/api/v1/age-transform")
+async def api_age_transform(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    body = await request.json()
+    job_id = body.get("job_id", "")
+    direction = str(body.get("direction", "older"))
+    if direction not in ("baby", "young", "older", "elder"):
+        return JSONResponse({"error": "invalid_direction"}, status_code=400)
+    # Resolve source image from parent job_id
+    source_url: Optional[str] = None
+    if job_id:
+        parent = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+        if parent and int(parent.get("chat_id") or 0) != uid:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if parent:
+            s3_key = parent.get("output_s3_key")
+            source_url = (s3_presign_key(s3_key) if s3_key else None) or parent.get("hd_url") or parent.get("output_url")
+    if not source_url:
+        return JSONResponse({"error": "source_not_found"}, status_code=400)
+    async with _credits_lock:
+        if not is_free_user(uid, username):
+            available = USER_CREDITS.get(uid, FREE_QUOTA)
+            if available < AGE_TRANSFORM_CREDITS_COST:
+                return JSONResponse({"error": "no_credits", "required": AGE_TRANSFORM_CREDITS_COST}, status_code=402)
+            USER_CREDITS[uid] -= AGE_TRANSFORM_CREDITS_COST
+    _credits_save()
+    age_job = record_job(kind="age_transform", status="queued", chat_id=uid, username=username,
+                         parent_job_id=job_id, direction=direction)
+    age_job_id = str(age_job["job_id"])
+    asyncio.create_task(_run_age_transform_job(age_job_id, source_url, direction))
+    return {"job_id": age_job_id, "status": "queued", "credit_cost": AGE_TRANSFORM_CREDITS_COST}
 
 @app.get("/api/v1/generations/{job_id}")
 async def api_get_generation(job_id: str, request: Request):
