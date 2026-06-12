@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Lock, TrendingUp, Check, X, Heart } from 'lucide-react'
+import { Lock, TrendingUp, Check, X, Heart, Search, Sparkles, Users } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { fetchPresets, getCachedPresets, setCachedPresets } from '../api/presets'
 import { createInvoice } from '../api/shop'
+import { api } from '../api/client'
 import { voteForPreset } from '../api/community'
 import { useToast } from '../hooks/useToast'
 import { hap } from '../lib/haptics'
 import { PresetSkeleton } from '../components/shared/SkeletonLoader'
-import type { Preset } from '../types'
+import type { Preset, Challenge } from '../types'
 
 const CATEGORY_GRADIENT: Record<string, [string, string]> = {
   studio:    ['#1a1a2e', '#16213e'],
@@ -31,6 +32,58 @@ const CATEGORY_ACCENT: Record<string, string> = {
 }
 
 const CATEGORIES = ['For You', 'All', 'Studio', 'Cinematic', 'Outdoor', 'Lifestyle', 'Artistic', '★ Premium', '🌍 Community']
+
+function DailyChallengeCard({ challenge, onTap }: { challenge: Challenge; onTap: () => void }) {
+  const [timeLeft, setTimeLeft] = useState('')
+
+  useEffect(() => {
+    function tick() {
+      const now = new Date()
+      const end = new Date(now)
+      end.setHours(23, 59, 59, 999)
+      const diff = end.getTime() - now.getTime()
+      const h = Math.floor(diff / 3600000)
+      const m = Math.floor((diff % 3600000) / 60000)
+      setTimeLeft(`${h}h ${m}m`)
+    }
+    tick()
+    const id = setInterval(tick, 60000)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <motion.button
+      whileTap={{ scale: 0.97 }}
+      onClick={onTap}
+      className="w-full rounded-[18px] overflow-hidden flex items-center gap-3 p-3.5 relative"
+      style={{ background: 'linear-gradient(135deg, #1a1000, #2e2000)' }}
+    >
+      <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(circle at 80% 30%, rgba(255,149,0,0.25) 0%, transparent 60%)' }} />
+      <div className="w-12 h-12 rounded-[14px] bg-[#FF9500]/20 border border-[#FF9500]/40 flex items-center justify-center text-[24px] flex-shrink-0 z-10">
+        ⚡
+      </div>
+      <div className="flex-1 text-left z-10">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <span className="text-[10px] font-bold text-[#FF9500] uppercase tracking-wider">Daily Challenge</span>
+          <span className="text-[9px] text-white/40">· {timeLeft} left</span>
+        </div>
+        <p className="text-[13px] font-bold text-white leading-tight">{challenge.label}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[11px] text-[#FF9500] font-semibold">+{challenge.bonus_credits}⚡ bonus</span>
+          {(challenge.participants_today ?? 0) > 0 && (
+            <span className="flex items-center gap-0.5 text-[10px] text-white/40">
+              <Users size={10} />
+              {challenge.participants_today}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="z-10">
+        <Sparkles size={16} className="text-[#FF9500]/60" />
+      </div>
+    </motion.button>
+  )
+}
 
 function PresetCard({ preset, active, index, onTap, onLongPress }: {
   preset: Preset
@@ -149,6 +202,21 @@ function PresetCard({ preset, active, index, onTap, onLongPress }: {
             <Check size={12} strokeWidth={3} className="text-white" />
           </motion.div>
         )}
+
+        {/* NEW badge */}
+        {preset.is_new && !active && (
+          <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded-full text-[9px] font-bold text-white"
+            style={{ background: 'rgba(108,71,255,0.90)' }}>
+            NEW
+          </div>
+        )}
+
+        {/* Usage badge */}
+        {(preset.usage_7d ?? 0) > 20 && !preset.locked && (
+          <div className="absolute bottom-[52px] right-2 px-1.5 py-0.5 rounded-full text-[9px] font-bold text-white bg-black/50">
+            🔥 {preset.usage_7d}
+          </div>
+        )}
       </div>
     </motion.button>
   )
@@ -263,6 +331,100 @@ function CommunityCard({ preset, active, index, onTap, onLongPress }: {
 }
 
 
+interface PackPreviewData {
+  pack_id: string
+  label: string
+  emoji: string
+  total_presets: number
+  stars: number
+  previews: { key: string; label: string; emoji: string; thumbnail_url: string }[]
+}
+
+function PackPreviewSheet({ packId, onClose, onUnlock }: {
+  packId: string
+  onClose: () => void
+  onUnlock: () => void
+}) {
+  const [data, setData] = useState<PackPreviewData | null>(null)
+  const [loadErr, setLoadErr] = useState(false)
+
+  useEffect(() => {
+    api.get<PackPreviewData>(`/api/v1/packs/${packId}/preview`)
+      .then(setData)
+      .catch(() => setLoadErr(true))
+  }, [packId])
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[150] bg-black/70 flex items-end"
+      style={{ maxWidth: 480, margin: '0 auto' }}
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: 80, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 80, opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+        className="w-full bg-[#1C1C1E] rounded-t-[28px] pb-8 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex justify-center pt-3 pb-2">
+          <div className="w-10 h-1 rounded-full bg-white/20" />
+        </div>
+
+        {loadErr ? (
+          <div className="flex flex-col items-center gap-3 py-10 px-5">
+            <p className="text-white/50 text-[14px]">Could not load pack preview</p>
+            <button onClick={onClose} className="px-6 py-2.5 rounded-[14px] bg-white/10 text-white/70 text-[14px]">Close</button>
+          </div>
+        ) : !data ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="w-8 h-8 border-2 border-[#6C47FF] border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <div className="px-5">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-[36px]">{data.emoji}</span>
+              <div>
+                <h3 className="text-[18px] font-bold text-white">{data.label}</h3>
+                <span className="text-[13px] text-white/50">{data.total_presets} styles included</span>
+              </div>
+            </div>
+
+            {/* 2×2 preview grid */}
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              {data.previews.map((p) => (
+                <div key={p.key} className="aspect-[3/4] rounded-[12px] overflow-hidden bg-[#2C2C2E] flex items-center justify-center">
+                  {p.thumbnail_url ? (
+                    <img src={p.thumbnail_url} alt={p.label} className="w-full h-full object-cover" style={{ filter: 'blur(6px)', transform: 'scale(1.15)' }} />
+                  ) : (
+                    <span className="text-[24px]">{p.emoji}</span>
+                  )}
+                </div>
+              ))}
+              <div className="aspect-[3/4] rounded-[12px] bg-[#2C2C2E] flex items-center justify-center">
+                <span className="text-white/30 text-[12px] font-bold">+{Math.max(0, data.total_presets - 4)}</span>
+              </div>
+            </div>
+
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={onUnlock}
+              className="w-full py-3.5 rounded-[16px] text-white text-[15px] font-bold bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] flex items-center justify-center gap-2"
+            >
+              <Sparkles size={16} />
+              Unlock Pack · {data.stars}★
+            </motion.button>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  )
+}
+
 function PreviewModal({ preset, onClose, onSelect }: {
   preset: Preset
   onClose: () => void
@@ -349,11 +511,14 @@ export default function Styles() {
   const [loading, setLoading] = useState(true)
   const [category, setCategory] = useState('All')
   const [preview, setPreview] = useState<Preset | null>(null)
+  const [search, setSearch] = useState('')
+  const [packPreview, setPackPreview] = useState<string | null>(null)
   const activePreset = useAppStore((s) => s.activePreset)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
   const setTab = useAppStore((s) => s.setTab)
   const user = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
+  const challenge = useAppStore((s) => s.challenge)
   const toast = useToast()
 
   useEffect(() => {
@@ -386,25 +551,37 @@ export default function Styles() {
     ? presets.filter((p) => p.category === 'community')
     : presets.filter((p) => p.category.toLowerCase() === category.toLowerCase())
 
+  const q = search.trim().toLowerCase()
+  const displayed = q
+    ? presets.filter((p) => p.label.toLowerCase().includes(q) || p.category.toLowerCase().includes(q))
+    : filtered
+
   // Sort by real usage_7d if available, fallback to first 6 free presets
   const trending = [...presets]
     .filter((p) => !p.is_premium && !p.locked)
     .sort((a, b) => ((b as Preset & { usage_7d?: number }).usage_7d ?? 0) - ((a as Preset & { usage_7d?: number }).usage_7d ?? 0))
     .slice(0, 8)
 
+  async function handleUnlockPack(packId: string) {
+    hap.medium()
+    try {
+      const { invoice_url } = await createInvoice(packId)
+      tg?.openInvoice(invoice_url, (status: string) => {
+        if (status === 'paid' && user) {
+          setUser({ ...user, unlocked_packs: [...(user.unlocked_packs ?? []), packId] })
+          toast.success('Style pack unlocked!', { icon: '🎉' })
+        }
+      })
+    } catch { toast.error('Could not open payment') }
+    setPackPreview(null)
+    setPreview(null)
+  }
+
   async function handlePreset(preset: Preset) {
     if (preset.locked && preset.pack_id) {
       hap.medium()
-      try {
-        const { invoice_url } = await createInvoice(preset.pack_id)
-        tg?.openInvoice(invoice_url, (status: string) => {
-          if (status === 'paid' && user) {
-            setUser({ ...user, unlocked_packs: [...(user.unlocked_packs ?? []), preset.pack_id!] })
-            toast.success('Style pack unlocked!', { icon: '🎉', sub: preset.label + ' and more are now available' })
-          }
-        })
-      } catch { toast.error('Could not open payment') }
       setPreview(null)
+      setPackPreview(preset.pack_id)
       return
     }
     hap.light()
@@ -417,10 +594,37 @@ export default function Styles() {
 
   return (
     <div className="flex flex-col h-full bg-[#F5F5F7]">
-      <div className="px-4 pt-4 pb-1">
+      <div className="px-4 pt-4 pb-2">
         <h1 className="text-[22px] font-bold text-[#1D1D1F]">🎭 Styles</h1>
         <p className="text-[13px] text-[#6E6E73]">Tap to apply · hold to preview</p>
+
+        {/* Search input */}
+        <div className="mt-2.5 relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8E8E93] pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search styles…"
+            className="w-full pl-8 pr-3 py-2 rounded-[12px] bg-[#E8E8ED] text-[13px] text-[#1D1D1F] placeholder-[#8E8E93] outline-none"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2">
+              <X size={12} className="text-[#8E8E93]" />
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Daily challenge card */}
+      {challenge && !search && (
+        <div className="mx-4 mb-2">
+          <DailyChallengeCard challenge={challenge} onTap={() => {
+            const p = presets.find(pr => pr.key === challenge.preset_key)
+            if (p) { hap.medium(); setActivePreset(p); setTab('studio') }
+          }} />
+        </div>
+      )}
 
       {/* Trending row */}
       {trending.length > 0 && (
@@ -498,7 +702,7 @@ export default function Styles() {
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 pb-4">
-            {filtered.map((preset, i) =>
+            {displayed.map((preset, i) =>
               preset.category === 'community' ? (
                 <CommunityCard
                   key={preset.key}
@@ -529,6 +733,13 @@ export default function Styles() {
             preset={preview}
             onClose={() => setPreview(null)}
             onSelect={() => handlePreset(preview)}
+          />
+        )}
+        {packPreview && (
+          <PackPreviewSheet
+            packId={packPreview}
+            onClose={() => setPackPreview(null)}
+            onUnlock={() => handleUnlockPack(packPreview)}
           />
         )}
       </AnimatePresence>

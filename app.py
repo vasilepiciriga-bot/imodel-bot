@@ -1134,6 +1134,7 @@ CHALLENGE_BONUS_CREDITS = int(os.getenv("CHALLENGE_BONUS_CREDITS", "2"))
 
 # Trending presets (comma-sep keys, updated via env var weekly)
 TRENDING_PRESETS_ENV = os.getenv("TRENDING_PRESETS", "cinematic,neon_night,golden_hour,beauty_dish,vintage70")
+NEW_PRESETS_ENV = set(k.strip() for k in os.getenv("NEW_PRESETS", "").split(",") if k.strip())
 
 # Daily bonus / streak
 DAILY_BONUS_BASE = int(os.getenv("DAILY_BONUS_BASE", "1"))
@@ -8984,6 +8985,7 @@ async def api_presets(request: Request):
     _history_score = {k: (len(_user_history) - i) * 10 for i, k in enumerate(_user_history)}
     for item in result:
         item["personalized_score"] = _history_score.get(item["key"], 0)
+        item["is_new"] = item["key"] in NEW_PRESETS_ENV
 
     # Build trending: top-10 by real usage_7d, fallback to env var list
     _top_by_usage = sorted(
@@ -8995,6 +8997,46 @@ async def api_presets(request: Request):
     else:
         trending_keys = [k.strip() for k in TRENDING_PRESETS_ENV.split(",") if k.strip()]
     return {"presets": result, "trending": trending_keys}
+
+
+@app.get("/api/v1/packs/{pack_id}/preview")
+async def api_pack_preview(pack_id: str, request: Request):
+    """Return pack metadata + first 4 preset previews (label, emoji, thumbnail)."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+
+    # Check premium_pack_1 (PREMIUM_STYLES)
+    if pack_id == "premium_pack_1":
+        sample = PREMIUM_STYLES[:4]
+        previews = [{"key": s["key"], "label": s["label_en"], "emoji": s.get("emoji", "✦"),
+                     "thumbnail_url": _thumb_url_for_key(s["key"])} for s in sample]
+        return {"pack_id": pack_id, "label": "Premium Styles", "emoji": "👑",
+                "total_presets": len(PREMIUM_STYLES), "stars": STYLE_PACK_STARS, "previews": previews}
+
+    cfg = PRESET_PACKS.get(pack_id)
+    if not cfg:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    lang = USER_LANG.get(uid, LANG_DEFAULT)
+    label = cfg.get(f"label_{lang}", cfg.get("label_en", pack_id))
+    previews = [
+        {"key": p["key"], "label": p.get("label_en", p["key"]), "emoji": p.get("emoji", "✦"),
+         "thumbnail_url": _thumb_url_for_key(p["key"])}
+        for p in cfg["presets"][:4]
+    ]
+    return {"pack_id": pack_id, "label": label, "emoji": cfg.get("emoji", "✦"),
+            "total_presets": len(cfg["presets"]), "stars": cfg.get("stars", 0), "previews": previews}
+
+
+def _thumb_url_for_key(key: str) -> str:
+    s3_k = PRESET_THUMB_KEYS.get(key)
+    if s3_k and S3_BUCKET:
+        fresh = s3_presign_key(s3_k)
+        if fresh:
+            return fresh
+    return f"/preset-thumbs/{key}.webp"
+
 
 @app.get("/api/v1/photoshoot-modes")
 async def api_photoshoot_modes(request: Request):

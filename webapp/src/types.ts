@@ -49,6 +49,7 @@ export interface Preset {
   created_at?: number
   personalized_score?: number
   usage_7d?: number
+  is_new?: boolean
 }
 
 export interface Generation {
