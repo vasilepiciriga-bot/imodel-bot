@@ -20,6 +20,7 @@ import { getChallenge, claimDaily, getMe } from '../api/session'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { getQuests, claimQuest, type QuestItem } from '../api/quests'
 import { getCachedPresets } from '../api/presets'
+import { getCommunityPresets } from '../api/community'
 import type { Preset } from '../types'
 import { track } from '../api/analytics'
 import { useToast } from '../hooks/useToast'
@@ -54,6 +55,7 @@ export default function Studio() {
   const [claimableQuest, setClaimableQuest] = useState<QuestItem | null>(null)
   const [claimingQuest, setClaimingQuest] = useState(false)
   const [recentPresets, setRecentPresets] = useState<Preset[]>([])
+  const [communityInspiration, setCommunityInspiration] = useState<Preset[]>([])
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -204,6 +206,13 @@ export default function Studio() {
           const claimable = quests.find((q) => q.claimable)
           setClaimableQuest(claimable ?? null)
         }).catch(() => null)
+
+        // Fetch top-3 community photos for inspiration (after job done, fire-and-forget)
+        if (communityInspiration.length === 0) {
+          getCommunityPresets('top').then(({ presets }) => {
+            setCommunityInspiration(presets.filter((p) => p.thumbnail_url).slice(0, 3))
+          }).catch(() => null)
+        }
 
         // Proactive paywall: show right after result if credits just ran out
         const credits = useAppStore.getState().user?.credits ?? 1
@@ -893,6 +902,40 @@ export default function Studio() {
               >
                 {claimingQuest ? '…' : 'Claim now'}
               </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Community inspiration strip — shown after first generation */}
+        <AnimatePresence>
+          {communityInspiration.length > 0 && currentJob && isJobDone(currentJob) && !batchJobs.length && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ delay: 0.6 }}
+            >
+              <p className="text-[11px] font-semibold text-[#6E6E73] mb-1.5 px-0.5">Community Gallery picks</p>
+              <div className="flex gap-2.5">
+                {communityInspiration.map((p) => (
+                  <motion.button
+                    key={p.key}
+                    whileTap={{ scale: 0.94 }}
+                    onClick={() => {
+                      useAppStore.getState().setActivePreset(p)
+                      track('community_inspiration_tapped', { key: p.key })
+                    }}
+                    className="flex-1 flex flex-col items-center gap-1"
+                  >
+                    <div className="w-full aspect-square rounded-[12px] overflow-hidden bg-[#E8E8ED]">
+                      {p.thumbnail_url && (
+                        <img src={p.thumbnail_url} alt={p.label} className="w-full h-full object-cover" />
+                      )}
+                    </div>
+                    <span className="text-[9px] text-[#6E6E73] truncate w-full text-center">{p.label}</span>
+                  </motion.button>
+                ))}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

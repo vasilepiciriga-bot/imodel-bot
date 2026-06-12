@@ -577,6 +577,18 @@ export default function Profile() {
             {/* Progress to next milestone */}
             {referral.next_milestone != null && (
               <div className="px-4 py-3 border-b border-black/[0.04]">
+                {(referral.next_milestone - referral.invited_count) === 1 && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="flex items-center gap-2 px-2.5 py-2 rounded-[10px] bg-[#FF9500]/10 border border-[#FF9500]/30 mb-2"
+                  >
+                    <span className="text-[14px]">🏆</span>
+                    <p className="text-[11px] font-semibold text-[#FF9500]">
+                      1 more invite → +{referral.next_milestone_bonus}⚡ bonus unlocks!
+                    </p>
+                  </motion.div>
+                )}
                 <div className="flex items-center justify-between mb-1.5">
                   <p className="text-[11px] font-medium text-[#1D1D1F]">
                     {referral.next_milestone - referral.invited_count} more friend{referral.next_milestone - referral.invited_count !== 1 ? 's' : ''} → +{referral.next_milestone_bonus}⚡ bonus

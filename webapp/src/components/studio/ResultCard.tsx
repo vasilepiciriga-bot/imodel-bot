@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { motion } from 'framer-motion'
-import { Download, Share2, RefreshCw, Sparkles, Star, Send } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Download, Share2, RefreshCw, Sparkles, Star, Send, Users } from 'lucide-react'
 import { saveImageToPhone } from '../../lib/saveImage'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { useAppStore } from '../../store/appStore'
 import { api } from '../../api/client'
+import { shareToCommunity } from '../../api/community'
 import { track } from '../../api/analytics'
 import { useToast } from '../../hooks/useToast'
 import type { Generation } from '../../types'
@@ -79,6 +80,10 @@ async function buildStoryBlob(imageUrl: string): Promise<Blob | null> {
 export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, photoshootMode, onTryMode }: Props) {
   const [shareLoading, setShareLoading] = useState(false)
   const [saveLoading, setSaveLoading] = useState(false)
+  const [communityLabel, setCommunityLabel] = useState('')
+  const [communitySharing, setCommunitySharing] = useState(false)
+  const [communityShared, setCommunityShared] = useState(false)
+  const [showCommunityInput, setShowCommunityInput] = useState(false)
   const user = useAppStore((s) => s.user) as ({ bot_link?: string } | null)
   const updateCredits = useAppStore((s) => s.updateCredits)
   const botLink = (user as { bot_link?: string } | null)?.bot_link ?? 'https://t.me/imodelapp_bot'
@@ -97,6 +102,27 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
       }
     } catch {
       // Already claimed today — silent
+    }
+  }
+
+  async function handleSubmitCommunity() {
+    if (!communityLabel.trim()) return
+    tg?.HapticFeedback?.impactOccurred('medium')
+    setCommunitySharing(true)
+    try {
+      const result = await shareToCommunity(job.job_id, communityLabel.trim())
+      if (result.already_shared) {
+        toast.success('Already in the gallery!', { icon: '✅' })
+      } else {
+        track('community_submitted', { job_id: job.job_id })
+        toast.success('Added to Community Gallery!', { icon: '🎉', sub: 'Others can vote on your photo' })
+      }
+      setCommunityShared(true)
+      setShowCommunityInput(false)
+    } catch {
+      toast.error('Could not submit — try again')
+    } finally {
+      setCommunitySharing(false)
     }
   }
 
@@ -254,6 +280,72 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
             Try →
           </motion.button>
         </motion.div>
+      )}
+
+      {/* Submit to Community Gallery */}
+      {!communityShared && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+        >
+          <AnimatePresence mode="wait">
+            {showCommunityInput ? (
+              <motion.div
+                key="input"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="flex gap-2 items-center">
+                  <input
+                    autoFocus
+                    value={communityLabel}
+                    onChange={(e) => setCommunityLabel(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSubmitCommunity() }}
+                    placeholder="Style name for the gallery…"
+                    className="flex-1 px-3 py-2.5 rounded-[12px] bg-[#F5F5F7] text-[13px] text-[#1D1D1F] placeholder-[#B0B0B8] outline-none border border-[#6C47FF]/30 focus:border-[#6C47FF]"
+                  />
+                  <motion.button
+                    whileTap={{ scale: 0.95 }}
+                    onClick={handleSubmitCommunity}
+                    disabled={!communityLabel.trim() || communitySharing}
+                    className="px-3 py-2.5 rounded-[12px] bg-[#6C47FF] text-white text-[12px] font-bold disabled:opacity-50 flex-shrink-0"
+                  >
+                    {communitySharing ? '…' : 'Post'}
+                  </motion.button>
+                  <motion.button
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setShowCommunityInput(false)}
+                    className="px-2.5 py-2.5 rounded-[12px] bg-[#F5F5F7] text-[#6E6E73] text-[12px]"
+                  >
+                    ✕
+                  </motion.button>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.button
+                key="cta"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={() => { tg?.HapticFeedback?.selectionChanged(); setShowCommunityInput(true) }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-[12px] bg-[#F5F5F7] text-[#6E6E73] text-[12px] font-medium"
+              >
+                <Users size={13} />
+                Submit to Community Gallery
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      )}
+
+      {communityShared && (
+        <p className="text-center text-[11px] text-[#34C759] font-semibold py-1">
+          ✓ In the Community Gallery — others can vote!
+        </p>
       )}
     </motion.div>
   )
