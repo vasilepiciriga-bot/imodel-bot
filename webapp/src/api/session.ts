@@ -47,3 +47,6 @@ export interface CreditHistory {
 
 export const getCreditHistory = () =>
   api.getUncached<CreditHistory>('/api/v1/credits/history')
+
+export const checkSelfieQuality = (image_b64: string) =>
+  api.post<{ ok: boolean; reason: string }>('/api/v1/selfie/check', { image_b64 })

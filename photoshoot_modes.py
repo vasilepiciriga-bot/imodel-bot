@@ -22,7 +22,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "select_best": 1,
         "upscale": False,
         "upscale_factor": 2,
-        "upscale_fidelity": 0.8,
+        "upscale_fidelity": 0.65,
         "prompt_layer": None,
         "negative_layer": None,
         "style_variants": {},
@@ -39,7 +39,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "select_best": 2,
         "upscale": True,
         "upscale_factor": 2,
-        "upscale_fidelity": 0.8,
+        "upscale_fidelity": 0.65,
         "prompt_layer": "professional portrait photography, studio lighting, sharp focus, magazine quality",
         "negative_layer": "snapshot, casual, blur, overexposed, grainy",
         "style_variants": {
@@ -72,7 +72,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "select_best": 3,
         "upscale": True,
         "upscale_factor": 4,
-        "upscale_fidelity": 0.7,
+        "upscale_fidelity": 0.65,
         "prompt_layer": (
             "editorial Vogue magazine quality, high fashion avant-garde styling, "
             "luxury brand campaign, art director composition, ultra-premium photoshoot"
@@ -111,7 +111,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "select_best": 2,
         "upscale": True,
         "upscale_factor": 2,
-        "upscale_fidelity": 0.8,
+        "upscale_fidelity": 0.65,
         "prompt_layer": (
             "corporate executive portrait, confident leadership presence, "
             "tailored business suit, authoritative gaze, LinkedIn-ready, boardroom or studio"
@@ -150,7 +150,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "select_best": 2,
         "upscale": False,
         "upscale_factor": 2,
-        "upscale_fidelity": 0.8,
+        "upscale_fidelity": 0.65,
         "prompt_layer": (
             "natural warm smile, approachable likeable personality, "
             "candid lifestyle photography, authentic relaxed look, social media quality"
@@ -189,7 +189,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "select_best": 2,
         "upscale": True,
         "upscale_factor": 2,
-        "upscale_fidelity": 0.8,
+        "upscale_fidelity": 0.65,
         "prompt_layer": (
             "ultra-luxury lifestyle editorial, five-star ambiance, "
             "old money elegance, opulent environment, Instagram-worthy, fashion forward"
@@ -228,7 +228,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "select_best": 2,
         "upscale": True,
         "upscale_factor": 2,
-        "upscale_fidelity": 0.8,
+        "upscale_fidelity": 0.65,
         "prompt_layer": None,
         "negative_layer": "blurry, low quality, distorted face, bad anatomy",
         "style_variants": {},

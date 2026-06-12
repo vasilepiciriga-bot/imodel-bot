@@ -3072,7 +3072,7 @@ def enhance_face_gfpgan(image_bytes: bytes) -> bytes:
         print(f"GFPGAN error (using original): {type(e).__name__}: {e}")
     return image_bytes
 
-def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.8, upscale: int = 2) -> bytes:
+def enhance_face_codeformer(image_bytes: bytes, fidelity: float = 0.7, upscale: int = 2) -> bytes:
     if not CODEFORMER_MODEL or not image_bytes:
         return enhance_face_gfpgan(image_bytes)
     try:
@@ -4651,7 +4651,7 @@ def generate_image_from_bytes(
                 sw_md5  = hashlib.md5(swapped).hexdigest()
                 ref_md5 = hashlib.md5(style_bytes).hexdigest()
                 if sw_md5 != ref_md5:  # sanity: not an echo of the reference
-                    final = enhance_face_codeformer(swapped, fidelity=0.85)
+                    final = enhance_face_codeformer(swapped, fidelity=0.7)
                     latency_ms = int((time.time() - t0) * 1000)
                     stats_incr("generation_latency_total_ms", latency_ms)
                     stats_incr("generation_latency_count", 1)
@@ -4787,9 +4787,9 @@ def generate_image_from_bytes(
     stats_incr("generation_latency_count", 1)
     record_job(job_id, status="generated")
     job_event(job_id, "generation_done", latency_ms=latency_ms, output_bytes=len(nano_bytes))
-    # Professional face retouch: CodeFormer (fidelity=0.8 → subtle, identity-preserving)
+    # Professional face retouch: CodeFormer (fidelity=0.65 → subtle, identity-preserving)
     # falls back to GFPGAN, then original on any error
-    nano_bytes = enhance_face_codeformer(nano_bytes, fidelity=0.8)
+    nano_bytes = enhance_face_codeformer(nano_bytes, fidelity=0.65)
     return nano_bytes
 
 # ======= Автопост «до/после» (опционально) ===========
@@ -6521,7 +6521,7 @@ async def _on_photo_inner(m: Message):
         try:
             result_bytes = await asyncio.to_thread(face_swap, selfie_bytes, img_bytes)
             if result_bytes:
-                result_bytes = await asyncio.to_thread(enhance_face_codeformer, result_bytes, 0.85)
+                result_bytes = await asyncio.to_thread(enhance_face_codeformer, result_bytes, 0.7)
         except Exception as _sw_err:
             print(f"Swap mode error: {_sw_err}")
             result_bytes = None
@@ -7304,7 +7304,7 @@ async def run_webapp_generation_job(job_id: str):
                 return face_swap(img_bytes, style_bytes)
             result_bytes = await asyncio.to_thread(_do_swap)
             if result_bytes:
-                result_bytes = await asyncio.to_thread(enhance_face_codeformer, result_bytes, 0.85)
+                result_bytes = await asyncio.to_thread(enhance_face_codeformer, result_bytes, 0.7)
             final_bytes = result_bytes
         else:
             final_bytes = await asyncio.to_thread(
@@ -8729,6 +8729,24 @@ def _resolve_preset_prompt(preset_key: str) -> Optional[str]:
         if a["key"] == preset_key:
             return a["prompt"]
     return None
+
+@app.post("/api/v1/selfie/check")
+async def api_selfie_check(request: Request):
+    """Lightweight selfie quality pre-check — no model call, PIL only."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    b64 = str(data.get("image_b64") or "").strip()
+    image_bytes = _decode_b64_image(b64) if b64 else None
+    if not image_bytes:
+        return JSONResponse({"ok": False, "reason": "invalid_image"})
+    ok, reason = assess_selfie_quality(image_bytes)
+    return {"ok": ok, "reason": reason}
+
 
 @app.post("/api/v1/generations")
 async def api_create_generation(request: Request):
