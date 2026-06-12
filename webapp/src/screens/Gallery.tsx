@@ -693,6 +693,7 @@ export default function Gallery() {
             >
               {/* Reactions */}
               <div className="px-4 pt-3 pb-2">
+                <p className="text-[10px] text-white/35 mb-1.5">Your reactions · only visible to you</p>
                 <ReactionRow
                   jobId={lightbox.job_id}
                   state={reactions[lightbox.job_id] ?? { counts: {}, mine: null }}

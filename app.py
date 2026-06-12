@@ -7348,6 +7348,12 @@ def webapp_user_from_request(request: Request) -> Optional[Dict[str, Any]]:
     validated = validate_webapp_init_data(init_data)
     if validated:
         return {"uid": validated["uid"], "username": validated.get("username", "")}
+    # Query-param fallback for EventSource (browser API cannot send custom headers)
+    tma_qp = request.query_params.get("tma", "")
+    if tma_qp:
+        validated = validate_webapp_init_data(tma_qp)
+        if validated:
+            return {"uid": validated["uid"], "username": validated.get("username", "")}
     return None
 
 def public_job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -9333,6 +9339,51 @@ async def api_get_generation(job_id: str, request: Request):
     if int(job.get("chat_id") or 0) != uid and not has_grant(uid, str(user.get("username") or ""), "jobs.view"):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     return public_job_snapshot(job)
+
+@app.get("/api/v1/generations/{job_id}/events")
+async def api_stream_job_events(job_id: str, request: Request):
+    """SSE stream for real-time job status — avoids polling."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+
+    async def _stream():
+        start = time.time()
+        last_json = ""
+        terminal = {"done", "failed", "cancelled", "error"}
+        while True:
+            if await request.is_disconnected():
+                return
+            job = JOBS.get(job_id) or (_db_load_job(job_id) if DB_READY else None)
+            if not job:
+                yield f"data: {json.dumps({'error': 'not_found'})}\n\n"
+                return
+            if int(job.get("chat_id") or 0) != uid:
+                yield f"data: {json.dumps({'error': 'forbidden'})}\n\n"
+                return
+            snapshot = public_job_snapshot(job)
+            snap_json = json.dumps(snapshot)
+            if snap_json != last_json:
+                yield f"data: {snap_json}\n\n"
+                last_json = snap_json
+            if str(snapshot.get("status", "")) in terminal:
+                yield "event: done\ndata: {}\n\n"
+                return
+            if time.time() - start > 150:
+                yield f"data: {json.dumps({'status': 'failed', 'error': 'stream_timeout'})}\n\n"
+                return
+            await asyncio.sleep(1.5)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 @app.get("/api/v1/presets")
 async def api_presets(request: Request):

@@ -98,6 +98,7 @@ export default function Profile() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
   const [creditHistory, setCreditHistory] = useState<CreditHistory | null>(null)
   const [walletExpanded, setWalletExpanded] = useState(false)
+  const [txShowAll, setTxShowAll] = useState(false)
   const [settingsExpanded, setSettingsExpanded] = useState(false)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
@@ -443,7 +444,7 @@ export default function Profile() {
                   className="overflow-hidden"
                 >
                   <div className="px-4 pb-3 divide-y divide-black/[0.04]">
-                    {creditHistory.transactions.slice(0, 12).map((tx, i) => (
+                    {creditHistory.transactions.slice(0, txShowAll ? undefined : 12).map((tx, i) => (
                       <div key={i} className="flex items-center gap-3 py-2.5">
                         <span className="text-[18px] w-7 text-center flex-shrink-0">{tx.icon}</span>
                         <div className="flex-1 min-w-0">
@@ -455,6 +456,14 @@ export default function Profile() {
                         </span>
                       </div>
                     ))}
+                    {!txShowAll && creditHistory.transactions.length > 12 && (
+                      <button
+                        onClick={() => { hap.select(); setTxShowAll(true) }}
+                        className="w-full pt-2.5 pb-1 text-[12px] font-semibold text-[#6C47FF] text-center"
+                      >
+                        Show {creditHistory.transactions.length - 12} more →
+                      </button>
+                    )}
                   </div>
                 </motion.div>
               )}
