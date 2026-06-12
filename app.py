@@ -9725,6 +9725,240 @@ async def api_analytics_experiments(request: Request):
     days = max(1, min(days, 90))
     return _analytics_experiment_results(days)
 
+
+def _analytics_retention(weeks: int = 8) -> Dict[str, Any]:
+    """D1/D7/D14/D30 retention by weekly cohort."""
+    import datetime as _dt
+    if not DB_READY:
+        return {"cohorts": [], "aggregate": {"d1": None, "d7": None, "d14": None, "d30": None}}
+    try:
+        now = time.time()
+        cutoff = _date_key(now - weeks * 7 * 86400)
+
+        # One query: all (uid, MIN(day)) for users first seen after cutoff
+        first_rows = _db_fetchall(
+            "SELECT uid, MIN(day) AS first_day FROM imodel_events WHERE day >= %s GROUP BY uid",
+            (cutoff,),
+        )
+        if not first_rows:
+            return {"cohorts": [], "aggregate": {"d1": None, "d7": None, "d14": None, "d30": None}}
+
+        # Build uid → first_day map and group by ISO week
+        uid_first: Dict[int, str] = {}
+        cohort_groups: Dict[str, List[int]] = {}
+        for row_uid, first_day in first_rows:
+            u = int(row_uid)
+            fd = str(first_day)
+            uid_first[u] = fd
+            try:
+                d = _dt.date.fromisoformat(fd)
+                wk = d.strftime("%G-W%V")
+            except Exception:
+                continue
+            cohort_groups.setdefault(wk, []).append(u)
+
+        # Fetch all activity days for these users (uid, day pairs, deduplicated)
+        all_uids = list(uid_first.keys())
+        activity_rows = _db_fetchall(
+            "SELECT DISTINCT uid, day FROM imodel_events WHERE uid = ANY(%s)",
+            (all_uids,),
+        )
+        uid_active_days: Dict[int, set] = {}
+        for row_uid, day in activity_rows:
+            uid_active_days.setdefault(int(row_uid), set()).add(str(day))
+
+        def _ret(u: int, delta_lo: int, delta_hi: int) -> bool:
+            fd = uid_first.get(u)
+            if not fd:
+                return False
+            base = _dt.date.fromisoformat(fd)
+            days_set = uid_active_days.get(u, set())
+            for delta in range(delta_lo, delta_hi + 1):
+                check = (base + _dt.timedelta(days=delta)).isoformat()
+                if check in days_set and check > fd:
+                    return True
+            return False
+
+        today = _dt.date.today()
+        cohort_results = []
+        d1_vals, d7_vals, d14_vals, d30_vals = [], [], [], []
+
+        for wk in sorted(cohort_groups.keys(), reverse=True)[:weeks]:
+            uids = cohort_groups[wk]
+            size = len(uids)
+            try:
+                yr, wnum = int(wk[:4]), int(wk[6:])
+                cohort_monday = _dt.date.fromisocalendar(yr, wnum, 1)
+                age = (today - cohort_monday).days
+            except Exception:
+                age = 0
+
+            d1  = round(sum(_ret(u, 1, 2)  for u in uids) / size, 3) if size and age >= 1  else None
+            d7  = round(sum(_ret(u, 6, 8)  for u in uids) / size, 3) if size and age >= 7  else None
+            d14 = round(sum(_ret(u, 13, 15) for u in uids) / size, 3) if size and age >= 14 else None
+            d30 = round(sum(_ret(u, 28, 32) for u in uids) / size, 3) if size and age >= 30 else None
+
+            cohort_results.append({"week": wk, "size": size, "d1": d1, "d7": d7, "d14": d14, "d30": d30})
+            if d1  is not None: d1_vals.append(d1)
+            if d7  is not None: d7_vals.append(d7)
+            if d14 is not None: d14_vals.append(d14)
+            if d30 is not None: d30_vals.append(d30)
+
+        def _avg(lst: list) -> Optional[float]:
+            return round(sum(lst) / len(lst), 3) if lst else None
+
+        return {
+            "cohorts": cohort_results,
+            "aggregate": {"d1": _avg(d1_vals), "d7": _avg(d7_vals), "d14": _avg(d14_vals), "d30": _avg(d30_vals)},
+        }
+    except Exception as e:
+        print(f"[analytics] retention error: {str(e)[:200]}")
+        return {"cohorts": [], "aggregate": {"d1": None, "d7": None, "d14": None, "d30": None}}
+
+
+def _analytics_ltv(weeks: int = 8) -> Dict[str, Any]:
+    """Per-cohort LTV: stars spent in D7/D30/all-time, ARPU, conversion rate."""
+    import datetime as _dt
+    if not DB_READY:
+        return {"cohorts": [], "aggregate": {}}
+    try:
+        now = time.time()
+        cutoff = _date_key(now - weeks * 7 * 86400)
+
+        # First-seen date per user
+        first_rows = _db_fetchall(
+            "SELECT uid, MIN(day) AS first_day FROM imodel_events WHERE day >= %s GROUP BY uid",
+            (cutoff,),
+        )
+        if not first_rows:
+            return {"cohorts": [], "aggregate": {}}
+
+        uid_first: Dict[int, str] = {}
+        cohort_groups: Dict[str, List[int]] = {}
+        for row_uid, first_day in first_rows:
+            u = int(row_uid)
+            fd = str(first_day)
+            uid_first[u] = fd
+            try:
+                d = _dt.date.fromisoformat(fd)
+                wk = d.strftime("%G-W%V")
+            except Exception:
+                continue
+            cohort_groups.setdefault(wk, []).append(u)
+
+        # Fetch all purchase events for these users
+        all_uids = list(uid_first.keys())
+        purchase_rows = _db_fetchall(
+            "SELECT uid, day, (props_json::jsonb->>'stars')::int AS stars "
+            "FROM imodel_events WHERE event='purchase_completed' AND uid = ANY(%s) "
+            "AND props_json::jsonb ? 'stars'",
+            (all_uids,),
+        )
+        # uid → list of (day, stars)
+        uid_purchases: Dict[int, List[tuple]] = {}
+        for row_uid, day, stars in purchase_rows:
+            if stars:
+                uid_purchases.setdefault(int(row_uid), []).append((str(day), int(stars)))
+
+        def _cohort_ltv(uids: List[int], max_days: Optional[int]) -> tuple:
+            total_stars = 0
+            buyer_count = 0
+            for u in uids:
+                fd = uid_first.get(u, "")
+                u_stars = 0
+                for pday, pstars in uid_purchases.get(u, []):
+                    if not fd or max_days is None:
+                        u_stars += pstars
+                    else:
+                        try:
+                            import datetime as _dtt
+                            delta = (_dtt.date.fromisoformat(pday) - _dtt.date.fromisoformat(fd)).days
+                            if delta <= max_days:
+                                u_stars += pstars
+                        except Exception:
+                            u_stars += pstars
+                if u_stars > 0:
+                    buyer_count += 1
+                total_stars += u_stars
+            return total_stars, buyer_count
+
+        today = _dt.date.today()
+        cohort_results = []
+        arpu_30_vals, conv_vals = [], []
+
+        for wk in sorted(cohort_groups.keys(), reverse=True)[:weeks]:
+            uids = cohort_groups[wk]
+            size = len(uids)
+            try:
+                yr, wnum = int(wk[:4]), int(wk[6:])
+                cohort_monday = _dt.date.fromisocalendar(yr, wnum, 1)
+                age = (today - cohort_monday).days
+            except Exception:
+                age = 0
+
+            stars_7d, buyers_7d   = _cohort_ltv(uids, 7)   if age >= 7  else (None, None)
+            stars_30d, buyers_30d = _cohort_ltv(uids, 30)  if age >= 30 else (None, None)
+            stars_total, buyers_t = _cohort_ltv(uids, None)
+
+            arpu_7d  = round(stars_7d  / size, 1) if stars_7d  is not None else None
+            arpu_30d = round(stars_30d / size, 1) if stars_30d is not None else None
+            conv     = round(buyers_t  / size, 3) if size else None
+
+            cohort_results.append({
+                "week": wk, "size": size,
+                "stars_7d": stars_7d, "arpu_7d": arpu_7d,
+                "stars_30d": stars_30d, "arpu_30d": arpu_30d,
+                "stars_total": stars_total, "buyers": buyers_t,
+                "conversion": conv,
+            })
+            if arpu_30d is not None: arpu_30_vals.append(arpu_30d)
+            if conv is not None: conv_vals.append(conv)
+
+        def _avg(lst: list) -> Optional[float]:
+            return round(sum(lst) / len(lst), 3) if lst else None
+
+        return {
+            "cohorts": cohort_results,
+            "aggregate": {
+                "avg_arpu_30d": _avg(arpu_30_vals),
+                "avg_conversion": _avg(conv_vals),
+            },
+        }
+    except Exception as e:
+        print(f"[analytics] ltv error: {str(e)[:200]}")
+        return {"cohorts": [], "aggregate": {}}
+
+
+@app.get("/api/v1/analytics/retention")
+async def api_analytics_retention(request: Request):
+    """D1/D7/D14/D30 retention cohort data (admin only)."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    if role_for_user(uid, username) not in ("admin", "superadmin"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    weeks = int(request.query_params.get("weeks", 8))
+    weeks = max(2, min(weeks, 12))
+    return _analytics_retention(weeks)
+
+
+@app.get("/api/v1/analytics/ltv")
+async def api_analytics_ltv(request: Request):
+    """Per-cohort LTV and ARPU data (admin only)."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    if role_for_user(uid, username) not in ("admin", "superadmin"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    weeks = int(request.query_params.get("weeks", 8))
+    weeks = max(2, min(weeks, 12))
+    return _analytics_ltv(weeks)
+
+
 def _quest_progress_for_user(uid: int, today: str) -> List[Dict]:
     """Return quests with current progress for a user."""
     import datetime as _dt

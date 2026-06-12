@@ -1,18 +1,18 @@
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Users, Zap, TrendingUp, Radio, Search, Send, Plus, Minus, RefreshCw, ChevronDown, Layers } from 'lucide-react'
+import { Users, Zap, TrendingUp, Radio, Search, Send, Plus, Minus, RefreshCw, ChevronDown, Layers, BarChart2, DollarSign } from 'lucide-react'
 import {
   getDashboard, lookupUser, grantCredits, sendUserMessage,
   getBroadcastStatus, sendBroadcast, cancelBroadcast, generatePresetThumbs,
-  getFunnel, getExperimentResults,
+  getFunnel, getExperimentResults, getRetention, getLTV,
   type AdminDashboard, type AdminUser, type BroadcastStatus,
-  type FunnelData, type ExperimentsData,
+  type FunnelData, type ExperimentsData, type RetentionData, type LTVData,
 } from '../api/admin'
 import { track } from '../api/analytics'
 
 const tg = window.Telegram?.WebApp
 
-type AdminTab = 'dashboard' | 'users' | 'broadcast' | 'tools' | 'analytics'
+type AdminTab = 'dashboard' | 'users' | 'broadcast' | 'tools' | 'analytics' | 'retention' | 'ltv'
 
 function timeAgo(ts: number): string {
   if (!ts) return 'never'
@@ -704,6 +704,207 @@ function AnalyticsTab() {
 }
 
 
+// ─── Retention tab ────────────────────────────────────────────────────────────
+function RetentionTab() {
+  const [data, setData] = useState<RetentionData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [weeks, setWeeks] = useState(8)
+
+  const load = useCallback((w: number) => {
+    setLoading(true)
+    getRetention(w).then(setData).catch(() => null).finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load(weeks) }, [weeks, load])
+
+  function pctCell(v: number | null | undefined): JSX.Element {
+    if (v == null) return <span className="text-[#C7C7CC]">—</span>
+    const pct = Math.round(v * 100)
+    const bg = v >= 0.5 ? '#34C759' : v >= 0.3 ? '#FF9500' : v >= 0.15 ? '#FF9500' : '#FF3B30'
+    const opacity = 0.12 + v * 0.5
+    return (
+      <span
+        className="inline-block px-1.5 py-0.5 rounded-[6px] text-[11px] font-bold"
+        style={{ background: `${bg}${Math.round(opacity * 255).toString(16).padStart(2, '0')}`, color: bg }}
+      >
+        {pct}%
+      </span>
+    )
+  }
+
+  const agg = data?.aggregate
+  return (
+    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      {/* Period selector */}
+      <div className="flex gap-2">
+        {[4, 8, 12].map((w) => (
+          <button key={w} onClick={() => setWeeks(w)}
+            className={`px-3 py-1.5 rounded-full text-[12px] font-semibold ${weeks === w ? 'bg-[#6C47FF] text-white' : 'bg-[#E8E8ED] text-[#6E6E73]'}`}>
+            {w}w
+          </button>
+        ))}
+      </div>
+
+      {/* Aggregate cards */}
+      {agg && (
+        <div className="grid grid-cols-4 gap-2">
+          {([['D1', agg.d1, '#34C759'], ['D7', agg.d7, '#6C47FF'], ['D14', agg.d14, '#FF9500'], ['D30', agg.d30, '#FF3B30']] as const).map(([label, val, color]) => (
+            <div key={label} className="bg-white rounded-[14px] p-3 text-center border border-black/[0.05]">
+              <p className="text-[10px] font-semibold text-[#6E6E73] uppercase">{label}</p>
+              <p className="text-[20px] font-bold mt-0.5" style={{ color: val != null ? color : '#C7C7CC' }}>
+                {val != null ? `${Math.round(val * 100)}%` : '—'}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Cohort heatmap */}
+      {loading ? (
+        <p className="text-[13px] text-[#6E6E73]">Loading…</p>
+      ) : data && data.cohorts.length > 0 ? (
+        <div className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+          <div className="px-4 py-3 border-b border-black/[0.04]">
+            <p className="text-[13px] font-bold text-[#1D1D1F]">Cohort retention heatmap</p>
+            <p className="text-[11px] text-[#6E6E73]">Users returning after joining</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-black/[0.04]">
+                  <th className="text-left px-4 py-2 text-[#6E6E73] font-semibold">Cohort</th>
+                  <th className="px-3 py-2 text-[#6E6E73] font-semibold">Size</th>
+                  <th className="px-3 py-2 text-[#34C759] font-semibold">D1</th>
+                  <th className="px-3 py-2 text-[#6C47FF] font-semibold">D7</th>
+                  <th className="px-3 py-2 text-[#FF9500] font-semibold">D14</th>
+                  <th className="px-3 py-2 text-[#FF3B30] font-semibold">D30</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.cohorts.map((c) => (
+                  <tr key={c.week} className="border-b border-black/[0.03] last:border-0">
+                    <td className="px-4 py-2.5 font-medium text-[#1D1D1F]">{c.week}</td>
+                    <td className="px-3 py-2.5 text-center text-[#6E6E73]">{c.size}</td>
+                    <td className="px-3 py-2.5 text-center">{pctCell(c.d1)}</td>
+                    <td className="px-3 py-2.5 text-center">{pctCell(c.d7)}</td>
+                    <td className="px-3 py-2.5 text-center">{pctCell(c.d14)}</td>
+                    <td className="px-3 py-2.5 text-center">{pctCell(c.d30)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <p className="text-[13px] text-[#6E6E73]">No cohort data yet — needs DB events.</p>
+      )}
+    </div>
+  )
+}
+
+
+// ─── LTV tab ──────────────────────────────────────────────────────────────────
+function LTVTab() {
+  const [data, setData] = useState<LTVData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [weeks, setWeeks] = useState(8)
+
+  const load = useCallback((w: number) => {
+    setLoading(true)
+    getLTV(w).then(setData).catch(() => null).finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load(weeks) }, [weeks, load])
+
+  const agg = data?.aggregate
+  const maxStars = data ? Math.max(...data.cohorts.map((c) => c.stars_total), 1) : 1
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      <div className="flex gap-2">
+        {[4, 8, 12].map((w) => (
+          <button key={w} onClick={() => setWeeks(w)}
+            className={`px-3 py-1.5 rounded-full text-[12px] font-semibold ${weeks === w ? 'bg-[#6C47FF] text-white' : 'bg-[#E8E8ED] text-[#6E6E73]'}`}>
+            {w}w
+          </button>
+        ))}
+      </div>
+
+      {/* KPI cards */}
+      {agg && (
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-white rounded-[14px] p-3 border border-black/[0.05]">
+            <p className="text-[10px] font-semibold text-[#6E6E73] uppercase">Avg ARPU D30</p>
+            <p className="text-[22px] font-bold text-[#FF9500] mt-0.5">
+              {agg.avg_arpu_30d != null ? `${agg.avg_arpu_30d}★` : '—'}
+            </p>
+            <p className="text-[10px] text-[#6E6E73]">stars per user in first 30d</p>
+          </div>
+          <div className="bg-white rounded-[14px] p-3 border border-black/[0.05]">
+            <p className="text-[10px] font-semibold text-[#6E6E73] uppercase">Avg Conversion</p>
+            <p className="text-[22px] font-bold text-[#34C759] mt-0.5">
+              {agg.avg_conversion != null ? `${Math.round(agg.avg_conversion * 100)}%` : '—'}
+            </p>
+            <p className="text-[10px] text-[#6E6E73]">users who ever purchased</p>
+          </div>
+        </div>
+      )}
+
+      {/* Cohort LTV table */}
+      {loading ? (
+        <p className="text-[13px] text-[#6E6E73]">Loading…</p>
+      ) : data && data.cohorts.length > 0 ? (
+        <div className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+          <div className="px-4 py-3 border-b border-black/[0.04]">
+            <p className="text-[13px] font-bold text-[#1D1D1F]">Cohort LTV</p>
+            <p className="text-[11px] text-[#6E6E73]">Revenue generated per acquisition cohort</p>
+          </div>
+          <div className="divide-y divide-black/[0.03]">
+            {data.cohorts.map((c) => {
+              const barW = maxStars > 0 ? Math.round((c.stars_total / maxStars) * 100) : 0
+              return (
+                <div key={c.week} className="px-4 py-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[12px] font-semibold text-[#1D1D1F]">{c.week}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] text-[#6E6E73]">{c.size} users · {c.buyers} paid</span>
+                      <span className="text-[12px] font-bold text-[#FF9500]">{c.stars_total.toLocaleString()}★</span>
+                    </div>
+                  </div>
+                  {/* Revenue bar */}
+                  <div className="h-1.5 bg-[#F0F0F5] rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${barW}%` }}
+                      transition={{ duration: 0.6, ease: 'easeOut' }}
+                      className="h-full rounded-full bg-gradient-to-r from-[#FF9500] to-[#FF2D78]"
+                    />
+                  </div>
+                  {/* ARPU row */}
+                  <div className="flex gap-3 mt-1.5">
+                    {c.arpu_7d != null && (
+                      <span className="text-[10px] text-[#6C47FF]">D7 ARPU: {c.arpu_7d}★</span>
+                    )}
+                    {c.arpu_30d != null && (
+                      <span className="text-[10px] text-[#FF9500]">D30 ARPU: {c.arpu_30d}★</span>
+                    )}
+                    {c.conversion != null && (
+                      <span className="text-[10px] text-[#34C759]">Conv: {Math.round(c.conversion * 100)}%</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : (
+        <p className="text-[13px] text-[#6E6E73]">No LTV data yet — needs purchase events.</p>
+      )}
+    </div>
+  )
+}
+
+
 // ─── Main Admin screen ─────────────────────────────────────────────────────────
 export default function Admin() {
   const [tab, setTab] = useState<AdminTab>('dashboard')
@@ -713,11 +914,13 @@ export default function Admin() {
   }, [])
 
   const tabs: { key: AdminTab; label: string; icon: typeof Users }[] = [
-    { key: 'dashboard', label: 'Dashboard', icon: TrendingUp },
-    { key: 'users', label: 'Users', icon: Users },
-    { key: 'broadcast', label: 'Broadcast', icon: Radio },
-    { key: 'tools', label: 'Tools', icon: Layers },
-    { key: 'analytics', label: 'Analytics', icon: TrendingUp },
+    { key: 'dashboard',  label: 'Dash',      icon: TrendingUp },
+    { key: 'users',      label: 'Users',     icon: Users },
+    { key: 'broadcast',  label: 'Broadcast', icon: Radio },
+    { key: 'tools',      label: 'Tools',     icon: Layers },
+    { key: 'analytics',  label: 'Funnel',    icon: Zap },
+    { key: 'retention',  label: 'Retention', icon: BarChart2 },
+    { key: 'ltv',        label: 'LTV',       icon: DollarSign },
   ]
 
   return (
@@ -734,15 +937,15 @@ export default function Admin() {
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="flex mx-4 mb-1 p-1 bg-[#E8E8ED] rounded-[12px]">
+      {/* Tab bar — scrollable for 7 tabs */}
+      <div className="flex gap-1.5 mx-4 mb-1 overflow-x-auto no-scrollbar">
         {tabs.map(({ key, label, icon: Icon }) => (
           <motion.button
             key={key}
             whileTap={{ scale: 0.97 }}
             onClick={() => setTab(key)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-[10px] text-[12px] font-semibold transition-colors ${
-              tab === key ? 'bg-white text-[#1D1D1F] shadow-sm' : 'text-[#6E6E73]'
+            className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-[10px] text-[12px] font-semibold transition-colors ${
+              tab === key ? 'bg-[#6C47FF] text-white' : 'bg-[#E8E8ED] text-[#6E6E73]'
             }`}
           >
             <Icon size={13} />
@@ -761,11 +964,13 @@ export default function Admin() {
           transition={{ duration: 0.18 }}
           className="flex-1 flex flex-col overflow-hidden"
         >
-          {tab === 'dashboard' && <DashboardTab />}
-          {tab === 'users' && <UsersTab />}
-          {tab === 'broadcast' && <BroadcastTab />}
-          {tab === 'tools' && <ToolsTab />}
-          {tab === 'analytics' && <AnalyticsTab />}
+          {tab === 'dashboard'  && <DashboardTab />}
+          {tab === 'users'      && <UsersTab />}
+          {tab === 'broadcast'  && <BroadcastTab />}
+          {tab === 'tools'      && <ToolsTab />}
+          {tab === 'analytics'  && <AnalyticsTab />}
+          {tab === 'retention'  && <RetentionTab />}
+          {tab === 'ltv'        && <LTVTab />}
         </motion.div>
       </AnimatePresence>
 

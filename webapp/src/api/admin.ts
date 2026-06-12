@@ -145,3 +145,40 @@ export const getFunnel = (days = 7) =>
 
 export const getExperimentResults = (days = 14) =>
   api.get<ExperimentsData>(`/api/v1/analytics/experiments?days=${days}`)
+
+export interface RetentionCohort {
+  week: string
+  size: number
+  d1: number | null
+  d7: number | null
+  d14: number | null
+  d30: number | null
+}
+
+export interface RetentionData {
+  cohorts: RetentionCohort[]
+  aggregate: { d1: number | null; d7: number | null; d14: number | null; d30: number | null }
+}
+
+export interface LTVCohort {
+  week: string
+  size: number
+  stars_7d: number | null
+  arpu_7d: number | null
+  stars_30d: number | null
+  arpu_30d: number | null
+  stars_total: number
+  buyers: number
+  conversion: number | null
+}
+
+export interface LTVData {
+  cohorts: LTVCohort[]
+  aggregate: { avg_arpu_30d: number | null; avg_conversion: number | null }
+}
+
+export const getRetention = (weeks = 8) =>
+  api.getUncached<RetentionData>(`/api/v1/analytics/retention?weeks=${weeks}`)
+
+export const getLTV = (weeks = 8) =>
+  api.getUncached<LTVData>(`/api/v1/analytics/ltv?weeks=${weeks}`)
