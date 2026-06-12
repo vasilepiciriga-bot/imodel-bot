@@ -24,8 +24,13 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale": False,
         "upscale_factor": 2,
         "upscale_fidelity": 0.65,
-        "prompt_layer": None,
-        "negative_layer": None,
+        "prompt_layer": (
+            "lifestyle portrait, natural setting, authentic environment, "
+            "flattering ambient light, genuine expression, "
+            "85mm f/1.8 lens, shallow depth of field, sharp focus on face, "
+            "real-world background, candid lifestyle photography"
+        ),
+        "negative_layer": "studio backdrop, fake background, overprocessed, artificial lighting",
         "style_variants": {},
         "is_premium": False,
         "requires_custom_prompt": False,

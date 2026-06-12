@@ -1873,13 +1873,15 @@ async def _try_use_credit(uid: int, username: Optional[str] = None) -> bool:
     _credits_save()  # outside lock — disk/network I/O
     return True
 
-async def _refund_credit(uid: int, username: Optional[str] = None):
+async def _refund_credit(uid: int, username: Optional[str] = None, notify: bool = False):
     """Refund one credit when generation fails after pre-consume."""
     if is_free_user(uid, username):
         return
     async with _credits_lock:
         USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + 1
     _credits_save()
+    if notify and uid:
+        asyncio.create_task(_send_refund_notice(uid, 1))
 
 async def _try_use_credits_n(uid: int, n: int, username: Optional[str] = None) -> bool:
     """Atomically pre-consume n credits. Returns False if balance < n."""
@@ -1923,13 +1925,28 @@ async def _send_auto_recharge_reminder(uid: int, pack_id: str):
     except Exception:
         pass
 
-async def _refund_credits_n(uid: int, n: int, username: Optional[str] = None):
+async def _refund_credits_n(uid: int, n: int, username: Optional[str] = None, notify: bool = False):
     """Refund n credits after a failed tournament."""
     if n <= 0 or is_free_user(uid, username):
         return
     async with _credits_lock:
         USER_CREDITS[uid] = USER_CREDITS.get(uid, 0) + n
     _credits_save()
+    if notify and uid:
+        asyncio.create_task(_send_refund_notice(uid, n))
+
+async def _send_refund_notice(uid: int, n: int):
+    """Notify user in Telegram that a credit was returned after a failed generation."""
+    try:
+        credit_word = "generation" if n == 1 else "generations"
+        await bot.send_message(
+            uid,
+            f"⚡ {n} {credit_word} returned to your balance — the last generation failed. "
+            f"Your balance: {USER_CREDITS.get(uid, 0)}⚡\n\n"
+            "Tap /photo or open the app to try again.",
+        )
+    except Exception:
+        pass
 
 async def _maybe_give_milestone_bonus(ref_id: int, new_count: int):
     """Award milestone bonus to referrer and notify them."""
@@ -3431,13 +3448,12 @@ def _safe_suffix() -> str:
 
 IDENTITY_LOCK = (
     "Keep the SAME person from the input selfie. Preserve facial identity, "
-    "facial structure, bone structure, age, skin tone, natural eye color, hairline and hair color. "
-    "Do not alter ethnicity, face proportions, freckles, moles, or scars. "
-    "No face reshaping, no beautification filters, no de-aging, no make-up exaggeration."
+    "facial structure, bone structure, skin tone, natural eye color, hairline and hair color. "
+    "Do not alter ethnicity, face proportions, freckles, moles, or scars."
 )
 
 NEGATIVE_LOCK = (
-    "different person, identity change, changed ethnicity, de-aged, "
+    "different person, identity change, changed ethnicity, "
     "face morph, face swap artifacts, over-smooth skin, plastic doll, uncanny face, "
     "warped features, duplicate face, extra fingers, extra hands, artifacts, lowres"
 )
@@ -4697,6 +4713,7 @@ def generate_image_from_bytes(
     lock_scene: bool = True,
     user_id: Optional[int] = None,
     job_id: Optional[str] = None,
+    extra_negative: str = "",
 ) -> Optional[bytes]:
     t0 = time.time()
     if user_id is not None:
@@ -4781,7 +4798,9 @@ def generate_image_from_bytes(
 
     def try_instantid(p: str) -> Optional[str]:
         global REPLICATE_LAST_ERROR
-        neg = f"{INSTANTID_NEGATIVE}"
+        neg = f"{NEGATIVE_LOCK}, {INSTANTID_NEGATIVE}"
+        if extra_negative:
+            neg = f"{extra_negative}, {neg}"
         if strict:
             neg = f"{STRICT_NEGATIVE}, {neg}"
 
@@ -4794,9 +4813,9 @@ def generate_image_from_bytes(
                     "image": io.BytesIO(_selfie_for_iid),
                     "prompt": p,
                     "negative_prompt": neg,
-                    "ip_adapter_scale": 0.85 if strict else 0.80,
-                    "num_inference_steps": 50 if _premium else 30,
-                    "guidance_scale": 5.5 if _premium else 5.0,
+                    "ip_adapter_scale": 0.85 if strict else 0.70,
+                    "num_inference_steps": 50 if _premium else 40,
+                    "guidance_scale": 8.0 if _premium else 7.5,
                     "width": 1024,
                     "height": 1024,
                 }
@@ -7373,6 +7392,7 @@ async def run_webapp_generation_job(job_id: str):
         return
     uid = int(job.get("chat_id") or 0)
     mode = str(job.get("mode") or "portrait")
+    _GENERATION_TIMEOUT = 120.0
     record_job(job_id, status="running")
     try:
         prompt = str(job.get("prompt") or "")
@@ -7396,6 +7416,7 @@ async def run_webapp_generation_job(job_id: str):
                 prompt = age_info["prompt"] + (", " + prompt if prompt else "")
 
         # ── Identity Passport injection (everyday + preset modes) ───────────
+        _identity: Dict[str, Any] = {}
         if img_bytes and uid and mode not in ("face_swap", "copy_scene"):
             import hashlib as _hl
             _selfie_hash = _hl.md5(img_bytes[:4096]).hexdigest()
@@ -7404,7 +7425,7 @@ async def run_webapp_generation_job(job_id: str):
             else:
                 try:
                     from prompt_engine import analyze_selfie_identity as _analyze_id
-                    _identity = await asyncio.to_thread(_analyze_id, img_bytes)
+                    _identity = await asyncio.to_thread(_analyze_id, img_bytes) or {}
                     if _identity:
                         USER_IDENTITY_PASSPORT[uid] = _identity
                         USER_SELFIE_HASH[uid] = _selfie_hash
@@ -7415,25 +7436,44 @@ async def run_webapp_generation_job(job_id: str):
                 prompt = f"{prompt}, {_id_layer}" if prompt else _id_layer
         # ────────────────────────────────────────────────────────────────────
 
+        # Apply photoshoot mode prompt_layer and collect negative_layer
+        # (tournament runner has its own apply_prompt_layer call; this covers everyday/portrait)
+        _ps_mode = str(job.get("photoshoot_mode") or "everyday")
+        _skin_for_layer = str(_identity.get("skin_tone", ""))
+        if mode not in ("face_swap", "copy_scene"):
+            prompt = apply_prompt_layer(prompt, _ps_mode, skin_tone=_skin_for_layer)
+        _mode_negative = get_mode_negative(_ps_mode)
+
         if mode == "face_swap" and style_bytes:
             def _do_swap():
                 return face_swap(img_bytes, style_bytes)
-            result_bytes = await asyncio.to_thread(_do_swap)
+            result_bytes = await asyncio.wait_for(asyncio.to_thread(_do_swap), timeout=_GENERATION_TIMEOUT)
             if result_bytes:
                 result_bytes = await asyncio.to_thread(enhance_face_codeformer, result_bytes, 0.7)
             final_bytes = result_bytes
         else:
-            final_bytes = await asyncio.to_thread(
-                generate_image_from_bytes,
-                img_bytes,
-                prompt,
-                lang=str(job.get("lang") or LANG_DEFAULT),
-                strict=(mode == "copy_scene"),
-                style_bytes=style_bytes if mode == "copy_scene" else None,
-                lock_scene=(mode == "copy_scene"),
-                user_id=uid,
-                job_id=job_id,
+            final_bytes = await asyncio.wait_for(
+                asyncio.to_thread(
+                    generate_image_from_bytes,
+                    img_bytes,
+                    prompt,
+                    lang=str(job.get("lang") or LANG_DEFAULT),
+                    strict=(mode == "copy_scene"),
+                    style_bytes=style_bytes if mode == "copy_scene" else None,
+                    lock_scene=(mode == "copy_scene"),
+                    user_id=uid,
+                    job_id=job_id,
+                    extra_negative=_mode_negative,
+                ),
+                timeout=_GENERATION_TIMEOUT,
             )
+    except asyncio.TimeoutError:
+        final_bytes = None
+        record_job(job_id, status="failed", error="generation_timeout")
+        credit_cost = get_mode_credit_cost(str(job.get("photoshoot_mode") or "everyday"))
+        if uid:
+            await _refund_credits_n(uid, credit_cost, str(job.get("username") or ""), notify=True)
+        print(f"⏰ Generation timeout ({_GENERATION_TIMEOUT}s) for job {job_id} — credit refunded")
     except Exception as e:
         final_bytes = None
         record_job(job_id, status="failed", error=str(e)[:500])
@@ -7447,7 +7487,7 @@ async def run_webapp_generation_job(job_id: str):
         record_job(job_id, status="failed", error="s3_upload_failed")
         credit_cost = get_mode_credit_cost(str(job.get("photoshoot_mode") or "everyday"))
         if uid:
-            await _refund_credits_n(uid, credit_cost, str(job.get("username") or ""))
+            await _refund_credits_n(uid, credit_cost, str(job.get("username") or ""), notify=True)
         return
     stats_incr("jobs_done", 1)
     # Variable reward: 10% chance of +1–3 bonus credits
@@ -7814,7 +7854,7 @@ async def run_photoshoot_tournament_job(job_id: str):
     # ─────────────────────────────────────────────────────────────────────────
 
     if not candidates:
-        await _refund_credits_n(uid, get_mode_credit_cost(mode_key), username)
+        await _refund_credits_n(uid, get_mode_credit_cost(mode_key), username, notify=True)
         record_job(job_id, status="failed", error="all_candidates_failed")
         stats_incr("tournament_all_failed", 1)
         return
@@ -7841,7 +7881,7 @@ async def run_photoshoot_tournament_job(job_id: str):
             job_event(job_id, "result_uploaded", idx=idx, url=url[:80])
 
     if not output_urls:
-        await _refund_credits_n(uid, get_mode_credit_cost(mode_key), username)
+        await _refund_credits_n(uid, get_mode_credit_cost(mode_key), username, notify=True)
         record_job(job_id, status="failed", error="upload_failed")
         return
 

@@ -715,12 +715,12 @@ export default function Gallery() {
                     try {
                       await saveImageToPhone(lightbox.hd_url ?? lightbox.output_url ?? '')
                     } catch {
-                      toast.error('Не удалось сохранить', { sub: 'Попробуйте зажать фото' })
+                      toast.error('Could not save', { sub: 'Try long-pressing the photo' })
                     } finally { setSaving(false) }
                   }}
                   className="flex items-center justify-center gap-1.5 py-3 bg-white/[0.18] border border-white/[0.12] rounded-card text-white text-[13px] font-medium disabled:opacity-50"
                 >
-                  <Download size={14} /> {saving ? 'Сохраняю…' : 'Сохранить'}
+                  <Download size={14} /> {saving ? 'Saving…' : 'Save'}
                 </motion.button>
                 <button
                   onClick={() => { closeLightbox(); setTab('studio') }}

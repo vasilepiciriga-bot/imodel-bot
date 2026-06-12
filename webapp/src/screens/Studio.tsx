@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Flame, Grid2X2, Diamond, Check, Download, Upload, Zap } from 'lucide-react'
 import confetti from 'canvas-confetti'
@@ -64,6 +64,8 @@ export default function Studio() {
   const [showLeaderboard, setShowLeaderboard] = useState(false)
   const [monthlyChallenge, setMonthlyChallenge] = useState<MonthlyChallenge | null>(null)
   const [challengeDismissed, setChallengeDismissed] = useState(false)
+  const [showReferralNudge, setShowReferralNudge] = useState(false)
+  const pseudoStepTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -158,15 +160,18 @@ export default function Studio() {
     }
   }, [mode])
 
-  // Streak-at-risk modal: show when streak >= 3 and last gen was 18+ hours ago
+  // Streak-at-risk modal: show 3s after app open (not instantly) when risk conditions met
   useEffect(() => {
     if (!user?.last_gen_at || (user.streak ?? 0) < 3) return
     const hoursSince = (Date.now() / 1000 - user.last_gen_at) / 3600
     if (hoursSince < 18) return
     const snoozedAt = Number(localStorage.getItem('streak_risk_snoozed') ?? 0)
     if (Date.now() - snoozedAt < 2 * 60 * 60 * 1000) return
-    setShowStreakModal(true)
-    track('streak_at_risk_modal_shown', { streak: user.streak })
+    const t = setTimeout(() => {
+      setShowStreakModal(true)
+      track('streak_at_risk_modal_shown', { streak: user.streak })
+    }, 3000)
+    return () => clearTimeout(t)
   }, [user?.last_gen_at, user?.streak])
 
   // Fetch claimable quests on mount (complements post-generation fetch)
@@ -185,16 +190,35 @@ export default function Studio() {
     return job.status === 'done' || job.status === 'ready'
   }
 
+  // Client-side pseudo-step progression: cycles through 5 steps when backend
+  // doesn't send step_label (covers everyday single-generation flow)
+  const PSEUDO_STEPS = ['analyzing', 'identity_scan', 'crafting_prompt', 'generating_1_of_1', 'selecting']
+  function startPseudoSteps() {
+    pseudoStepTimers.current.forEach(clearTimeout)
+    pseudoStepTimers.current = []
+    const delays = [0, 4000, 10000, 16000, 50000]
+    PSEUDO_STEPS.forEach((label, i) => {
+      pseudoStepTimers.current.push(
+        setTimeout(() => setStepLabel((cur) => cur ?? label), delays[i])
+      )
+    })
+  }
+  function clearPseudoSteps() {
+    pseudoStepTimers.current.forEach(clearTimeout)
+    pseudoStepTimers.current = []
+  }
+
   useJobPoller(pollingJobId, (job) => {
     setCurrentJob(job)
 
-    // Update progress label from backend step_label
+    // Prefer backend step_label; pseudo steps serve as fallback
     if (job.step_label) setStepLabel(job.step_label)
     if (job.status === 'processing' || job.status === 'running') {
       setProgressStep((s) => Math.min(s + 1, 3))
     }
 
     if (isJobDone(job) || job.status === 'error' || job.status === 'failed') {
+      clearPseudoSteps()
       setLoading(false)
       setPollingJobId(null)
       setProgressStep(0)
@@ -231,6 +255,11 @@ export default function Studio() {
           localStorage.setItem('imodel_first_gen_celebrated', '1')
           setFirstGenUrl(job.output_url)
           setTimeout(() => setShowFirstGen(true), 800)
+        }
+
+        // Referral nudge: show 8s after result, only for 2nd+ generation
+        if ((freshUser?.gens_ok ?? 0) > 1 && !referralNudgeDismissed) {
+          setTimeout(() => setShowReferralNudge(true), 8000)
         }
 
         // Fetch identity passport (once per session after first gen)
@@ -274,8 +303,10 @@ export default function Studio() {
     setLoading(true)
     setCurrentJob(null)
     setBatchJobs([])
+    setShowReferralNudge(false)
     setProgressStep(0)
-    setStepLabel('analyzing')
+    setStepLabel(undefined)
+    startPseudoSteps()
 
     try {
       const baseParams = {
@@ -320,8 +351,10 @@ export default function Studio() {
     setLoading(true)
     setCurrentJob(null)
     setBatchJobs([])
+    setShowReferralNudge(false)
     setProgressStep(0)
-    setStepLabel('analyzing')
+    setStepLabel(undefined)
+    startPseudoSteps()
     track('upsell_mode_generate', { mode: modeKey })
     try {
       const { job_id } = await createGeneration({
@@ -394,9 +427,9 @@ export default function Studio() {
       setRefB64(dataUrl.split(',')[1])
     } catch (e) {
       if (e instanceof Error && e.message === 'not_an_image') {
-        toast.error('Это не прямая ссылка на фото — нажми на фото → «Копировать адрес изображения»')
+        toast.error('Not a direct image link — right-click the image → "Copy image address"')
       } else {
-        toast.error('Не удалось загрузить изображение')
+        toast.error('Could not load image')
       }
     } finally {
       setRefLoading(false)
@@ -615,8 +648,8 @@ export default function Studio() {
               className="rounded-card bg-[#F5F5F7] p-4 space-y-3"
             >
               <div>
-                <p className="text-[13px] font-semibold text-[#1D1D1F]">📎 Референс-фото</p>
-                <p className="text-[11px] text-[#6E6E73] mt-0.5">Загрузи фото образа, который хочешь повторить</p>
+                <p className="text-[13px] font-semibold text-[#1D1D1F]">📎 Style reference</p>
+                <p className="text-[11px] text-[#6E6E73] mt-0.5">Upload a photo of the look you want to recreate</p>
               </div>
 
               {refPreview ? (
@@ -637,7 +670,7 @@ export default function Studio() {
                       value={refUrl}
                       onChange={(e) => setRefUrl(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadRefFromUrl() } }}
-                      placeholder="Вставь ссылку (Pinterest, Instagram…)"
+                      placeholder="Paste a link (Pinterest, Instagram…)"
                       className="flex-1 px-3 py-2.5 rounded-[10px] bg-white border border-[#E5E5EA] text-[13px] text-[#1D1D1F] placeholder-[#C7C7CC] outline-none focus:border-[#6C47FF]/40"
                     />
                     <button
@@ -651,7 +684,7 @@ export default function Studio() {
 
                   <div className="flex items-center gap-2">
                     <div className="flex-1 h-px bg-[#E5E5EA]" />
-                    <span className="text-[11px] text-[#AEAEB2]">или</span>
+                    <span className="text-[11px] text-[#AEAEB2]">or</span>
                     <div className="flex-1 h-px bg-[#E5E5EA]" />
                   </div>
 
@@ -660,7 +693,7 @@ export default function Studio() {
                     className="flex items-center justify-center gap-2 py-2.5 rounded-[10px] bg-white border border-[#E5E5EA] text-[13px] font-medium text-[#1D1D1F] cursor-pointer active:bg-[#F5F5F7]"
                   >
                     <Upload size={14} className="text-[#6C47FF]" />
-                    Загрузить с телефона
+                    Upload from phone
                   </label>
                   <input
                     id="ref-upload"
@@ -995,12 +1028,12 @@ export default function Studio() {
           />
         )}
 
-        {/* Post-generation referral nudge */}
-        {currentJob && isJobDone(currentJob) && !batchJobs.length && !referralNudgeDismissed && (
+        {/* Post-generation referral nudge — shows 8s after result, 2nd+ gen only */}
+        {showReferralNudge && !batchJobs.length && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 1.8, type: 'spring', stiffness: 300, damping: 28 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 28 }}
             className="flex items-center gap-3 px-4 py-3 rounded-card bg-gradient-to-r from-[#34C759]/10 to-[#30D158]/10 border border-[#34C759]/20"
           >
             <span className="text-[22px]">🎁</span>
@@ -1016,7 +1049,7 @@ export default function Studio() {
                 Invite
               </button>
               <button
-                onClick={() => setReferralNudgeDismissed(true)}
+                onClick={() => { setReferralNudgeDismissed(true); setShowReferralNudge(false) }}
                 className="text-[10px] text-[#6E6E73]"
               >
                 Later
