@@ -26,8 +26,10 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "lifestyle portrait, natural setting, authentic environment, "
+            "wearing casual stylish everyday outfit, "
             "flattering ambient light, genuine expression, "
-            "85mm f/1.8 lens, shallow depth of field, sharp focus on face, "
+            "half-body candid shot, natural relaxed pose, "
+            "85mm f/1.8 lens, shallow depth of field, "
             "real-world background, candid lifestyle photography"
         ),
         "negative_layer": "studio backdrop, fake background, overprocessed, artificial lighting",
@@ -114,7 +116,9 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "editorial Vogue magazine quality, high fashion avant-garde styling, "
-            "luxury brand campaign, art director composition, ultra-premium photoshoot"
+            "wearing haute couture avant-garde fashion ensemble, "
+            "luxury brand campaign, full body or 3/4 editorial shot, "
+            "confident angled pose, art director composition, ultra-premium photoshoot"
         ),
         "negative_layer": (
             "casual clothing, outdoor snapshot, low contrast, amateur, overprocessed, "
@@ -168,7 +172,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "corporate executive portrait, confident leadership presence, "
-            "tailored business suit, authoritative gaze, LinkedIn-ready, boardroom or studio"
+            "tailored business suit, authoritative gaze, LinkedIn-ready, boardroom or studio, "
+            "3/4 body portrait, upright confident posture, 85mm lens"
         ),
         "negative_layer": (
             "casual outfit, t-shirt, unformal, blurry, overexposed, cluttered background, "
@@ -387,7 +392,9 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "natural warm smile, approachable likeable personality, "
-            "candid lifestyle photography, authentic relaxed look, social media quality"
+            "wearing attractive casual stylish outfit, "
+            "candid lifestyle photography, authentic relaxed look, social media quality, "
+            "half-body warm approachable pose, 35mm f/2 lens"
         ),
         "negative_layer": (
             "serious expression, stiff pose, corporate look, dark background, "
@@ -437,7 +444,9 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "ultra-luxury lifestyle editorial, five-star ambiance, "
-            "old money elegance, opulent environment, Instagram-worthy, fashion forward"
+            "wearing elegant designer luxury attire, couture fashion outfit, "
+            "old money elegance, opulent environment, Instagram-worthy, fashion forward, "
+            "3/4 body shot, relaxed elegant pose"
         ),
         "negative_layer": (
             "budget setting, casual clothes, plain background, tourist snapshot, "
@@ -489,8 +498,9 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "Dubai luxury influencer portrait, ultra-modern skyscraper backdrop, "
-            "Burj Khalifa or Dubai Marina skyline, opulent fashion, social media influencer aesthetic, "
-            "golden hour desert glow"
+            "Burj Khalifa or Dubai Marina skyline, wearing luxury designer fashion ensemble, "
+            "glamorous opulent styling, social media influencer aesthetic, "
+            "golden hour desert glow, 3/4 body influencer pose"
         ),
         "negative_layer": "old architecture, casual clothes, cold tones, budget setting",
         "style_variants": {
@@ -696,7 +706,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "Halloween portrait, dramatic spooky atmosphere, moody cinematic lighting, "
-            "dark Halloween backdrop with pumpkins or fog, professional costume photography"
+            "dark Halloween backdrop with pumpkins or fog, "
+            "wearing elaborate theatrical Halloween costume, professional costume photography"
         ),
         "negative_layer": "bright cheerful daylight, casual plain background, mundane",
         "style_variants": {
@@ -734,7 +745,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "festive Christmas portrait, cozy holiday atmosphere, warm golden light, "
-            "Christmas tree with lights, snow or winter setting, festive outfit, joyful holiday card quality"
+            "Christmas tree with lights, snow or winter setting, "
+            "wearing cozy festive Christmas sweater or elegant holiday dress, joyful holiday card quality"
         ),
         "negative_layer": "summer, outdoor daytime, casual non-festive outfit",
         "style_variants": {

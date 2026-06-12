@@ -3468,7 +3468,8 @@ IDENTITY_LOCK = (
 NEGATIVE_LOCK = (
     "different person, identity change, changed ethnicity, "
     "face morph, face swap artifacts, over-smooth skin, plastic doll, uncanny face, "
-    "warped features, duplicate face, extra fingers, extra hands, artifacts, lowres"
+    "warped features, duplicate face, extra fingers, extra hands, artifacts, lowres, "
+    "selfie angle, phone camera selfie, amateur phone shot, front-facing phone angle"
 )
 
 # Используем только когда нужно зафиксировать сцену (copy exact scene)
@@ -3515,17 +3516,21 @@ def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = Tru
     else:
         try:
             client = OpenAI(api_key=OPENAI_API_KEY)
-            sys = ("You are a prompt writer for a face-preserving image generation pipeline. "
-                   "Rewrite the user's brief into a concise, vivid, SFW English prompt that "
-                   "keeps the same person and the same intent. Ensure: fully clothed, SFW.")
-            user = (f"User prompt: {raw_prompt}\n\n"
-                    "Rewrite to one line. Add environment, mood, lighting, camera. Keep it respectful and SFW.")
+            sys = ("You write prompts for a professional AI photo generation pipeline. "
+                   "Transform the input into a vivid photoshoot scene description. "
+                   "Always specify: exact environment or scene, wardrobe or outfit, body pose, "
+                   "lighting type, camera focal length and aperture, mood. "
+                   "Be specific and cinematic. Do NOT write identity or face preservation instructions. "
+                   "Output only the prompt text, no quotes, no JSON, SFW.")
+            user = (f"Photoshoot description: {raw_prompt}\n\n"
+                    "Write a vivid, specific photoshoot prompt in one line. "
+                    "Include scene, outfit, pose, lighting, camera. SFW, fully clothed.")
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[{"role": "system", "content": sys},
                           {"role": "user", "content": user}],
                 temperature=0.5,
-                max_tokens=160,
+                max_tokens=250,
                 timeout=60,
             )
             refined = (resp.choices[0].message.content or "").strip()
@@ -3533,7 +3538,7 @@ def craft_prompt_gpt(raw_prompt: str, lang: str = "ru", allow_refine: bool = Tru
         except Exception as e:
             print("GPT refine error:", str(e)[:200])
             base = safe_raw
-    final = f"{base}. {IDENTITY_LOCK}".strip()
+    final = base.strip()
     return final
 
 # ===== AI Caption Generator =====
@@ -4826,7 +4831,7 @@ def generate_image_from_bytes(
                     "image": io.BytesIO(_selfie_for_iid),
                     "prompt": p,
                     "negative_prompt": neg,
-                    "ip_adapter_scale": 0.85 if strict else 0.70,
+                    "ip_adapter_scale": 0.85 if strict else 0.60,
                     "num_inference_steps": 50 if _premium else 40,
                     "guidance_scale": 8.0 if _premium else 7.5,
                     "width": 1024,
