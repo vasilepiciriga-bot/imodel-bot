@@ -10,6 +10,7 @@ interface CreateParams {
   style_b64?: string
   photoshoot_mode?: string
   custom_desc?: string
+  style_variant?: string
   lang?: string
 }
 

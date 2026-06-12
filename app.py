@@ -1488,6 +1488,8 @@ USER_AUTO_RECHARGE: Dict[int, Dict]    = {}  # uid → {"pack": "pack_30", "thre
 USER_STYLE_HISTORY: Dict[int, List[str]] = {}  # uid → last-5 preset_keys
 USER_MODE_HISTORY:  Dict[int, List[str]] = {}  # uid → last-3 photoshoot modes
 USER_REENGAGEMENT:  Dict[int, Dict]      = {}  # uid → {seq: int, last_at: float} re-engagement sequence state
+USER_IDENTITY_PASSPORT: Dict[int, Dict[str, Any]] = {}  # uid → {gender, age_range, skin_tone, hair_color, identity_layer}
+USER_SELFIE_HASH:   Dict[int, str]       = {}  # uid → md5 of first 4KB of last selfie (cache invalidation)
 
 # Persistent storage for credits
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -7254,6 +7256,26 @@ async def run_webapp_generation_job(job_id: str):
             if age_info:
                 prompt = age_info["prompt"] + (", " + prompt if prompt else "")
 
+        # ── Identity Passport injection (everyday + preset modes) ───────────
+        if img_bytes and uid and mode not in ("face_swap", "copy_scene"):
+            import hashlib as _hl
+            _selfie_hash = _hl.md5(img_bytes[:4096]).hexdigest()
+            if USER_SELFIE_HASH.get(uid) == _selfie_hash and USER_IDENTITY_PASSPORT.get(uid):
+                _identity = USER_IDENTITY_PASSPORT[uid]
+            else:
+                try:
+                    from prompt_engine import analyze_selfie_identity as _analyze_id
+                    _identity = await asyncio.to_thread(_analyze_id, img_bytes)
+                    if _identity:
+                        USER_IDENTITY_PASSPORT[uid] = _identity
+                        USER_SELFIE_HASH[uid] = _selfie_hash
+                except Exception:
+                    _identity = {}
+            _id_layer = str(_identity.get("identity_layer", "")).strip()
+            if _id_layer:
+                prompt = f"{prompt}, {_id_layer}" if prompt else _id_layer
+        # ────────────────────────────────────────────────────────────────────
+
         if mode == "face_swap" and style_bytes:
             def _do_swap():
                 return face_swap(img_bytes, style_bytes)
@@ -7426,8 +7448,13 @@ async def run_photoshoot_tournament_job(job_id: str):
     job_event(job_id, "tournament_start", mode=mode_key, n_gen=n_gen, select_k=select_k)
 
     # ── Identity Passport (Phase 2) ──────────────────────────────────────────
-    # Analyze selfie to detect gender/age/skin-tone and personalize the prompt.
+    # Check per-user cache first; fall back to per-job field; then analyze fresh.
     identity_passport: Dict[str, Any] = job.get("identity_passport") or {}
+    if not identity_passport and uid:
+        import hashlib as _hl2
+        _s_hash = _hl2.md5(img_bytes[:4096]).hexdigest()
+        if USER_SELFIE_HASH.get(uid) == _s_hash and USER_IDENTITY_PASSPORT.get(uid):
+            identity_passport = USER_IDENTITY_PASSPORT[uid]
     if not identity_passport:
         record_job(job_id, step_label="identity_scan")
         try:
@@ -7435,6 +7462,10 @@ async def run_photoshoot_tournament_job(job_id: str):
             identity_passport = await asyncio.to_thread(_analyze_identity, img_bytes)
             if identity_passport:
                 record_job(job_id, identity_passport=identity_passport)
+                if uid:
+                    import hashlib as _hl3
+                    USER_IDENTITY_PASSPORT[uid] = identity_passport
+                    USER_SELFIE_HASH[uid] = _hl3.md5(img_bytes[:4096]).hexdigest()
                 job_event(job_id, "identity_analyzed",
                           gender=identity_passport.get("gender", ""),
                           age_range=identity_passport.get("age_range", ""),
@@ -7464,7 +7495,8 @@ async def run_photoshoot_tournament_job(job_id: str):
             job_event(job_id, "custom_prompt_error", error=str(e)[:120])
 
     style_variant: str = str(job.get("style_variant") or "")
-    effective_prompt = apply_prompt_layer(base_prompt, mode_key, style_variant=style_variant)
+    _skin = str(identity_passport.get("skin_tone", ""))
+    effective_prompt = apply_prompt_layer(base_prompt, mode_key, style_variant=style_variant, skin_tone=_skin)
 
     # ── Phase 3: Parallel generation with concurrency limit ─────────────────
     _MAX_PAR = min(n_gen, int(os.getenv("TOURNAMENT_MAX_PARALLEL", "4")))
@@ -7904,6 +7936,24 @@ def _leaderboard_display_name(uid: int, username: str) -> str:
         visible = username[:3] if len(username) >= 3 else username
         return f"@{visible}***"
     return f"User #{uid % 10000:04d}"
+
+@app.get("/api/v1/me/identity")
+async def api_me_identity(request: Request):
+    """Return the cached Identity Passport for this user (gender/age/skin/hair)."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    passport = USER_IDENTITY_PASSPORT.get(uid, {})
+    return {
+        "detected": bool(passport),
+        "gender":     passport.get("gender", ""),
+        "age_range":  passport.get("age_range", ""),
+        "skin_tone":  passport.get("skin_tone", ""),
+        "hair_color": passport.get("hair_color", ""),
+        "identity_layer": passport.get("identity_layer", ""),
+    }
+
 
 @app.get("/api/v1/experiments")
 async def api_experiments(request: Request):

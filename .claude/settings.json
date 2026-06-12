@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk -F: '{print $1, $2}')",
+      "Bash(awk '{if \\($1 > 7900\\) print}')",
+      "Bash(python3 -c \"import photoshoot_modes; print\\('OK'\\)\")"
+    ]
+  }
+}

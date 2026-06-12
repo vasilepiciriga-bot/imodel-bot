@@ -16,7 +16,7 @@ import { useAppStore } from '../store/appStore'
 import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
-import { getChallenge, claimDaily, getMeFresh } from '../api/session'
+import { getChallenge, claimDaily, getMeFresh, getIdentityPassport } from '../api/session'
 import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
 import { getQuests, claimQuest, type QuestItem } from '../api/quests'
 import { getCachedPresets } from '../api/presets'
@@ -56,6 +56,8 @@ export default function Studio() {
   const [claimingQuest, setClaimingQuest] = useState(false)
   const [recentPresets, setRecentPresets] = useState<Preset[]>([])
   const [communityInspiration, setCommunityInspiration] = useState<Preset[]>([])
+  const [styleVariant, setStyleVariant] = useState<string>('')
+  const [identityPassport, setIdentityPassport] = useState<import('../types').IdentityPassport | null>(null)
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -201,6 +203,11 @@ export default function Studio() {
           setTimeout(() => setShowFirstGen(true), 800)
         }
 
+        // Fetch identity passport (once per session after first gen)
+        if (!identityPassport) {
+          getIdentityPassport().then((ip) => { if (ip.detected) setIdentityPassport(ip) }).catch(() => null)
+        }
+
         // Check for newly claimable quests after generation
         getQuests().then(({ quests }) => {
           const claimable = quests.find((q) => q.claimable)
@@ -250,6 +257,7 @@ export default function Studio() {
         // copy_image must go through the everyday path — tournament job drops style_bytes
         photoshoot_mode: mode === 'copy_image' ? 'everyday' : photoshootMode,
         custom_desc: photoshootMode === 'custom' ? customDesc : undefined,
+        style_variant: styleVariant || undefined,
       }
 
       if (batchEnabled) {
@@ -504,6 +512,23 @@ export default function Studio() {
         </AnimatePresence>
 
         <SelfieUploader />
+
+        {/* Identity passport chip — shown after first generation detects face attributes */}
+        {identityPassport?.detected && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#6C47FF]/8 border border-[#6C47FF]/20 self-start"
+          >
+            <span className="text-[12px]">👤</span>
+            <span className="text-[11px] font-semibold text-[#6C47FF]">
+              {[identityPassport.gender, identityPassport.age_range, identityPassport.skin_tone && `${identityPassport.skin_tone} skin`]
+                .filter(Boolean).join(' · ')}
+            </span>
+            <span className="text-[10px] text-[#6C47FF]/60">✨ Optimized</span>
+          </motion.div>
+        )}
+
         <ModeSelector />
 
         {/* Copy Image reference panel */}
@@ -945,9 +970,10 @@ export default function Studio() {
       <PhotoshootModePicker
         open={showModePicker}
         onClose={() => setShowModePicker(false)}
-        onSelect={(newMode, desc) => {
+        onSelect={(newMode, desc, variant) => {
           setPhotoshootMode(newMode)
           if (desc) setCustomDesc(desc)
+          setStyleVariant(variant ?? '')
           setShowModePicker(false)
         }}
         onUpgrade={() => setShowPaywall(true)}

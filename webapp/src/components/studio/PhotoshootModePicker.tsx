@@ -29,7 +29,7 @@ const MODE_COLORS: Record<PhotoshootModeKey, { from: string; to: string }> = {
 interface Props {
   open: boolean
   onClose: () => void
-  onSelect: (mode: PhotoshootModeKey, customDesc?: string) => void
+  onSelect: (mode: PhotoshootModeKey, customDesc?: string, styleVariant?: string) => void
   onUpgrade?: () => void
   currentMode: PhotoshootModeKey
   userCredits: number
@@ -39,12 +39,14 @@ interface Props {
 export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, currentMode, userCredits, modes }: Props) {
   const [selected, setSelected] = useState<PhotoshootModeKey>(currentMode)
   const [customDesc, setCustomDesc] = useState('')
+  const [selectedVariant, setSelectedVariant] = useState<string>('')
   const [upgradeMode, setUpgradeMode] = useState<PhotoshootMode | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     setSelected(currentMode)
     setUpgradeMode(null)
+    setSelectedVariant('')
   }, [currentMode, open])
 
   // Android back button support
@@ -61,6 +63,7 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
   function handleModeSelect(mode: PhotoshootMode) {
     tg?.HapticFeedback?.selectionChanged()
     setSelected(mode.key)
+    setSelectedVariant('')
     if (mode.key !== 'custom') setCustomDesc('')
     // Show inline upgrade sheet when premium mode + low credits
     if (PREMIUM_MODES.has(mode.key) && userCredits < 10) {
@@ -84,8 +87,8 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
       textareaRef.current?.focus()
       return
     }
-    track('mode_selected', { mode: selected, credits: selectedMode?.credits })
-    onSelect(selected, selected === 'custom' ? customDesc.trim() : undefined)
+    track('mode_selected', { mode: selected, credits: selectedMode?.credits, variant: selectedVariant || undefined })
+    onSelect(selected, selected === 'custom' ? customDesc.trim() : undefined, selectedVariant || undefined)
   }
 
   function handleUpgradeSubscribe() {
@@ -201,6 +204,44 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                   </motion.button>
                 )
               })}
+
+              {/* Style variant chips — shown when selected mode has variants */}
+              <AnimatePresence>
+                {selectedMode && Object.keys(selectedMode.style_variants ?? {}).length > 0 && selected !== 'custom' && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden pt-1"
+                  >
+                    <p className="text-[11px] font-semibold text-[#6E6E73] mb-2 px-1">Style variant</p>
+                    <div className="flex flex-wrap gap-2">
+                      <motion.button
+                        key="__default"
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => { tg?.HapticFeedback?.selectionChanged(); setSelectedVariant('') }}
+                        className={`px-3 py-1.5 rounded-full text-[12px] font-semibold border transition-colors ${
+                          !selectedVariant ? 'bg-[#6C47FF] text-white border-[#6C47FF]' : 'bg-[#F5F5F7] text-[#6E6E73] border-transparent'
+                        }`}
+                      >
+                        Default
+                      </motion.button>
+                      {Object.entries(selectedMode.style_variants).map(([vk, vc]) => (
+                        <motion.button
+                          key={vk}
+                          whileTap={{ scale: 0.95 }}
+                          onClick={() => { tg?.HapticFeedback?.selectionChanged(); setSelectedVariant(vk) }}
+                          className={`px-3 py-1.5 rounded-full text-[12px] font-semibold border transition-colors ${
+                            selectedVariant === vk ? 'bg-[#6C47FF] text-white border-[#6C47FF]' : 'bg-[#F5F5F7] text-[#6E6E73] border-transparent'
+                          }`}
+                        >
+                          {vc.label}
+                        </motion.button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* Custom mode: inline textarea */}
               <AnimatePresence>

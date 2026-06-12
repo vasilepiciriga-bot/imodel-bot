@@ -1,5 +1,5 @@
 import { api, invalidateCache } from './client'
-import type { UserProfile, Challenge, DailyBonusResult } from '../types'
+import type { UserProfile, Challenge, DailyBonusResult, IdentityPassport } from '../types'
 
 /** Always fetch fresh — bypasses the SWR cache (used after purchases/mutations). */
 export const getMe = () => api.get<UserProfile>('/api/v1/me')
@@ -29,3 +29,6 @@ export interface ReferralData {
 }
 
 export const getReferral = () => api.get<ReferralData>('/api/v1/referral')
+
+export const getIdentityPassport = () =>
+  api.getUncached<IdentityPassport>('/api/v1/me/identity')

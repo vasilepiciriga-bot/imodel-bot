@@ -262,12 +262,53 @@ def get_style_variants(key: str) -> Dict[str, Any]:
     return cfg.get("style_variants", {})
 
 
+# Beauty layer: skin-tone-aware enhancement phrases injected per mode.
+_BEAUTY_LAYERS: Dict[str, Dict[str, str]] = {
+    "vogue": {
+        "fair":   "flawless porcelain skin, luminous complexion, high-fashion retouching",
+        "medium": "radiant warm skin tone, sun-kissed glow, editorial retouching",
+        "olive":  "rich olive skin, golden-hour warmth, magazine retouching",
+        "dark":   "deep rich skin tone, velvet finish, luxury editorial glow",
+        "default":"natural skin texture, professional retouching, magazine quality",
+    },
+    "premium": {
+        "fair":   "smooth even skin, soft diffused light, professional portrait retouching",
+        "medium": "warm balanced skin tone, natural glow, portrait enhancement",
+        "olive":  "rich natural skin, warm flattering light, portrait quality",
+        "dark":   "deep natural skin, cinematic contrast, portrait perfection",
+        "default":"natural skin, professional portrait lighting",
+    },
+    "ceo": {
+        "default": "sharp professional appearance, clean polished look, corporate headshot quality",
+    },
+    "luxury": {
+        "fair":   "luminous skin, ultra-high-end retouching, luxury campaign quality",
+        "medium": "golden radiant skin, premium retouching, luxury editorial",
+        "olive":  "warm bronzed skin, opulent lighting, ultra-luxury finish",
+        "dark":   "deep velvet skin tone, dramatic luxury lighting, ultra-premium finish",
+        "default":"exceptional skin quality, premium retouching",
+    },
+    "dating": {
+        "default": "natural attractive appearance, warm inviting light, lifestyle photo quality",
+    },
+}
+
+
+def get_beauty_layer(mode_key: str, skin_tone: str = "") -> str:
+    """Return beauty-layer string for a mode + skin tone combination."""
+    mode_beauty = _BEAUTY_LAYERS.get(mode_key)
+    if not mode_beauty:
+        return ""
+    return mode_beauty.get(skin_tone, mode_beauty.get("default", ""))
+
+
 def apply_prompt_layer(
     base_prompt: str,
     mode_key: str,
     style_variant: Optional[str] = None,
+    skin_tone: str = "",
 ) -> str:
-    """Combine base prompt with mode prompt_layer and optional sub-style suffix."""
+    """Combine base prompt with mode prompt_layer, optional beauty_layer, and sub-style suffix."""
     cfg = get_mode_config(mode_key)
     layer = cfg.get("prompt_layer")
     if layer:
@@ -275,6 +316,10 @@ def apply_prompt_layer(
         result = f"{base_prompt}{sep}{layer}"
     else:
         result = base_prompt
+    # Inject beauty layer (skin-tone-aware enhancement)
+    beauty = get_beauty_layer(mode_key, skin_tone)
+    if beauty:
+        result = f"{result}, {beauty}" if result else beauty
     # Apply sub-style variant suffix if specified
     if style_variant:
         variants = cfg.get("style_variants", {})

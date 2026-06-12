@@ -78,6 +78,12 @@ export type PhotoshootModeKey =
 
 export type PhotoshootBadge = 'popular' | 'best_quality' | 'for_business' | 'viral' | null
 
+export interface StyleVariant {
+  label: string
+  label_en: string
+  label_ru: string
+}
+
 export interface PhotoshootMode {
   key: PhotoshootModeKey
   label: string
@@ -92,6 +98,16 @@ export interface PhotoshootMode {
   requires_custom_prompt: boolean
   badge: PhotoshootBadge
   short_desc: string
+  style_variants: Record<string, StyleVariant>
+}
+
+export interface IdentityPassport {
+  detected: boolean
+  gender: string
+  age_range: string
+  skin_tone: string
+  hair_color: string
+  identity_layer: string
 }
 
 export interface ShopItem {
