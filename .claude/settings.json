@@ -6,7 +6,11 @@
       "Bash(python3 -c \"import photoshoot_modes; print\\('OK'\\)\")",
       "Bash(python3 -c \"from PIL import Image, ImageStat, ImageFilter; print\\('PIL OK'\\)\")",
       "Bash(python3 -c \"import photoshoot_modes; print\\('photoshoot_modes OK'\\)\")",
-      "Bash(python3 -c \"from photoshoot_modes import PHOTOSHOOT_MODES; [print\\(k, len\\(v.get\\('style_variants',{}\\)\\), 'variants'\\) for k,v in PHOTOSHOOT_MODES.items\\(\\)]\")"
+      "Bash(python3 -c \"from photoshoot_modes import PHOTOSHOOT_MODES; [print\\(k, len\\(v.get\\('style_variants',{}\\)\\), 'variants'\\) for k,v in PHOTOSHOOT_MODES.items\\(\\)]\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('photoshoot_modes.py'\\).read\\(\\)\\); from photoshoot_modes import PHOTOSHOOT_MODES; print\\(f'OK: {len\\(PHOTOSHOOT_MODES\\)} modes'\\); cats = {}; [cats.setdefault\\(v.get\\(\\\\\"category\\\\\",\\\\\"none\\\\\"\\), []\\).append\\(k\\) for k,v in PHOTOSHOOT_MODES.items\\(\\)]; [print\\(f'  {c}: {len\\(ms\\)} modes'\\) for c, ms in sorted\\(cats.items\\(\\)\\)]\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('photoshoot_modes.py'\\).read\\(\\)\\); print\\('photoshoot_modes.py OK'\\)\")",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
