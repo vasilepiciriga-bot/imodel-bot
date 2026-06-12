@@ -18,7 +18,7 @@ import { useJobPoller } from '../hooks/useJob'
 import { createGeneration, createBatch, getGeneration, requestHD } from '../api/generations'
 import { fetchPhotoshootModes, getCachedModes, setCachedModes } from '../api/photoshootModes'
 import { getChallenge, claimDaily, getMeFresh, getIdentityPassport } from '../api/session'
-import { getLeaderboard, type LeaderboardData } from '../api/leaderboard'
+import { getLeaderboard, getMonthlyChallenge, type LeaderboardData, type MonthlyChallenge } from '../api/leaderboard'
 import { getQuests, claimQuest, type QuestItem } from '../api/quests'
 import { getCachedPresets } from '../api/presets'
 import { getCommunityPresets } from '../api/community'
@@ -62,6 +62,8 @@ export default function Studio() {
   const [identityPassport, setIdentityPassport] = useState<import('../types').IdentityPassport | null>(null)
   const [showStreakModal, setShowStreakModal] = useState(false)
   const [showLeaderboard, setShowLeaderboard] = useState(false)
+  const [monthlyChallenge, setMonthlyChallenge] = useState<MonthlyChallenge | null>(null)
+  const [challengeDismissed, setChallengeDismissed] = useState(false)
   const toast = useToast()
 
   const user = useAppStore((s) => s.user)
@@ -125,6 +127,11 @@ export default function Studio() {
         sessionStorage.setItem('imodel_lb_at', String(Date.now()))
       }).catch(() => null)
     }
+  }, [])
+
+  // Monthly challenge
+  useEffect(() => {
+    getMonthlyChallenge().then((c) => { if (c.active) setMonthlyChallenge(c) }).catch(() => null)
   }, [])
 
   // Build "Continue where you left off" strip from user's style history
@@ -702,6 +709,79 @@ export default function Studio() {
             <span className="text-[12px] font-medium text-[#FF9500]">Try →</span>
           </motion.button>
         )}
+
+        {/* Monthly Viral Challenge Card */}
+        <AnimatePresence>
+          {monthlyChallenge?.active && !challengeDismissed && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full rounded-card overflow-hidden border border-[#6C47FF]/20"
+              style={{ background: 'linear-gradient(135deg, #1A1A2E 0%, #2C1654 100%)' }}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{monthlyChallenge.mode_emoji}</span>
+                  <div>
+                    <p className="text-[13px] font-bold text-white">{monthlyChallenge.name}</p>
+                    <p className="text-[10px] text-white/60">{monthlyChallenge.days_left}d left · {monthlyChallenge.total_participants ?? 0} competing</p>
+                  </div>
+                </div>
+                <button onClick={() => setChallengeDismissed(true)} className="text-white/40 text-lg leading-none">✕</button>
+              </div>
+
+              {/* Prizes row */}
+              <div className="flex gap-2 px-4 pb-3">
+                {[
+                  { rank: '🥇', prize: monthlyChallenge.prize_top1 },
+                  { rank: '🥈', prize: monthlyChallenge.prize_top2 },
+                  { rank: '🥉', prize: monthlyChallenge.prize_top3 },
+                ].map(({ rank, prize }) => (
+                  <div key={rank} className="flex-1 text-center bg-white/10 rounded-[10px] py-1.5">
+                    <p className="text-[16px] leading-none">{rank}</p>
+                    <p className="text-[11px] font-bold text-[#FFD700]">+{prize}⚡</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Top 3 mini leaderboard */}
+              {monthlyChallenge.top3 && monthlyChallenge.top3.length > 0 && (
+                <div className="px-4 pb-3 space-y-1">
+                  {monthlyChallenge.top3.map((e) => (
+                    <div key={e.rank} className="flex items-center justify-between">
+                      <span className="text-[11px] text-white/70">{e.rank}. {e.display_name}{e.is_me ? ' (you)' : ''}</span>
+                      <span className="text-[11px] font-semibold text-white">{e.gens} gens</span>
+                    </div>
+                  ))}
+                  {monthlyChallenge.my_rank && monthlyChallenge.my_rank > 3 && (
+                    <div className="flex items-center justify-between pt-0.5 border-t border-white/10">
+                      <span className="text-[11px] text-[#6C47FF] font-semibold">#{monthlyChallenge.my_rank} You</span>
+                      <span className="text-[11px] font-semibold text-white">{monthlyChallenge.my_gens ?? 0} gens</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CTA */}
+              <button
+                onClick={() => {
+                  tg?.HapticFeedback?.impactOccurred('medium')
+                  if (monthlyChallenge.mode_key) {
+                    useAppStore.getState().setPhotoshootMode(monthlyChallenge.mode_key)
+                    track('monthly_challenge_cta_tapped', { mode: monthlyChallenge.mode_key })
+                  }
+                  setChallengeDismissed(true)
+                }}
+                className="w-full py-3 text-white text-[13px] font-bold"
+                style={{ background: 'linear-gradient(90deg, #6C47FF, #FF2D78)' }}
+              >
+                Generate with {monthlyChallenge.mode_emoji} {monthlyChallenge.mode_label} →
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Active preset chip */}
         {activePreset && (

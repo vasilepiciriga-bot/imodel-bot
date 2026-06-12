@@ -5,25 +5,80 @@ import type { PhotoshootMode, PhotoshootModeKey } from '../../types'
 import { track } from '../../api/analytics'
 import { getVariantSync } from '../../api/experiments'
 
-const PREMIUM_MODES = new Set(['vogue', 'ceo', 'luxury'])
-
 const tg = window.Telegram?.WebApp
 
 const BADGE_LABELS: Record<string, string> = {
   popular: '🔥 Popular',
-  best_quality: '👑 Best Quality',
+  best_quality: '👑 Best',
   for_business: '💼 Business',
-  viral: '✨ Viral',
+  viral: '🔥 Viral',
+  new: '✨ New',
+  trending: '📈 Trending',
 }
 
-const MODE_COLORS: Record<PhotoshootModeKey, { from: string; to: string }> = {
-  everyday: { from: '#6C47FF', to: '#8B67FF' },
-  premium:  { from: '#6C47FF', to: '#FF2D78' },
-  vogue:    { from: '#1A1A2E', to: '#8B0000' },
-  ceo:      { from: '#1A3A5C', to: '#2E6CB5' },
-  dating:   { from: '#FF6B6B', to: '#FFD93D' },
-  luxury:   { from: '#B8860B', to: '#FFD700' },
-  custom:   { from: '#0F2027', to: '#203A43' },
+const CATEGORY_TABS = [
+  { key: 'all', label: 'All', emoji: '⭐' },
+  { key: 'viral', label: 'Viral', emoji: '🔥' },
+  { key: 'events', label: 'Events', emoji: '🎉' },
+  { key: 'pop_culture', label: 'Pop', emoji: '🎭' },
+  { key: 'fashion', label: 'Fashion', emoji: '👑' },
+  { key: 'lifestyle', label: 'Lifestyle', emoji: '✨' },
+  { key: 'career', label: 'Career', emoji: '💼' },
+  { key: 'social', label: 'Social', emoji: '💫' },
+  { key: 'fantasy', label: 'Fantasy', emoji: '🧙' },
+  { key: 'basics', label: 'Basics', emoji: '📸' },
+  { key: 'creative', label: 'Custom', emoji: '🎨' },
+]
+
+function formatExpiresAt(ts: number): string {
+  const d = new Date(ts * 1000)
+  const now = Date.now()
+  const diffDays = Math.ceil((d.getTime() - now) / 86400000)
+  if (diffDays <= 0) return ''
+  if (diffDays <= 3) return `⏰ ${diffDays}d left`
+  return `⏰ Ends ${d.toLocaleDateString('en', { month: 'short', day: 'numeric' })}`
+}
+
+const MODE_COLOR_MAP: Record<string, { from: string; to: string }> = {
+  everyday:         { from: '#6C47FF', to: '#8B67FF' },
+  premium:          { from: '#6C47FF', to: '#FF2D78' },
+  vogue:            { from: '#1A1A2E', to: '#8B0000' },
+  ceo:              { from: '#1A3A5C', to: '#2E6CB5' },
+  dating:           { from: '#FF6B6B', to: '#FFD93D' },
+  luxury:           { from: '#B8860B', to: '#FFD700' },
+  custom:           { from: '#0F2027', to: '#203A43' },
+  action_figure:    { from: '#FF6B35', to: '#F7C59F' },
+  met_gala:         { from: '#2C003E', to: '#C0392B' },
+  halloween:        { from: '#2C1654', to: '#FF6600' },
+  christmas_card:   { from: '#1A5C2E', to: '#C0392B' },
+  valentines:       { from: '#C0392B', to: '#FF69B4' },
+  coachella:        { from: '#8B4513', to: '#F4D03F' },
+  wedding:          { from: '#7D6E83', to: '#C9A96E' },
+  doctor:           { from: '#1A6B8A', to: '#48CAE4' },
+  lawyer:           { from: '#2C3E50', to: '#566573' },
+  real_estate:      { from: '#1A5276', to: '#27AE60' },
+  podcast_host:     { from: '#6C3483', to: '#A569BD' },
+  fitness_model:    { from: '#E74C3C', to: '#F39C12' },
+  disney_princess:  { from: '#1A6B8A', to: '#DDA0DD' },
+  anime_hero:       { from: '#1A1A2E', to: '#E91E8C' },
+  superhero:        { from: '#1B2A4A', to: '#C0392B' },
+  movie_poster:     { from: '#0D0D0D', to: '#C0392B' },
+  rockstar:         { from: '#1A1A1A', to: '#8B0000' },
+  cyberpunk:        { from: '#0D001A', to: '#00FFFF' },
+  medieval_knight:  { from: '#2C3E50', to: '#85929E' },
+  fairy_tale:       { from: '#1A0033', to: '#9B59B6' },
+  space_explorer:   { from: '#0D001A', to: '#3498DB' },
+  pirate:           { from: '#2C1654', to: '#8B4513' },
+  dubai_influencer: { from: '#1A1A00', to: '#FFD700' },
+  bali_creator:     { from: '#1B4332', to: '#52B788' },
+  cottagecore:      { from: '#3D5A3E', to: '#FFDDD2' },
+  y2k:              { from: '#6B0AC9', to: '#FF69B4' },
+  old_money_portrait: { from: '#2C3E50', to: '#C9A96E' },
+}
+const DEFAULT_COLOR = { from: '#6C47FF', to: '#8B67FF' }
+
+function getModeColor(key: string) {
+  return MODE_COLOR_MAP[key] ?? DEFAULT_COLOR
 }
 
 interface Props {
@@ -38,16 +93,23 @@ interface Props {
 
 export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, currentMode, userCredits, modes }: Props) {
   const [selected, setSelected] = useState<PhotoshootModeKey>(currentMode)
+  const [activeCategory, setActiveCategory] = useState<string>('all')
   const [customDesc, setCustomDesc] = useState('')
   const [selectedVariant, setSelectedVariant] = useState<string>('')
   const [upgradeMode, setUpgradeMode] = useState<PhotoshootMode | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const tabsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setSelected(currentMode)
     setUpgradeMode(null)
     setSelectedVariant('')
   }, [currentMode, open])
+
+  // Reset category when opened
+  useEffect(() => {
+    if (open) setActiveCategory('all')
+  }, [open])
 
   // Android back button support
   useEffect(() => {
@@ -60,18 +122,25 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
 
   const selectedMode = modes.find((m) => m.key === selected)
 
+  const filteredModes = activeCategory === 'all'
+    ? modes
+    : modes.filter((m) => m.category === activeCategory)
+
+  // Only show category tabs that have at least 1 mode
+  const availableCategories = CATEGORY_TABS.filter(
+    (tab) => tab.key === 'all' || modes.some((m) => m.category === tab.key)
+  )
+
   function handleModeSelect(mode: PhotoshootMode) {
     tg?.HapticFeedback?.selectionChanged()
     setSelected(mode.key)
     setSelectedVariant('')
     if (mode.key !== 'custom') setCustomDesc('')
-    // Show inline upgrade sheet when premium mode + low credits
     const effectiveCost = mode.credits_for_user ?? mode.credits
-    if (PREMIUM_MODES.has(mode.key) && userCredits < effectiveCost + 4) {
+    if (mode.is_premium && userCredits < effectiveCost + 4) {
       const variant = getVariantSync('upgrade_sheet')
       track('premium_mode_upgrade_shown', { mode: mode.key, credits: userCredits, variant })
       if (variant === 'paywall') {
-        // Control arm: skip inline sheet, go direct to paywall
         onClose()
         onUpgrade?.()
       } else {
@@ -138,7 +207,10 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
 
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-black/[0.06]">
-              <h2 className="text-[17px] font-bold text-[#1D1D1F]">Choose Photoshoot</h2>
+              <div>
+                <h2 className="text-[17px] font-bold text-[#1D1D1F]">Choose Style</h2>
+                <p className="text-[11px] text-[#6E6E73]">{modes.length} styles available</p>
+              </div>
               <button
                 onClick={onClose}
                 className="w-8 h-8 rounded-full bg-[#F5F5F7] flex items-center justify-center"
@@ -147,11 +219,40 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
               </button>
             </div>
 
+            {/* Category tabs */}
+            <div
+              ref={tabsRef}
+              className="flex gap-2 px-4 py-2.5 overflow-x-auto border-b border-black/[0.06]"
+              style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}
+            >
+              {availableCategories.map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => {
+                    tg?.HapticFeedback?.selectionChanged()
+                    setActiveCategory(tab.key)
+                  }}
+                  className={`flex-shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-full text-[12px] font-semibold transition-all ${
+                    activeCategory === tab.key
+                      ? 'bg-[#6C47FF] text-white'
+                      : 'bg-[#F5F5F7] text-[#6E6E73]'
+                  }`}
+                >
+                  <span>{tab.emoji}</span>
+                  <span>{tab.label}</span>
+                </button>
+              ))}
+            </div>
+
             {/* Mode list */}
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
-              {modes.map((mode) => {
+              {filteredModes.length === 0 && (
+                <div className="text-center py-8 text-[13px] text-[#6E6E73]">No styles in this category</div>
+              )}
+
+              {filteredModes.map((mode) => {
                 const isSelected = selected === mode.key
-                const colors = MODE_COLORS[mode.key] ?? MODE_COLORS.everyday
+                const colors = getModeColor(mode.key)
                 const effectiveCredits = mode.credits_for_user ?? mode.credits
                 const canAfford = userCredits >= effectiveCredits
                 return (
@@ -176,14 +277,19 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[15px] font-semibold text-[#1D1D1F]">{mode.label}</span>
-                        {PREMIUM_MODES.has(mode.key) && (
+                        {mode.is_premium && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gradient-to-r from-[#FF9500] to-[#FF2D78] text-white">
                             <Crown size={8} strokeWidth={3} />PRO
                           </span>
                         )}
-                        {mode.badge && !PREMIUM_MODES.has(mode.key) && (
+                        {mode.badge && !mode.is_premium && (
                           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78] text-white">
                             {BADGE_LABELS[mode.badge] ?? mode.badge}
+                          </span>
+                        )}
+                        {mode.expires_at && formatExpiresAt(mode.expires_at) && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#FF9500]/15 text-[#FF9500]">
+                            {formatExpiresAt(mode.expires_at)}
                           </span>
                         )}
                       </div>
@@ -332,7 +438,7 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                     onClick={() => setUpgradeMode(null)}
                     className="w-full text-center text-[12px] text-[#6E6E73] py-1"
                   >
-                    ← Back to modes
+                    ← Back to styles
                   </button>
                 </motion.div>
               ) : (
@@ -354,7 +460,7 @@ export function PhotoshootModePicker({ open, onClose, onSelect, onUpgrade, curre
                   >
                     {selectedMode
                       ? `Set ${selectedMode.label} · ${selectedMode.credits_for_user ?? selectedMode.credits}⚡`
-                      : 'Set Mode'}
+                      : 'Set Style'}
                   </motion.button>
                 </motion.div>
               )}

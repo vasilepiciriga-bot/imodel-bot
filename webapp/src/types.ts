@@ -76,10 +76,9 @@ export interface Generation {
 
 export type GenerationMode = 'portrait' | 'copy_scene' | 'copy_image'
 
-export type PhotoshootModeKey =
-  | 'everyday' | 'premium' | 'vogue' | 'ceo' | 'dating' | 'luxury' | 'custom'
+export type PhotoshootModeKey = string
 
-export type PhotoshootBadge = 'popular' | 'best_quality' | 'for_business' | 'viral' | null
+export type PhotoshootBadge = 'popular' | 'best_quality' | 'for_business' | 'viral' | 'new' | 'trending' | null
 
 export interface StyleVariant {
   label: string
@@ -101,6 +100,8 @@ export interface PhotoshootMode {
   is_premium: boolean
   requires_custom_prompt: boolean
   badge: PhotoshootBadge
+  category: string
+  expires_at?: number | null
   short_desc: string
   style_variants: Record<string, StyleVariant>
 }

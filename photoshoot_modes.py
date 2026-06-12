@@ -1,6 +1,6 @@
 """
 Photoshoot Mode System — single source of truth for all mode configs.
-Phase 2: added style_variants (sub-style branching) and negative_layer per mode.
+Phase 2A: 35 modes across 8 categories (basics, fashion, career, social, lifestyle, events, pop_culture, fantasy, viral).
 Imported by app.py.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ except ImportError:
     _PILImage = _PILFilter = _PILStat = None
 
 PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
+    # ─── BASICS ──────────────────────────────────────────────────────────────
     "everyday": {
         "label": {"ru": "Обычный", "en": "Everyday", "de": "Standard", "ar": "عادي"},
         "emoji": "📸",
@@ -29,6 +30,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "is_premium": False,
         "requires_custom_prompt": False,
         "badge": None,
+        "category": "basics",
         "short_desc": {"ru": "Быстрое AI-фото", "en": "Fast AI photo"},
     },
     "premium": {
@@ -67,11 +69,35 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "popular",
+        "category": "basics",
         "short_desc": {
             "ru": "4 генерации, лучшие 2, апскейл",
             "en": "4 generations, best 2 selected, upscaled",
         },
     },
+    "custom": {
+        "label": {"ru": "Свой стиль", "en": "Custom", "de": "Eigener Stil", "ar": "مخصص"},
+        "emoji": "🎨",
+        "credits": 5,
+        "n_generations": 3,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": None,
+        "negative_layer": "blurry, low quality, distorted face, bad anatomy",
+        "style_variants": {},
+        "is_premium": True,
+        "requires_custom_prompt": True,
+        "badge": None,
+        "category": "creative",
+        "short_desc": {
+            "ru": "Опишите образ — AI создаёт prompt",
+            "en": "Describe your vision, AI builds the prompt",
+        },
+    },
+
+    # ─── FASHION ─────────────────────────────────────────────────────────────
     "vogue": {
         "label": {"ru": "Vogue", "en": "Vogue", "de": "Vogue", "ar": "فوغ"},
         "emoji": "👑",
@@ -118,11 +144,14 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "best_quality",
+        "category": "fashion",
         "short_desc": {
             "ru": "8 генераций, топ-3, 4x апскейл",
             "en": "8 generations, top 3, 4× upscale",
         },
     },
+
+    # ─── CAREER ──────────────────────────────────────────────────────────────
     "ceo": {
         "label": {"ru": "CEO", "en": "CEO", "de": "CEO", "ar": "CEO"},
         "emoji": "🤵",
@@ -169,11 +198,179 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "for_business",
+        "category": "career",
         "short_desc": {
             "ru": "Бизнес/LinkedIn/founder портреты",
             "en": "Business, LinkedIn, founder portraits",
         },
     },
+    "doctor": {
+        "label": {"ru": "Doctor", "en": "Doctor"},
+        "emoji": "🩺",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "medical professional portrait, white lab coat, stethoscope, "
+            "hospital or clinic background, confident trustworthy expression, professional headshot quality"
+        ),
+        "negative_layer": "casual clothes, non-medical setting, blurry, unprofessional",
+        "style_variants": {
+            "hospital": {
+                "label": {"en": "Hospital", "ru": "Больница"},
+                "prompt_suffix": "modern hospital corridor, clinical white environment, focused professional",
+            },
+            "clinic_warm": {
+                "label": {"en": "Private Clinic", "ru": "Клиника"},
+                "prompt_suffix": "warm private practice interior, reassuring smile, approachable bedside manner",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "career",
+        "short_desc": {
+            "ru": "Профессиональное фото врача",
+            "en": "Medical professional portrait",
+        },
+    },
+    "lawyer": {
+        "label": {"ru": "Lawyer", "en": "Lawyer"},
+        "emoji": "⚖️",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "attorney portrait, power suit, law office bookshelf background, "
+            "authoritative confident expression, professional headshot, legal setting"
+        ),
+        "negative_layer": "casual clothes, outdoor non-professional, blurry",
+        "style_variants": {
+            "law_office": {
+                "label": {"en": "Law Office", "ru": "Офис"},
+                "prompt_suffix": "mahogany desk, leather chair, legal books wall, prestigious firm interior",
+            },
+            "courtroom": {
+                "label": {"en": "Courtroom Ready", "ru": "Суд"},
+                "prompt_suffix": "sharp tailored suit, commanding presence, courthouse pillars, confident gaze",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "career",
+        "short_desc": {
+            "ru": "Портрет адвоката / юриста",
+            "en": "Attorney power portrait",
+        },
+    },
+    "real_estate": {
+        "label": {"ru": "Real Estate", "en": "Real Estate Agent"},
+        "emoji": "🏠",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "real estate agent professional portrait, welcoming confident smile, "
+            "luxury property or modern architecture backdrop, smart business casual, realtor headshot quality"
+        ),
+        "negative_layer": "casual home setting, unprofessional, blurry, cluttered background",
+        "style_variants": {
+            "luxury_property": {
+                "label": {"en": "Luxury Property", "ru": "Элитная недвижимость"},
+                "prompt_suffix": "luxury villa entrance, grand architecture, upscale residential backdrop",
+            },
+            "modern_office": {
+                "label": {"en": "Modern Agency", "ru": "Агентство"},
+                "prompt_suffix": "sleek real estate agency, contemporary interior, city view window",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "career",
+        "short_desc": {
+            "ru": "Фото агента по недвижимости",
+            "en": "Real estate agent headshot",
+        },
+    },
+    "podcast_host": {
+        "label": {"ru": "Podcast Host", "en": "Podcast Host"},
+        "emoji": "🎙️",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "podcast host portrait, professional microphone setup, sound-treated studio, "
+            "engaging charismatic expression, content creator vibe, YouTube or podcast cover quality"
+        ),
+        "negative_layer": "no microphone, bedroom mess, bad lighting, amateur",
+        "style_variants": {
+            "modern_studio": {
+                "label": {"en": "Pro Studio", "ru": "Студия"},
+                "prompt_suffix": "broadcast-quality podcast studio, RGB lighting accents, professional equipment",
+            },
+            "creator_desk": {
+                "label": {"en": "Creator Setup", "ru": "Creator-сетап"},
+                "prompt_suffix": "aesthetic creator workspace, ring light, bookshelf background, cozy vibe",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "career",
+        "short_desc": {
+            "ru": "Обложка подкаста / YouTube",
+            "en": "Podcast host & content creator",
+        },
+    },
+    "fitness_model": {
+        "label": {"ru": "Fitness", "en": "Fitness Model"},
+        "emoji": "💪",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "fitness model portrait, athletic physique, gym or outdoor training backdrop, "
+            "activewear, confident powerful pose, health and wellness magazine quality"
+        ),
+        "negative_layer": "business suit, formal office, untoned appearance, flat lighting",
+        "style_variants": {
+            "gym_studio": {
+                "label": {"en": "Gym Studio", "ru": "Зал"},
+                "prompt_suffix": "modern gym interior, dramatic pump lighting, equipment backdrop, intense focus",
+            },
+            "outdoor_athlete": {
+                "label": {"en": "Outdoor Athlete", "ru": "На природе"},
+                "prompt_suffix": "outdoor trail or beach, athletic lifestyle, golden hour energy, dynamic action pose",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "career",
+        "short_desc": {
+            "ru": "Фитнес-фото, атлетичный образ",
+            "en": "Fitness & athletic model portrait",
+        },
+    },
+
+    # ─── SOCIAL / DATING ─────────────────────────────────────────────────────
     "dating": {
         "label": {"ru": "Dating", "en": "Dating", "de": "Dating", "ar": "مواعدة"},
         "emoji": "💫",
@@ -216,11 +413,14 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "is_premium": False,
         "requires_custom_prompt": False,
         "badge": None,
+        "category": "social",
         "short_desc": {
             "ru": "Натуральные привлекательные фото",
             "en": "Natural attractive photos for dating/social",
         },
     },
+
+    # ─── LIFESTYLE ────────────────────────────────────────────────────────────
     "luxury": {
         "label": {"ru": "Luxury", "en": "Luxury", "de": "Luxus", "ar": "فاخر"},
         "emoji": "✨",
@@ -267,29 +467,771 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "is_premium": True,
         "requires_custom_prompt": False,
         "badge": "viral",
+        "category": "lifestyle",
         "short_desc": {
             "ru": "Instagram, travel, old money, luxury",
             "en": "Instagram, travel, old money, luxury lifestyle",
         },
     },
-    "custom": {
-        "label": {"ru": "Свой стиль", "en": "Custom", "de": "Eigener Stil", "ar": "مخصص"},
-        "emoji": "🎨",
-        "credits": 5,
+    "dubai_influencer": {
+        "label": {"ru": "Dubai Influencer", "en": "Dubai Influencer"},
+        "emoji": "🏙️",
+        "credits": 4,
+        "n_generations": 6,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Dubai luxury influencer portrait, ultra-modern skyscraper backdrop, "
+            "Burj Khalifa or Dubai Marina skyline, opulent fashion, social media influencer aesthetic, "
+            "golden hour desert glow"
+        ),
+        "negative_layer": "old architecture, casual clothes, cold tones, budget setting",
+        "style_variants": {
+            "rooftop_skyline": {
+                "label": {"en": "Rooftop Skyline", "ru": "На крыше"},
+                "prompt_suffix": "luxury hotel rooftop infinity pool, Dubai skyline at sunset, glamorous poolside",
+            },
+            "desert_dunes": {
+                "label": {"en": "Desert Dunes", "ru": "Пустыня"},
+                "prompt_suffix": "golden sand dunes, desert sunset photography, flowing luxury outfit, dramatic desert sky",
+            },
+        },
+        "is_premium": True,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "lifestyle",
+        "short_desc": {
+            "ru": "Dubai luxury influencer life",
+            "en": "Dubai luxury influencer lifestyle",
+        },
+    },
+    "bali_creator": {
+        "label": {"ru": "Bali Creator", "en": "Bali Creator"},
+        "emoji": "🌴",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Bali digital nomad lifestyle, tropical lush jungle or rice terraces backdrop, "
+            "Ubud creative community vibes, relaxed content creator aesthetic, "
+            "golden tropical light, bohemian chic travel fashion"
+        ),
+        "negative_layer": "urban concrete, cold weather, formal business, grey sky",
+        "style_variants": {
+            "rice_terraces": {
+                "label": {"en": "Rice Terraces", "ru": "Рисовые поля"},
+                "prompt_suffix": "iconic Bali rice terraces, morning mist, emerald green terraces, flowing white outfit",
+            },
+            "jungle_villa": {
+                "label": {"en": "Jungle Villa", "ru": "Джунгли"},
+                "prompt_suffix": "luxury jungle villa with infinity pool, lush tropical foliage, bamboo architecture",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "lifestyle",
+        "short_desc": {
+            "ru": "Тропический lifestyle в Бали",
+            "en": "Bali digital nomad tropical lifestyle",
+        },
+    },
+    "cottagecore": {
+        "label": {"ru": "Cottagecore", "en": "Cottagecore"},
+        "emoji": "🌸",
+        "credits": 2,
+        "n_generations": 3,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "cottagecore aesthetic, pastoral countryside, wildflower meadow or cottage garden, "
+            "linen and lace or floral dress, soft warm natural light, nostalgic rural idyll, "
+            "Pinterest cottagecore dreamy photography"
+        ),
+        "negative_layer": "urban concrete, modern tech, dark gritty, harsh studio",
+        "style_variants": {
+            "wildflower_meadow": {
+                "label": {"en": "Wildflower Meadow", "ru": "Луговые цветы"},
+                "prompt_suffix": "blooming wildflower field, daisy crown, flowing peasant dress, magical golden afternoon",
+            },
+            "cottage_interior": {
+                "label": {"en": "Cozy Cottage", "ru": "Уютный коттедж"},
+                "prompt_suffix": "rustic cottage kitchen, dried herbs hanging, warm candlelight, baking bread",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "lifestyle",
+        "short_desc": {
+            "ru": "Cottagecore — пастораль и природа",
+            "en": "Dreamy cottagecore pastoral aesthetic",
+        },
+    },
+    "y2k": {
+        "label": {"ru": "Y2K Aesthetic", "en": "Y2K Aesthetic"},
+        "emoji": "💿",
+        "credits": 2,
+        "n_generations": 3,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Y2K aesthetic, year 2000 fashion, early 2000s nostalgia, "
+            "butterfly clips, low-rise jeans, metallic fabrics, glossy magazine teen style, "
+            "bold saturated 2000s colors, disposable camera quality grain"
+        ),
+        "negative_layer": "modern fashion, dark moody, formal, high fashion editorial",
+        "style_variants": {
+            "pop_star": {
+                "label": {"en": "Y2K Pop Star", "ru": "Поп-звезда"},
+                "prompt_suffix": "Britney Spears era pop star, sparkly crop top, platform shoes, MTV music video energy",
+            },
+            "mall_aesthetic": {
+                "label": {"en": "Mall Aesthetic", "ru": "Молл"},
+                "prompt_suffix": "2000s mall photo booth, plaid mini skirt, chunky sneakers, teen magazine editorial",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "trending",
+        "category": "lifestyle",
+        "short_desc": {
+            "ru": "Эстетика 2000-х, Y2K тренд",
+            "en": "Y2K early 2000s nostalgia aesthetic",
+        },
+    },
+    "old_money_portrait": {
+        "label": {"ru": "Old Money", "en": "Old Money"},
+        "emoji": "🏛️",
+        "credits": 4,
+        "n_generations": 6,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "old money aesthetic portrait, inherited wealth and understated elegance, "
+            "classic tailored clothing, equestrian countryside or manor house, "
+            "soft English light, quiet luxury, Slim Aarons photography style"
+        ),
+        "negative_layer": "flashy nouveau riche, logo-heavy fashion, urban streetwear, loud colors",
+        "style_variants": {
+            "country_estate": {
+                "label": {"en": "Country Estate", "ru": "Поместье"},
+                "prompt_suffix": "English countryside manor, manicured lawns, tweed blazer, heritage elegance",
+            },
+            "library_study": {
+                "label": {"en": "Ancestral Library", "ru": "Библиотека"},
+                "prompt_suffix": "oak-panelled ancestral library, leather armchair, rare books, scholarly aristocrat",
+            },
+        },
+        "is_premium": True,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "lifestyle",
+        "short_desc": {
+            "ru": "Old money — тихая роскошь",
+            "en": "Old money quiet luxury aesthetic",
+        },
+    },
+
+    # ─── EVENTS ──────────────────────────────────────────────────────────────
+    "met_gala": {
+        "label": {"ru": "Met Gala", "en": "Met Gala"},
+        "emoji": "🌟",
+        "credits": 4,
+        "seasonal_end": "05-07",
+        "n_generations": 6,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Met Gala celebrity entrance, haute couture avant-garde gown, extravagant headpiece, "
+            "Metropolitan Museum of Art red carpet, paparazzi flashes, dramatic fashion editorial lighting"
+        ),
+        "negative_layer": "casual clothing, plain background, amateur snapshot, mundane setting",
+        "style_variants": {
+            "theatrical_couture": {
+                "label": {"en": "Theatrical", "ru": "Театральный"},
+                "prompt_suffix": "surreal avant-garde costume, architectural fashion sculpture, art installation wearable",
+            },
+            "golden_glam": {
+                "label": {"en": "Golden Glam", "ru": "Золотой гламур"},
+                "prompt_suffix": "liquid gold metallic gown, opulent jewels, old Hollywood glamour meets modern luxury",
+            },
+        },
+        "is_premium": True,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "events",
+        "short_desc": {
+            "ru": "Красная дорожка Met Gala",
+            "en": "Met Gala red carpet haute couture",
+        },
+    },
+    "halloween": {
+        "label": {"ru": "Halloween", "en": "Halloween"},
+        "emoji": "🎃",
+        "credits": 3,
+        "seasonal_end": "10-31",
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Halloween portrait, dramatic spooky atmosphere, moody cinematic lighting, "
+            "dark Halloween backdrop with pumpkins or fog, professional costume photography"
+        ),
+        "negative_layer": "bright cheerful daylight, casual plain background, mundane",
+        "style_variants": {
+            "vampire": {
+                "label": {"en": "Vampire", "ru": "Вампир"},
+                "prompt_suffix": "vampire aristocrat, Gothic castle hallway, crimson cape, pale dramatic lighting",
+            },
+            "witch": {
+                "label": {"en": "Dark Witch", "ru": "Ведьма"},
+                "prompt_suffix": "mysterious witch, enchanted dark forest, full moon glow, spell-casting pose",
+            },
+            "dark_fantasy": {
+                "label": {"en": "Dark Fantasy", "ru": "Тёмное фэнтези"},
+                "prompt_suffix": "dark fantasy creature, fallen angel or demon, otherworldly shadow play",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "events",
+        "short_desc": {
+            "ru": "Жуткий образ на Хэллоуин",
+            "en": "Spooky Halloween costume portrait",
+        },
+    },
+    "christmas_card": {
+        "label": {"ru": "Christmas Card", "en": "Christmas Card"},
+        "emoji": "🎄",
+        "credits": 2,
+        "seasonal_end": "12-31",
+        "n_generations": 3,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "festive Christmas portrait, cozy holiday atmosphere, warm golden light, "
+            "Christmas tree with lights, snow or winter setting, festive outfit, joyful holiday card quality"
+        ),
+        "negative_layer": "summer, outdoor daytime, casual non-festive outfit",
+        "style_variants": {
+            "cozy_fireplace": {
+                "label": {"en": "Cozy Fireplace", "ru": "У камина"},
+                "prompt_suffix": "crackling fireplace glow, knit sweater, mug of cocoa, warm amber light",
+            },
+            "snowy_wonderland": {
+                "label": {"en": "Winter Wonderland", "ru": "Снежная сказка"},
+                "prompt_suffix": "snowy forest backdrop, snowflakes falling, winter coat, magical snow scene",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "events",
+        "short_desc": {
+            "ru": "Рождественская открытка",
+            "en": "Festive Christmas portrait card",
+        },
+    },
+    "valentines": {
+        "label": {"ru": "Valentine's Day", "en": "Valentine's Day"},
+        "emoji": "💕",
+        "credits": 2,
+        "seasonal_end": "02-14",
+        "n_generations": 3,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Valentine's Day romantic portrait, soft rose and pink tones, "
+            "dreamy romantic atmosphere, roses or flower petals, warm soft lighting, elegant and alluring"
+        ),
+        "negative_layer": "cold tones, harsh lighting, casual unromantic setting",
+        "style_variants": {
+            "romantic_roses": {
+                "label": {"en": "Romantic Roses", "ru": "Розы"},
+                "prompt_suffix": "surrounded by red roses, passionate romance, deep red velvet background",
+            },
+            "dreamy_pink": {
+                "label": {"en": "Dreamy Pink", "ru": "Розовый сон"},
+                "prompt_suffix": "soft pastel pink aesthetic, dreamy bokeh, angelic feminine glow",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "events",
+        "short_desc": {
+            "ru": "Романтичный образ на День влюблённых",
+            "en": "Romantic Valentine's Day portrait",
+        },
+    },
+    "coachella": {
+        "label": {"ru": "Coachella", "en": "Coachella"},
+        "emoji": "🌵",
+        "credits": 3,
+        "seasonal_end": "04-30",
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Coachella music festival, boho chic festival fashion, desert golden hour, "
+            "flower crown, fringe and embroidery, carefree festival vibe, influencer editorial"
+        ),
+        "negative_layer": "formal office, grey background, urban concrete, winter clothes",
+        "style_variants": {
+            "boho_queen": {
+                "label": {"en": "Boho Queen", "ru": "Бохо"},
+                "prompt_suffix": "bohemian maxi dress, flower crown, dreamcatcher accessories, golden desert light",
+            },
+            "y2k_festival": {
+                "label": {"en": "Y2K Festival", "ru": "Y2K Festival"},
+                "prompt_suffix": "Y2K inspired festival look, butterfly clips, sparkly top, early 2000s energy",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "events",
+        "short_desc": {
+            "ru": "Фестивальный образ Coachella",
+            "en": "Coachella festival boho editorial",
+        },
+    },
+    "wedding": {
+        "label": {"ru": "Wedding", "en": "Wedding"},
+        "emoji": "👰",
+        "credits": 4,
+        "n_generations": 6,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "bridal portrait photography, elegant wedding gown or suit, soft romantic lighting, "
+            "wedding venue backdrop, timeless elegant photography, pure joy and love, magazine wedding editorial"
+        ),
+        "negative_layer": "casual outfit, unformal setting, harsh lighting, sad expression",
+        "style_variants": {
+            "classic_bridal": {
+                "label": {"en": "Classic Bride", "ru": "Невеста"},
+                "prompt_suffix": "white lace wedding dress, floral bouquet, soft veil, cathedral or garden chapel",
+            },
+            "garden_romance": {
+                "label": {"en": "Garden Romance", "ru": "Сад"},
+                "prompt_suffix": "outdoor garden ceremony, flower arch backdrop, warm golden hour, romantic soft focus",
+            },
+        },
+        "is_premium": True,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "events",
+        "short_desc": {
+            "ru": "Свадебный портрет",
+            "en": "Elegant wedding portrait",
+        },
+    },
+
+    # ─── POP CULTURE ─────────────────────────────────────────────────────────
+    "disney_princess": {
+        "label": {"ru": "Disney Princess", "en": "Disney Princess"},
+        "emoji": "👸",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "Disney princess style portrait, fairy tale enchanted aesthetic, "
+            "sparkly ball gown or royal attire, magical dreamy atmosphere, castle or enchanted forest backdrop, "
+            "Disney live-action film quality"
+        ),
+        "negative_layer": "dark gritty, horror, casual modern clothes, ugly, poorly lit",
+        "style_variants": {
+            "enchanted_forest": {
+                "label": {"en": "Enchanted Forest", "ru": "Волшебный лес"},
+                "prompt_suffix": "magical forest with glowing fireflies, floral crown, ethereal light rays through trees",
+            },
+            "royal_ball": {
+                "label": {"en": "Royal Ball", "ru": "Королевский бал"},
+                "prompt_suffix": "grand ballroom, crystal chandeliers, jeweled gown, regal princess posture",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "pop_culture",
+        "short_desc": {
+            "ru": "Принцесса в стиле Disney",
+            "en": "Disney princess fairy tale portrait",
+        },
+    },
+    "anime_hero": {
+        "label": {"ru": "Anime Hero", "en": "Anime Hero"},
+        "emoji": "⚡",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "anime-style portrait illustration, manga aesthetic, vibrant cel-shaded colors, "
+            "expressive large anime eyes, detailed anime character design, Japanese anime quality"
+        ),
+        "negative_layer": "realistic photo, western cartoon, ugly proportions, blurry",
+        "style_variants": {
+            "shonen_fighter": {
+                "label": {"en": "Shonen Fighter", "ru": "Боец"},
+                "prompt_suffix": "fierce warrior energy, battle aura glowing, power-up effects, determined hero expression",
+            },
+            "magical_girl": {
+                "label": {"en": "Magical Girl", "ru": "Магическая девочка"},
+                "prompt_suffix": "magical girl transformation outfit, sparkle effects, pastel magical costume, wand",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "pop_culture",
+        "short_desc": {
+            "ru": "Аниме-персонаж из манги",
+            "en": "Anime/manga style character",
+        },
+    },
+    "superhero": {
+        "label": {"ru": "Superhero", "en": "Superhero"},
+        "emoji": "🦸",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "superhero portrait, Marvel or DC comics style costume, heroic powerful pose, "
+            "dramatic comic book lighting, city skyline or rooftop backdrop, cinematic superhero film quality"
+        ),
+        "negative_layer": "villain defeated pose, civilian clothes, dark ugly, amateur snapshot",
+        "style_variants": {
+            "cape_hero": {
+                "label": {"en": "Cape Hero", "ru": "Супергерой"},
+                "prompt_suffix": "cape billowing in wind, city rooftop, spotlight from below, heroic silhouette",
+            },
+            "armored_suit": {
+                "label": {"en": "Armored Suit", "ru": "Бронекостюм"},
+                "prompt_suffix": "Iron Man style power armor, hi-tech suit details, energy reactor chest glow",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "pop_culture",
+        "short_desc": {
+            "ru": "Ты как супергерой Marvel/DC",
+            "en": "Marvel/DC superhero portrait",
+        },
+    },
+    "movie_poster": {
+        "label": {"ru": "Movie Poster", "en": "Movie Poster"},
+        "emoji": "🎬",
+        "credits": 4,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "cinematic movie poster portrait, Hollywood production quality, "
+            "dramatic cinematic lighting, blockbuster film aesthetic, "
+            "intense compelling expression, film star quality"
+        ),
+        "negative_layer": "amateur snapshot, flat lighting, boring background, low contrast",
+        "style_variants": {
+            "action_blockbuster": {
+                "label": {"en": "Action Blockbuster", "ru": "Боевик"},
+                "prompt_suffix": "explosion background, action hero stance, dramatic smoke and fire, summer blockbuster",
+            },
+            "noir_thriller": {
+                "label": {"en": "Noir Thriller", "ru": "Нуар"},
+                "prompt_suffix": "moody film noir, venetian blinds light pattern, detective mystery thriller atmosphere",
+            },
+        },
+        "is_premium": True,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "pop_culture",
+        "short_desc": {
+            "ru": "Как будто ты звезда Голливуда",
+            "en": "Hollywood movie poster star",
+        },
+    },
+    "rockstar": {
+        "label": {"ru": "Rockstar", "en": "Rockstar"},
+        "emoji": "🎸",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "rock musician portrait, concert stage with dramatic spotlights, "
+            "leather jacket or rock aesthetic outfit, guitar or microphone, "
+            "album cover quality, intense rockstar attitude"
+        ),
+        "negative_layer": "corporate look, plain background, cheerful casual, amateur",
+        "style_variants": {
+            "stage_performance": {
+                "label": {"en": "Live Stage", "ru": "На сцене"},
+                "prompt_suffix": "massive concert arena stage, crowd of thousands, pyrotechnics, rock legend moment",
+            },
+            "album_cover": {
+                "label": {"en": "Album Cover", "ru": "Обложка альбома"},
+                "prompt_suffix": "iconic album cover composition, moody studio portrait, artistic rock photography",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "pop_culture",
+        "short_desc": {
+            "ru": "Образ рок-звезды",
+            "en": "Rock musician album cover style",
+        },
+    },
+
+    # ─── FANTASY ─────────────────────────────────────────────────────────────
+    "cyberpunk": {
+        "label": {"ru": "Cyberpunk", "en": "Cyberpunk"},
+        "emoji": "🤖",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "cyberpunk portrait, neon-lit dystopian megacity, rain-soaked streets, "
+            "neon signs in multiple languages, cybernetic implants or augmentations, "
+            "high-tech fashion, Blade Runner 2049 cinematic style"
+        ),
+        "negative_layer": "natural landscape, bright daylight, cheerful, medieval, pastoral",
+        "style_variants": {
+            "neon_street": {
+                "label": {"en": "Neon Streets", "ru": "Неоновые улицы"},
+                "prompt_suffix": "neon-lit night market, rain reflections on pavement, electric blue and pink glow",
+            },
+            "chrome_tech": {
+                "label": {"en": "Chrome Tech", "ru": "Chrome Tech"},
+                "prompt_suffix": "chrome and steel cybernetic armor, holographic HUD display, neural implant aesthetics",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "fantasy",
+        "short_desc": {
+            "ru": "Киберпанк в стиле Blade Runner",
+            "en": "Blade Runner cyberpunk neon portrait",
+        },
+    },
+    "medieval_knight": {
+        "label": {"ru": "Medieval Knight", "en": "Medieval Knight"},
+        "emoji": "⚔️",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "medieval knight portrait, detailed plate armor, fantasy realm, "
+            "castle or battlefield backdrop, dramatic epic lighting, "
+            "high fantasy RPG style, cinematic Game of Thrones quality"
+        ),
+        "negative_layer": "modern clothing, sci-fi, urban setting, blurry, amateur",
+        "style_variants": {
+            "castle_throne": {
+                "label": {"en": "Royal Knight", "ru": "Рыцарь"},
+                "prompt_suffix": "castle throne room, royal crest on armor, king's champion, ceremonial sword",
+            },
+            "dark_warrior": {
+                "label": {"en": "Dark Warrior", "ru": "Тёмный воин"},
+                "prompt_suffix": "dark ominous black iron armor, red glowing runes, intimidating dark warrior energy",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "fantasy",
+        "short_desc": {
+            "ru": "Средневековый рыцарь в латах",
+            "en": "Epic medieval knight portrait",
+        },
+    },
+    "fairy_tale": {
+        "label": {"ru": "Fairy Tale", "en": "Fairy Tale"},
+        "emoji": "🧚",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "fairy tale fantasy portrait, magical enchanted forest, "
+            "ethereal glowing light, mystical whimsical atmosphere, "
+            "fairy wings or elven features, fantasy storybook illustration quality"
+        ),
+        "negative_layer": "dark horror, modern urban, sci-fi, harsh lighting, gritty",
+        "style_variants": {
+            "forest_fairy": {
+                "label": {"en": "Forest Fairy", "ru": "Лесная фея"},
+                "prompt_suffix": "luminous fairy wings, ancient forest with glowing mushrooms, fireflies, magical nature spirit",
+            },
+            "dark_fae": {
+                "label": {"en": "Dark Fae", "ru": "Тёмная фея"},
+                "prompt_suffix": "dark faerie court, thorned crown, moonlit haunted forest, mysterious shadow fae",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "fantasy",
+        "short_desc": {
+            "ru": "Фея или эльф из сказки",
+            "en": "Magical fairy tale fantasy portrait",
+        },
+    },
+    "space_explorer": {
+        "label": {"ru": "Space Explorer", "en": "Space Explorer"},
+        "emoji": "🚀",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": True,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "space explorer portrait, astronaut suit or sci-fi uniform, "
+            "outer space backdrop with nebula and stars, NASA mission quality or sci-fi film aesthetic, "
+            "epic cosmic scale, cinematic space photography"
+        ),
+        "negative_layer": "earth setting, civilian clothes, medieval, dark ugly",
+        "style_variants": {
+            "nasa_astronaut": {
+                "label": {"en": "NASA Astronaut", "ru": "Астронавт"},
+                "prompt_suffix": "NASA EVA spacesuit, International Space Station exterior, Earth from orbit background",
+            },
+            "sci_fi_captain": {
+                "label": {"en": "Sci-Fi Captain", "ru": "Капитан корабля"},
+                "prompt_suffix": "futuristic starship bridge, sci-fi command uniform, warp speed stars, fleet captain",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "new",
+        "category": "fantasy",
+        "short_desc": {
+            "ru": "Космический исследователь",
+            "en": "Epic space explorer portrait",
+        },
+    },
+    "pirate": {
+        "label": {"ru": "Pirate", "en": "Pirate"},
+        "emoji": "🏴‍☠️",
+        "credits": 3,
+        "n_generations": 4,
+        "select_best": 2,
+        "upscale": False,
+        "upscale_factor": 2,
+        "upscale_fidelity": 0.65,
+        "prompt_layer": (
+            "swashbuckling pirate portrait, period-accurate pirate costume, "
+            "tall ship or tropical port backdrop, dramatic ocean storm or treasure chest, "
+            "Pirates of the Caribbean cinematic quality"
+        ),
+        "negative_layer": "modern clothes, urban setting, sci-fi, office, plain background",
+        "style_variants": {
+            "captain": {
+                "label": {"en": "Pirate Captain", "ru": "Капитан"},
+                "prompt_suffix": "captain's tricorn hat, ornate captain's coat, ship helm, commanding the seas",
+            },
+            "treasure_hunter": {
+                "label": {"en": "Treasure Hunter", "ru": "Искатель сокровищ"},
+                "prompt_suffix": "tropical island beach, treasure map in hand, golden sunset, adventurous explorer",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": None,
+        "category": "fantasy",
+        "short_desc": {
+            "ru": "Пират — приключение на море",
+            "en": "Swashbuckling pirate adventure",
+        },
+    },
+
+    # ─── VIRAL TREND ──────────────────────────────────────────────────────────
+    "action_figure": {
+        "label": {"ru": "Action Figure", "en": "Action Figure"},
+        "emoji": "🎁",
+        "credits": 3,
         "n_generations": 3,
         "select_best": 2,
         "upscale": True,
         "upscale_factor": 2,
         "upscale_fidelity": 0.65,
-        "prompt_layer": None,
-        "negative_layer": "blurry, low quality, distorted face, bad anatomy",
-        "style_variants": {},
-        "is_premium": True,
-        "requires_custom_prompt": True,
-        "badge": None,
+        "prompt_layer": (
+            "3D toy action figure, collectible figurine, sealed blister pack retail packaging box, "
+            "branded cardboard backing with portrait photo, toy store display product, "
+            "studio product photography on white background, sharp focus"
+        ),
+        "negative_layer": "real human photo, outdoor scene, blurry, watercolor, sketch, painting",
+        "style_variants": {
+            "hero_box": {
+                "label": {"en": "Superhero Box", "ru": "Супергерой"},
+                "prompt_suffix": "Marvel comics-style action hero packaging, bold superhero typography, heroic action pose",
+            },
+            "fashion_doll": {
+                "label": {"en": "Fashion Doll", "ru": "Fashion Doll"},
+                "prompt_suffix": "Barbie-style fashion doll box, pink glamorous packaging, designer outfits listed on box",
+            },
+            "collector_edition": {
+                "label": {"en": "Collector's Edition", "ru": "Коллекционное"},
+                "prompt_suffix": "limited collector's edition, metallic foil accents, premium black-and-gold packaging",
+            },
+        },
+        "is_premium": False,
+        "requires_custom_prompt": False,
+        "badge": "viral",
+        "category": "viral",
         "short_desc": {
-            "ru": "Опишите образ — AI создаёт prompt",
-            "en": "Describe your vision, AI builds the prompt",
+            "ru": "#BarbieBoxChallenge — ты как игрушка!",
+            "en": "#BarbieBoxChallenge — you as a toy!",
         },
     },
 }

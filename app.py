@@ -1149,6 +1149,31 @@ _PROCESSED_PAYMENTS: set = set()
 # Challenge bonus
 CHALLENGE_BONUS_CREDITS = int(os.getenv("CHALLENGE_BONUS_CREDITS", "2"))
 
+# Monthly Viral Challenge — key: "YYYY-MM", value: challenge config
+MONTHLY_CHALLENGES: Dict[str, Dict] = {
+    "2026-06": {"mode_key": "action_figure", "prize_top1": 500, "prize_top2": 300, "prize_top3": 100, "name": "Action Figure Challenge"},
+    "2026-07": {"mode_key": "superhero",     "prize_top1": 500, "prize_top2": 300, "prize_top3": 100, "name": "Superhero Challenge"},
+    "2026-08": {"mode_key": "bali_creator",  "prize_top1": 500, "prize_top2": 300, "prize_top3": 100, "name": "Bali Creator Challenge"},
+    "2026-09": {"mode_key": "disney_princess","prize_top1": 500, "prize_top2": 300, "prize_top3": 100, "name": "Disney Princess Challenge"},
+    "2026-10": {"mode_key": "halloween",     "prize_top1": 500, "prize_top2": 300, "prize_top3": 100, "name": "Halloween Challenge"},
+    "2026-11": {"mode_key": "rockstar",      "prize_top1": 500, "prize_top2": 300, "prize_top3": 100, "name": "Rockstar Challenge"},
+    "2026-12": {"mode_key": "christmas_card","prize_top1": 500, "prize_top2": 300, "prize_top3": 100, "name": "Christmas Card Challenge"},
+}
+
+def _get_monthly_challenge() -> Optional[Dict]:
+    import datetime as _dt
+    month_key = _dt.datetime.utcnow().strftime("%Y-%m")
+    return MONTHLY_CHALLENGES.get(month_key)
+
+def _monthly_challenge_leaderboard(month_key: str, limit: int = 10) -> list:
+    scores = []
+    for uid, ui in STATS_USERS_INFO.items():
+        count = int(ui.get("monthly_challenge", {}).get(month_key, 0))
+        if count > 0:
+            scores.append({"uid": uid, "username": str(ui.get("username", "")), "gens": count})
+    scores.sort(key=lambda x: -x["gens"])
+    return scores[:limit]
+
 # Trending presets (comma-sep keys, updated via env var weekly)
 TRENDING_PRESETS_ENV = os.getenv("TRENDING_PRESETS", "cinematic,neon_night,golden_hour,beauty_dish,vintage70")
 NEW_PRESETS_ENV = set(k.strip() for k in os.getenv("NEW_PRESETS", "").split(",") if k.strip())
@@ -7461,6 +7486,13 @@ async def run_webapp_generation_job(job_id: str):
         _mh = USER_MODE_HISTORY.get(uid, [])
         _mh = [m for m in _mh if m != _mode_key]
         USER_MODE_HISTORY[uid] = ([_mode_key] + _mh)[:3]
+        # Monthly challenge tracking
+        _challenge = _get_monthly_challenge()
+        if _challenge and _mode_key == _challenge["mode_key"]:
+            import datetime as _dtc
+            _month_key = _dtc.datetime.utcnow().strftime("%Y-%m")
+            _mc = STATS_USERS_INFO.setdefault(uid, {}).setdefault("monthly_challenge", {})
+            _mc[_month_key] = _mc.get(_month_key, 0) + 1
         # Reset re-engagement sequence on activity
         if uid in USER_REENGAGEMENT:
             USER_REENGAGEMENT[uid]["seq"] = 0
@@ -9240,6 +9272,17 @@ def _mode_credits_for_user(uid: int, mode_key: str, base_credits: int) -> int:
     return base_credits
 
 
+def _seasonal_expires_at(seasonal_end: str) -> float:
+    """Convert 'MM-DD' seasonal end to Unix timestamp for the next occurrence."""
+    import datetime as _dt
+    now = _dt.datetime.utcnow()
+    month, day = int(seasonal_end[:2]), int(seasonal_end[3:])
+    candidate = _dt.datetime(now.year, month, day, 23, 59, 59)
+    if candidate < now:
+        candidate = _dt.datetime(now.year + 1, month, day, 23, 59, 59)
+    return candidate.timestamp()
+
+
 @app.get("/api/v1/photoshoot-modes")
 async def api_photoshoot_modes(request: Request):
     user = webapp_user_from_request(request)
@@ -9273,6 +9316,8 @@ async def api_photoshoot_modes(request: Request):
             "is_premium": cfg.get("is_premium", False),
             "requires_custom_prompt": cfg.get("requires_custom_prompt", False),
             "badge": cfg.get("badge"),
+            "category": cfg.get("category", "basics"),
+            "expires_at": _seasonal_expires_at(cfg["seasonal_end"]) if cfg.get("seasonal_end") else None,
             "short_desc": cfg.get("short_desc", {}).get(lang, cfg.get("short_desc", {}).get("en", "")),
             "style_variants": style_variants_out,
             "negative_layer": cfg.get("negative_layer") or "",
@@ -9940,6 +9985,57 @@ async def api_daily_challenge(request: Request):
         "date": day_key,
         "participants_today": max(participants_today, random.randint(40, 120)),  # floor for social proof
     }
+
+@app.get("/api/v1/challenge/monthly")
+async def api_monthly_challenge(request: Request):
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    import datetime as _dt
+    uid = int(user["uid"])
+    challenge = _get_monthly_challenge()
+    if not challenge:
+        return {"active": False}
+    now = _dt.datetime.utcnow()
+    month_key = now.strftime("%Y-%m")
+    # Days left in month
+    import calendar as _cal
+    last_day = _cal.monthrange(now.year, now.month)[1]
+    end_of_month = _dt.datetime(now.year, now.month, last_day, 23, 59, 59)
+    days_left = max(0, (end_of_month - now).days + 1)
+    # User's participation
+    my_gens = int(STATS_USERS_INFO.get(uid, {}).get("monthly_challenge", {}).get(month_key, 0))
+    # Leaderboard top 10 to find user rank
+    lb_full = _monthly_challenge_leaderboard(month_key, limit=200)
+    my_rank = next((i + 1 for i, e in enumerate(lb_full) if e["uid"] == uid), None)
+    top3 = [
+        {
+            "rank": i + 1,
+            "display_name": _leaderboard_display_name(e["uid"], e["username"]),
+            "gens": e["gens"],
+            "is_me": e["uid"] == uid,
+        }
+        for i, e in enumerate(lb_full[:3])
+    ]
+    mode_cfg = PHOTOSHOOT_MODES.get(challenge["mode_key"], {})
+    lang = USER_LANG.get(uid, LANG_DEFAULT)
+    return {
+        "active": True,
+        "mode_key": challenge["mode_key"],
+        "mode_emoji": mode_cfg.get("emoji", "✨"),
+        "mode_label": mode_cfg.get("label", {}).get(lang, mode_cfg.get("label", {}).get("en", challenge["mode_key"])),
+        "name": challenge["name"],
+        "prize_top1": challenge["prize_top1"],
+        "prize_top2": challenge["prize_top2"],
+        "prize_top3": challenge["prize_top3"],
+        "month": month_key,
+        "days_left": days_left,
+        "total_participants": len(lb_full),
+        "my_gens": my_gens,
+        "my_rank": my_rank,
+        "top3": top3,
+    }
+
 
 @app.get("/api/v1/profile/stats")
 async def api_profile_stats(request: Request):
