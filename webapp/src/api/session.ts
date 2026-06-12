@@ -32,3 +32,18 @@ export const getReferral = () => api.get<ReferralData>('/api/v1/referral')
 
 export const getIdentityPassport = () =>
   api.getUncached<IdentityPassport>('/api/v1/me/identity')
+
+export interface CreditTransaction {
+  delta: number
+  label: string
+  icon: string
+  ts: number
+}
+
+export interface CreditHistory {
+  transactions: CreditTransaction[]
+  credits: number
+}
+
+export const getCreditHistory = () =>
+  api.getUncached<CreditHistory>('/api/v1/credits/history')

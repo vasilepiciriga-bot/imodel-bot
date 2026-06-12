@@ -9715,7 +9715,87 @@ async def api_claim_daily(request: Request):
         next_at = int(last + DAILY_WINDOW * _bi)
         return JSONResponse({"error": "already_claimed", "next_at": next_at}, status_code=400)
     gens_added, streak, milestone_bonus = result
+    analytics_event(uid, "daily_bonus_claimed", {"gens_added": gens_added, "streak": streak, "milestone_bonus": milestone_bonus, "phase": phase})
     return {"gens_added": gens_added, "streak": streak, "credits": USER_CREDITS.get(uid, 0), "milestone_bonus": milestone_bonus, "phase": phase}
+
+@app.get("/api/v1/credits/history")
+async def api_credits_history(request: Request):
+    """Last 30 credit-relevant events for the authenticated user."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+
+    _CREDIT_EVENTS = (
+        "purchase_completed", "quest_claimed", "quest_reward_claimed",
+        "share_reward_claimed", "bonus_credits_awarded", "gift_claimed",
+        "gift_sender_bonus", "daily_bonus_claimed", "generation_started",
+    )
+    rows: list = []
+    try:
+        with _db() as conn:
+            with conn.cursor() as cur:
+                placeholders = ",".join(["%s"] * len(_CREDIT_EVENTS))
+                cur.execute(
+                    f"SELECT event, props_json, ts FROM imodel_events "
+                    f"WHERE uid=%s AND event IN ({placeholders}) "
+                    f"ORDER BY ts DESC LIMIT 30",
+                    (uid, *_CREDIT_EVENTS),
+                )
+                rows = cur.fetchall() or []
+    except Exception as _e:
+        print("[credits_history] db error:", str(_e)[:120])
+
+    transactions = []
+    for event, props_json, ts in rows:
+        try:
+            props = json.loads(props_json) if props_json else {}
+        except Exception:
+            props = {}
+        delta: Optional[int] = None
+        label = ""
+        icon = "⚡"
+        if event == "purchase_completed":
+            delta = int(props.get("credits_added", 0))
+            pack = str(props.get("pack", "credits"))
+            label = f"Purchased {pack.replace('_', ' ')}"
+            icon = "💳"
+        elif event in ("quest_claimed", "quest_reward_claimed"):
+            delta = int(props.get("reward", 0))
+            qid = str(props.get("quest_id", "quest")).replace("_", " ")
+            label = f"Quest: {qid}"
+            icon = "✅"
+        elif event == "share_reward_claimed":
+            delta = int(props.get("earned", 2))
+            label = "Share reward"
+            icon = "🔗"
+        elif event == "bonus_credits_awarded":
+            delta = int(props.get("amount", props.get("credits", 0)))
+            label = "Bonus credits"
+            icon = "🎁"
+        elif event == "gift_claimed":
+            delta = int(props.get("credits", 0))
+            label = "Gift received"
+            icon = "🎁"
+        elif event == "gift_sender_bonus":
+            delta = int(props.get("bonus", 0))
+            label = "Referral bonus"
+            icon = "👥"
+        elif event == "daily_bonus_claimed":
+            delta = int(props.get("gens_added", 0))
+            label = "Daily bonus"
+            icon = "🎯"
+        elif event == "generation_started":
+            cost = int(props.get("credit_cost", 1))
+            mode = str(props.get("photoshoot_mode") or props.get("mode") or "")
+            label = f"Generation{' · ' + mode if mode else ''}"
+            delta = -cost
+            icon = "📸"
+        if delta is not None:
+            transactions.append({"delta": delta, "label": label, "icon": icon, "ts": int(ts)})
+
+    return {"transactions": transactions, "credits": USER_CREDITS.get(uid, 0)}
+
 
 @app.get("/api/v1/profile/challenge")
 async def api_daily_challenge(request: Request):

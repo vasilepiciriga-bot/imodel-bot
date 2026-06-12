@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target, Trophy } from 'lucide-react'
+import { Flame, Users, Camera, CheckCircle2, Copy, Share2, Gift, Target, Trophy, Wallet } from 'lucide-react'
 import confetti from 'canvas-confetti'
 import { useAppStore } from '../store/appStore'
-import { claimDaily, getChallenge, getReferral, getMe, getMeFresh } from '../api/session'
+import { claimDaily, getChallenge, getReferral, getMe, getMeFresh, getCreditHistory } from '../api/session'
+import type { CreditHistory } from '../api/session'
 import { setPortfolioVisibility } from '../api/portfolio'
 import { createGift } from '../api/gift'
 import { createGiftSub } from '../api/shop'
@@ -27,6 +28,14 @@ function formatCountdown(secs: number): string {
   const m = Math.floor((secs % 3600) / 60)
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+function formatRelTime(ts: number): string {
+  const diff = Date.now() / 1000 - ts
+  if (diff < 3600) return `${Math.max(1, Math.floor(diff / 60))}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  if (diff < 7 * 86400) return `${Math.floor(diff / 86400)}d ago`
+  return new Date(ts * 1000).toLocaleDateString('en', { month: 'short', day: 'numeric' })
 }
 
 function QuestCard({ quest, onClaim, onTap }: { quest: QuestItem; onClaim: (id: string) => void; onTap?: () => void }) {
@@ -87,6 +96,8 @@ export default function Profile() {
   const [newAchievement, setNewAchievement] = useState<Achievement | null>(null)
   const [homeScreenOpen, setHomeScreenOpen] = useState(false)
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null)
+  const [creditHistory, setCreditHistory] = useState<CreditHistory | null>(null)
+  const [walletExpanded, setWalletExpanded] = useState(false)
   const setTab = useAppStore((s) => s.setTab)
   const setActivePreset = useAppStore((s) => s.setActivePreset)
   const challenge = useAppStore((s) => s.challenge)
@@ -101,6 +112,7 @@ export default function Profile() {
     }
     getReferral().then(setReferral).catch(() => null)
     getLeaderboard().then(setLeaderboard).catch(() => null)
+    getCreditHistory().then(setCreditHistory).catch(() => null)
     getQuests().then(({ quests: q, claimable }) => {
       setQuests(q)
       useAppStore.getState().setProfileBadge(claimable)
@@ -394,6 +406,60 @@ export default function Profile() {
             )}
           </AnimatePresence>
         </div>
+
+        {/* Wallet — credit transaction history */}
+        {creditHistory && creditHistory.transactions.length > 0 && (
+          <div className="rounded-card bg-white shadow-sm overflow-hidden">
+            <button
+              className="w-full px-4 pt-4 pb-3 flex items-center justify-between"
+              onClick={() => { hap.select(); setWalletExpanded((v) => !v) }}
+            >
+              <div className="flex items-center gap-2">
+                <Wallet size={15} className="text-[#6C47FF]" />
+                <p className="text-[15px] font-bold text-[#1D1D1F]">Wallet</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-full bg-[#6C47FF]/10 text-[#6C47FF] text-[12px] font-bold">
+                  {creditHistory.credits}⚡
+                </span>
+                <motion.span
+                  animate={{ rotate: walletExpanded ? 90 : 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="text-[#AEAEB2] text-[13px]"
+                >
+                  →
+                </motion.span>
+              </div>
+            </button>
+            <AnimatePresence>
+              {walletExpanded && (
+                <motion.div
+                  key="wallet-body"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="overflow-hidden"
+                >
+                  <div className="px-4 pb-3 divide-y divide-black/[0.04]">
+                    {creditHistory.transactions.slice(0, 12).map((tx, i) => (
+                      <div key={i} className="flex items-center gap-3 py-2.5">
+                        <span className="text-[18px] w-7 text-center flex-shrink-0">{tx.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[12px] font-medium text-[#1D1D1F] truncate">{tx.label}</p>
+                          <p className="text-[10px] text-[#AEAEB2]">{formatRelTime(tx.ts)}</p>
+                        </div>
+                        <span className={`text-[13px] font-bold flex-shrink-0 ${tx.delta > 0 ? 'text-[#34C759]' : 'text-[#FF3B30]'}`}>
+                          {tx.delta > 0 ? '+' : ''}{tx.delta}⚡
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
 
         {/* Quick Quests */}
         {quests.length > 0 && (
