@@ -4937,9 +4937,9 @@ def generate_image_from_bytes(
     stats_incr("generation_latency_count", 1)
     record_job(job_id, status="generated")
     job_event(job_id, "generation_done", latency_ms=latency_ms, output_bytes=len(nano_bytes))
-    # Professional face retouch: CodeFormer (fidelity=0.65 → subtle, identity-preserving)
+    # Professional face retouch: CodeFormer (fidelity=0.75 → preserves editorial look from InstantID)
     # falls back to GFPGAN, then original on any error
-    nano_bytes = enhance_face_codeformer(nano_bytes, fidelity=0.65)
+    nano_bytes = enhance_face_codeformer(nano_bytes, fidelity=0.75)
     return nano_bytes
 
 # ======= Автопост «до/после» (опционально) ===========

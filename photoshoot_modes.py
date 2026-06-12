@@ -49,7 +49,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale": True,
         "upscale_factor": 2,
         "upscale_fidelity": 0.65,
-        "prompt_layer": "professional portrait photography, studio lighting, sharp focus, magazine quality",
+        "prompt_layer": "professional portrait photography, wearing polished professional attire, studio lighting, sharp focus, magazine quality",
         "negative_layer": "snapshot, casual, blur, overexposed, grainy",
         "style_variants": {
             "studio": {
@@ -323,7 +323,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_factor": 2,
         "upscale_fidelity": 0.65,
         "prompt_layer": (
-            "podcast host portrait, professional microphone setup, sound-treated studio, "
+            "podcast host portrait, wearing smart casual creator outfit, "
+            "professional microphone setup, sound-treated studio, "
             "engaging charismatic expression, content creator vibe, YouTube or podcast cover quality"
         ),
         "negative_layer": "no microphone, bedroom mess, bad lighting, amateur",
@@ -780,7 +781,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "Valentine's Day romantic portrait, soft rose and pink tones, "
-            "dreamy romantic atmosphere, roses or flower petals, warm soft lighting, elegant and alluring"
+            "wearing elegant romantic dress or stylish date-night outfit, "
+            "dreamy romantic atmosphere, roses or flower petals, warm soft lighting"
         ),
         "negative_layer": "cold tones, harsh lighting, casual unromantic setting",
         "style_variants": {
@@ -982,6 +984,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "cinematic movie poster portrait, Hollywood production quality, "
+            "wearing stylish film star costume or cinematic character wardrobe, "
             "dramatic cinematic lighting, blockbuster film aesthetic, "
             "intense compelling expression, film star quality"
         ),
@@ -1053,7 +1056,8 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "prompt_layer": (
             "cyberpunk portrait, neon-lit dystopian megacity, rain-soaked streets, "
             "neon signs in multiple languages, cybernetic implants or augmentations, "
-            "high-tech fashion, Blade Runner 2049 cinematic style"
+            "wearing futuristic techwear jacket and cybernetic fashion outfit, "
+            "Blade Runner 2049 cinematic style"
         ),
         "negative_layer": "natural landscape, bright daylight, cheerful, medieval, pastoral",
         "style_variants": {
@@ -1120,6 +1124,7 @@ PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
         "upscale_fidelity": 0.65,
         "prompt_layer": (
             "fairy tale fantasy portrait, magical enchanted forest, "
+            "wearing ethereal fairy dress or enchanted elven gown, "
             "ethereal glowing light, mystical whimsical atmosphere, "
             "fairy wings or elven features, fantasy storybook illustration quality"
         ),
