@@ -70,6 +70,7 @@ export interface Generation {
   original_url?: string
   candidates_done?: number
   candidates_total?: number
+  best_score?: number
 }
 
 export type GenerationMode = 'portrait' | 'copy_scene' | 'copy_image'

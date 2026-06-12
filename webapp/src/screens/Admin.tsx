@@ -666,37 +666,55 @@ function AnalyticsTab() {
           )}
 
           {/* Experiment results */}
-          {experiments && Object.entries(experiments.experiments).map(([expName, exp]) => (
-            <div key={expName} className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
-              <div className="px-4 py-3 border-b border-black/[0.04]">
-                <p className="text-[13px] font-bold text-[#1D1D1F]">{expName}</p>
-                <p className="text-[11px] text-[#6E6E73]">{exp.description} · metric: {exp.primary_metric}</p>
-              </div>
-              <div className="divide-y divide-black/[0.04]">
-                {Object.entries(exp.variants).map(([variant, stats]) => {
-                  const isWinner = stats.rate != null && Object.values(exp.variants).every(
-                    (v) => v === stats || (v.rate ?? -1) <= (stats.rate ?? 0)
-                  )
-                  return (
-                    <div key={variant} className="flex items-center justify-between px-4 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[12px] font-semibold ${isWinner ? 'text-[#34C759]' : 'text-[#1D1D1F]'}`}>
-                          {variant} {isWinner && stats.rate != null ? '🏆' : ''}
-                        </span>
-                        <span className="text-[10px] text-[#6E6E73]">{stats.exposed} exposed</span>
+          {experiments && Object.entries(experiments.experiments).map(([expName, exp]) => {
+            const variantList = Object.entries(exp.variants)
+            const maxRate = Math.max(...variantList.map(([, s]) => s.rate ?? 0), 0.001)
+            return (
+              <div key={expName} className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+                <div className="px-4 py-3 border-b border-black/[0.04]">
+                  <p className="text-[13px] font-bold text-[#1D1D1F]">{expName}</p>
+                  <p className="text-[11px] text-[#6E6E73]">{exp.description} · metric: {exp.primary_metric}</p>
+                </div>
+                <div className="divide-y divide-black/[0.04]">
+                  {variantList.map(([variant, stats]) => {
+                    const isWinner = stats.rate != null && variantList.every(
+                      ([, v]) => v === stats || (v.rate ?? -1) <= (stats.rate ?? 0)
+                    )
+                    const barPct = maxRate > 0 && stats.rate != null
+                      ? Math.round((stats.rate / maxRate) * 100)
+                      : 0
+                    return (
+                      <div key={variant} className="px-4 py-2.5">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[12px] font-semibold ${isWinner ? 'text-[#34C759]' : 'text-[#1D1D1F]'}`}>
+                              {variant} {isWinner && stats.rate != null ? '🏆' : ''}
+                            </span>
+                            <span className="text-[10px] text-[#6E6E73]">{stats.exposed.toLocaleString()} exposed</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-[#6E6E73]">{stats.converted} cvt</span>
+                            <span className={`text-[12px] font-bold ${isWinner ? 'text-[#34C759]' : 'text-[#6C47FF]'}`}>
+                              {pct(stats.rate)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="h-1.5 bg-[#E8E8ED] rounded-full overflow-hidden">
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${barPct}%` }}
+                            transition={{ duration: 0.5, ease: 'easeOut' }}
+                            className="h-full rounded-full"
+                            style={{ background: isWinner ? '#34C759' : '#6C47FF' }}
+                          />
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-[#6E6E73]">{stats.converted} cvt</span>
-                        <span className={`text-[12px] font-bold ${isWinner ? 'text-[#34C759]' : 'text-[#6C47FF]'}`}>
-                          {pct(stats.rate)}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </>
       )}
     </div>

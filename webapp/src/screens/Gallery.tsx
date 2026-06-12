@@ -289,6 +289,7 @@ export default function Gallery() {
   const setUser = useAppStore((s) => s.setUser)
   const setTab = useAppStore((s) => s.setTab)
 
+  const [filterMode, setFilterMode] = useState<string | null>(null)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [swipeDir, setSwipeDir] = useState(0)
   const [hdLoading, setHdLoading] = useState(false)
@@ -314,8 +315,24 @@ export default function Gallery() {
       }),
     [gallery]
   )
-  const groups = useMemo(() => groupByDay(sorted), [sorted])
-  const lightbox = lightboxIndex !== null ? sorted[lightboxIndex] : null
+
+  // Unique photoshoot modes present in gallery (for filter chips)
+  const availableModes = useMemo(() => {
+    const seen = new Set<string>()
+    for (const item of sorted) {
+      const m = item.photoshoot_mode ?? item.mode
+      if (m && m !== 'portrait') seen.add(m)
+    }
+    return Array.from(seen)
+  }, [sorted])
+
+  const filtered = useMemo(
+    () => filterMode ? sorted.filter((i) => (i.photoshoot_mode ?? i.mode) === filterMode) : sorted,
+    [sorted, filterMode]
+  )
+
+  const groups = useMemo(() => groupByDay(filtered), [filtered])
+  const lightbox = lightboxIndex !== null ? filtered[lightboxIndex] : null
 
   useEffect(() => {
     const cached = getCachedGallery()
@@ -332,7 +349,7 @@ export default function Gallery() {
 
   function openLightbox(item: Generation) {
     tg?.HapticFeedback?.impactOccurred('light')
-    const idx = sorted.findIndex((s) => s.job_id === item.job_id)
+    const idx = filtered.findIndex((s) => s.job_id === item.job_id)
     setSwipeDir(0)
     setConfirmDelete(false)
     setLightboxIndex(idx >= 0 ? idx : null)
@@ -346,7 +363,7 @@ export default function Gallery() {
   function navigate(dir: number) {
     if (lightboxIndex === null) return
     const next = lightboxIndex + dir
-    if (next < 0 || next >= sorted.length) return
+    if (next < 0 || next >= filtered.length) return
     setSwipeDir(dir)
     setConfirmDelete(false)
     tg?.HapticFeedback?.impactOccurred('light')
@@ -514,6 +531,34 @@ export default function Gallery() {
         </motion.button>
       )}
 
+      {/* Mode filter chips — only when gallery has multiple modes */}
+      {availableModes.length >= 2 && gallery.length > 0 && (
+        <div className="flex gap-1.5 px-4 mb-2 overflow-x-auto no-scrollbar">
+          <motion.button
+            key="all"
+            whileTap={{ scale: 0.95 }}
+            onClick={() => { setFilterMode(null); setLightboxIndex(null) }}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-[12px] font-semibold transition-colors ${
+              filterMode === null ? 'bg-[#6C47FF] text-white' : 'bg-[#E8E8ED] text-[#6E6E73]'
+            }`}
+          >
+            All
+          </motion.button>
+          {availableModes.map((m) => (
+            <motion.button
+              key={m}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => { setFilterMode(m); setLightboxIndex(null) }}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-[12px] font-semibold transition-colors capitalize ${
+                filterMode === m ? 'bg-[#6C47FF] text-white' : 'bg-[#E8E8ED] text-[#6E6E73]'
+              }`}
+            >
+              {m}
+            </motion.button>
+          ))}
+        </div>
+      )}
+
       {gallery.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-4 px-8 text-center">
           <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#6C47FF]/20 to-[#FF2D78]/20 flex items-center justify-center">
@@ -607,7 +652,7 @@ export default function Gallery() {
               style={{ paddingTop: 'calc(var(--tg-safe-top, env(safe-area-inset-top, 0px)) + 12px)' }}
             >
               <span className="text-white/55 text-[13px] font-medium tabular-nums">
-                {(lightboxIndex ?? 0) + 1} / {sorted.length}
+                {(lightboxIndex ?? 0) + 1} / {filtered.length}
               </span>
               <div className="flex items-center gap-3">
                 <button
@@ -694,7 +739,7 @@ export default function Gallery() {
                 </button>
               )}
               {/* Next chevron */}
-              {lightboxIndex !== null && lightboxIndex < sorted.length - 1 && (
+              {lightboxIndex !== null && lightboxIndex < filtered.length - 1 && (
                 <button
                   onClick={() => navigate(1)}
                   className="absolute right-1 top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full bg-black/35 flex items-center justify-center"

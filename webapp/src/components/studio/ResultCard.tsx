@@ -186,6 +186,24 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
         </div>
       )}
 
+      {/* Tournament badge — shown for photoshoot modes that ran a multi-candidate tournament */}
+      {(job.candidates_total ?? 0) > 1 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.92 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.35, type: 'spring', stiffness: 400, damping: 28 }}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#6C47FF]/8 border border-[#6C47FF]/15 self-start w-fit"
+        >
+          <span className="text-[11px]">🏆</span>
+          <span className="text-[11px] font-semibold text-[#6C47FF]">
+            Best of {job.candidates_total} candidates
+          </span>
+          {(job.best_score ?? 0) > 0 && (
+            <span className="text-[10px] text-[#6C47FF]/55">· {job.best_score}pts</span>
+          )}
+        </motion.div>
+      )}
+
       {/* Primary actions: Share + Save */}
       <div className="grid grid-cols-2 gap-2">
         <motion.button

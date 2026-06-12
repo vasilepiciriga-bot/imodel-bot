@@ -1261,6 +1261,8 @@ def _job_result_json(job: Dict[str, Any]) -> str:
         # gallery display metadata — must survive DB round-trip
         "photoshoot_mode", "mode", "preset_key", "age_key",
         "bonus_credits", "lang",
+        # tournament quality data — shown on result card
+        "best_score", "candidates_total",
     ):
         if key in job:
             result[key] = job.get(key)
