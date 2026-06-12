@@ -182,3 +182,29 @@ export const getRetention = (weeks = 8) =>
 
 export const getLTV = (weeks = 8) =>
   api.getUncached<LTVData>(`/api/v1/analytics/ltv?weeks=${weeks}`)
+
+export interface QualityMode {
+  mode: string
+  count: number
+  avg_winner_score: number
+  avg_all_score: number
+  avg_candidates_ok: number
+  avg_candidates_total: number
+}
+
+export interface QualityData {
+  period_days: number
+  modes: QualityMode[]
+  judge_health: {
+    ok: number
+    fail: number
+    skip: number
+    disqualified: number
+    total: number
+    ok_rate: number | null
+    fail_rate: number | null
+  }
+}
+
+export const getQuality = (days = 14) =>
+  api.getUncached<QualityData>(`/api/v1/analytics/quality?days=${days}`)

@@ -241,6 +241,32 @@ export default function Shop() {
               transition={{ duration: 0.15 }}
               className="space-y-3"
             >
+              {/* Pro → Creator upgrade nudge — shown when Pro user is running low */}
+              {activePlan?.plan === 'pro' && credits <= 15 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-center gap-3 px-4 py-3 rounded-[14px] bg-gradient-to-r from-[#FF2D78]/10 to-[#FF9500]/10 border border-[#FF2D78]/25"
+                >
+                  <span className="text-[22px] flex-shrink-0">🔥</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-bold text-[#1D1D1F]">Running low on Pro credits?</p>
+                    <p className="text-[11px] text-[#6E6E73]">Creator gives 320⚡/mo — 4× more than Pro</p>
+                  </div>
+                  <motion.button
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => {
+                      track('upgrade_nudge_tapped', { from: 'shop_subs', plan: activePlan.plan })
+                      setBillingCycle('monthly')
+                    }}
+                    className="px-3 py-1.5 rounded-[10px] text-white text-[11px] font-bold flex-shrink-0"
+                    style={{ background: 'linear-gradient(135deg, #FF2D78, #FF9500)' }}
+                  >
+                    Upgrade →
+                  </motion.button>
+                </motion.div>
+              )}
+
               {/* Monthly / Annual billing toggle */}
               {(shop?.annual_subscriptions ?? []).length > 0 && (
                 <div className="flex rounded-[12px] bg-[#E8E8ED] p-1 gap-1">

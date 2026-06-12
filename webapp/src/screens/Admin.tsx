@@ -1,18 +1,18 @@
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Users, Zap, TrendingUp, Radio, Search, Send, Plus, Minus, RefreshCw, ChevronDown, Layers, BarChart2, DollarSign } from 'lucide-react'
+import { Users, Zap, TrendingUp, Radio, Search, Send, Plus, Minus, RefreshCw, ChevronDown, Layers, BarChart2, DollarSign, Award } from 'lucide-react'
 import {
   getDashboard, lookupUser, grantCredits, sendUserMessage,
   getBroadcastStatus, sendBroadcast, cancelBroadcast, generatePresetThumbs,
-  getFunnel, getExperimentResults, getRetention, getLTV,
+  getFunnel, getExperimentResults, getRetention, getLTV, getQuality,
   type AdminDashboard, type AdminUser, type BroadcastStatus,
-  type FunnelData, type ExperimentsData, type RetentionData, type LTVData,
+  type FunnelData, type ExperimentsData, type RetentionData, type LTVData, type QualityData,
 } from '../api/admin'
 import { track } from '../api/analytics'
 
 const tg = window.Telegram?.WebApp
 
-type AdminTab = 'dashboard' | 'users' | 'broadcast' | 'tools' | 'analytics' | 'retention' | 'ltv'
+type AdminTab = 'dashboard' | 'users' | 'broadcast' | 'tools' | 'analytics' | 'retention' | 'ltv' | 'quality'
 
 function timeAgo(ts: number): string {
   if (!ts) return 'never'
@@ -905,6 +905,123 @@ function LTVTab() {
 }
 
 
+// ─── Quality Tab ───────────────────────────────────────────────────────────────
+function QualityTab() {
+  const [days, setDays] = useState(14)
+  const [data, setData] = useState<QualityData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    getQuality(days).then(setData).catch(() => null).finally(() => setLoading(false))
+  }, [days])
+
+  const maxScore = data && data.modes.length > 0
+    ? Math.max(...data.modes.map((m) => m.avg_winner_score), 1)
+    : 100
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      <div className="flex gap-2">
+        {[7, 14, 30].map((d) => (
+          <button key={d} onClick={() => setDays(d)}
+            className={`px-3 py-1.5 rounded-full text-[12px] font-semibold ${
+              days === d ? 'bg-[#6C47FF] text-white' : 'bg-[#E8E8ED] text-[#6E6E73]'
+            }`}>
+            {d}d
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p className="text-[13px] text-[#6E6E73]">Loading…</p>
+      ) : (
+        <>
+          {/* Vision judge health */}
+          <div className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+            <div className="px-4 py-3 border-b border-black/[0.04]">
+              <p className="text-[13px] font-bold text-[#1D1D1F]">Vision Judge — all-time</p>
+            </div>
+            <div className="px-4 py-3 grid grid-cols-4 gap-2">
+              {([
+                { label: 'OK',   val: data?.judge_health.ok   ?? 0, color: '#34C759' },
+                { label: 'Fail', val: data?.judge_health.fail ?? 0, color: '#FF3B30' },
+                { label: 'Skip', val: data?.judge_health.skip ?? 0, color: '#6E6E73' },
+                { label: 'Disq', val: data?.judge_health.disqualified ?? 0, color: '#FF9500' },
+              ] as const).map(({ label, val, color }) => (
+                <div key={label} className="flex flex-col items-center gap-0.5 p-2 rounded-[10px] bg-[#F5F5F7]">
+                  <span className="text-[15px] font-black" style={{ color }}>{val.toLocaleString()}</span>
+                  <span className="text-[10px] text-[#6E6E73] font-medium">{label}</span>
+                </div>
+              ))}
+            </div>
+            {data?.judge_health.ok_rate != null && (
+              <div className="px-4 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-1.5 rounded-full bg-[#E8E8ED] overflow-hidden">
+                    <div className="h-full rounded-full bg-[#34C759]"
+                      style={{ width: `${(data.judge_health.ok_rate * 100).toFixed(0)}%` }} />
+                  </div>
+                  <span className="text-[11px] text-[#34C759] font-semibold">
+                    {(data.judge_health.ok_rate * 100).toFixed(1)}% success rate
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Per-mode winner scores */}
+          {data && data.modes.length > 0 ? (
+            <div className="rounded-[16px] bg-white border border-black/[0.06] overflow-hidden">
+              <div className="px-4 py-3 border-b border-black/[0.04]">
+                <p className="text-[13px] font-bold text-[#1D1D1F]">Winner Score by Mode · last {data.period_days}d</p>
+                <p className="text-[11px] text-[#6E6E73]">Avg top-selected candidate score (0–100)</p>
+              </div>
+              <div className="divide-y divide-black/[0.04]">
+                {data.modes.map((m) => {
+                  const barPct = maxScore > 0 ? Math.round((m.avg_winner_score / maxScore) * 100) : 0
+                  return (
+                    <div key={m.mode} className="px-4 py-2.5">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[12px] font-semibold text-[#1D1D1F] capitalize">{m.mode}</span>
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-[11px] text-[#6E6E73]">{m.count} gens</span>
+                          <span className="text-[13px] font-bold text-[#6C47FF]">{m.avg_winner_score}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1.5 rounded-full bg-[#E8E8ED] overflow-hidden">
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${barPct}%` }}
+                            transition={{ duration: 0.5, ease: 'easeOut' }}
+                            className="h-full rounded-full bg-gradient-to-r from-[#6C47FF] to-[#FF2D78]"
+                          />
+                        </div>
+                        <span className="text-[10px] text-[#6E6E73] w-20 text-right shrink-0">
+                          all avg: {m.avg_all_score}
+                        </span>
+                      </div>
+                      {m.avg_candidates_total > 1 && (
+                        <p className="text-[10px] text-[#6E6E73] mt-0.5">
+                          {m.avg_candidates_ok}/{m.avg_candidates_total} candidates survived
+                        </p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : (
+            <p className="text-[13px] text-[#6E6E73]">No quality data yet — needs generation events with scores.</p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+
 // ─── Main Admin screen ─────────────────────────────────────────────────────────
 export default function Admin() {
   const [tab, setTab] = useState<AdminTab>('dashboard')
@@ -921,6 +1038,7 @@ export default function Admin() {
     { key: 'analytics',  label: 'Funnel',    icon: Zap },
     { key: 'retention',  label: 'Retention', icon: BarChart2 },
     { key: 'ltv',        label: 'LTV',       icon: DollarSign },
+    { key: 'quality',    label: 'Quality',   icon: Award },
   ]
 
   return (
@@ -971,6 +1089,7 @@ export default function Admin() {
           {tab === 'analytics'  && <AnalyticsTab />}
           {tab === 'retention'  && <RetentionTab />}
           {tab === 'ltv'        && <LTVTab />}
+          {tab === 'quality'    && <QualityTab />}
         </motion.div>
       </AnimatePresence>
 

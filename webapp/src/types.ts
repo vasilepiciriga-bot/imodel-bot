@@ -27,6 +27,7 @@ export interface UserProfile {
   last_gen_at?: number | null
   can_claim_daily?: boolean
   next_daily_credits?: number
+  bonus_phase?: number
   first_seen?: number | null
   recent_presets?: string[]
   recent_modes?: string[]

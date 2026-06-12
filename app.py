@@ -7897,6 +7897,7 @@ async def api_me(request: Request):
         "last_gen_at": float(ui.get("last_gen_at", 0)) or None,
         "can_claim_daily": (time.time() - USER_LAST_BONUS.get(uid, 0)) >= _bonus_interval_secs and USER_CREDITS.get(uid, 0) < 100,
         "next_daily_credits": _next_daily,
+        "bonus_phase": _bonus_phase,
         "age_pack": USER_AGE_PACKS.get(uid, False),
         "unlocked_packs": sorted(USER_STYLE_PACKS.get(uid, set())),
         "total_generated": int(ui.get("gens_ok", 0)) + int(ui.get("gens_copy_ok", 0)),
@@ -10044,6 +10045,76 @@ async def api_analytics_ltv(request: Request):
     weeks = int(request.query_params.get("weeks", 8))
     weeks = max(2, min(weeks, 12))
     return _analytics_ltv(weeks)
+
+
+def _analytics_quality(days: int = 14) -> Dict[str, Any]:
+    """Per-mode winner score aggregates from generation_completed events + live judge health."""
+    if not DB_READY:
+        return {"period_days": days, "modes": [], "judge_health": {}}
+    import datetime as _dt
+    cutoff = (_dt.date.today() - _dt.timedelta(days=days)).isoformat()
+    rows = _db_fetchall(
+        "SELECT props FROM imodel_events WHERE event='generation_completed' AND day >= ? ORDER BY created_at DESC LIMIT 5000",
+        (cutoff,)
+    )
+    mode_acc: Dict[str, Dict] = {}
+    for (props_str,) in rows:
+        try:
+            props = json.loads(props_str or "{}")
+        except Exception:
+            continue
+        mode = str(props.get("mode") or "unknown")
+        best_score = float(props.get("best_score") or 0)
+        avg_score = float(props.get("avg_score") or 0)
+        cands_ok = int(props.get("candidates_ok") or 0)
+        cands_total = int(props.get("candidates_total") or 0)
+        d = mode_acc.setdefault(mode, {"n": 0, "best_sum": 0.0, "avg_sum": 0.0, "cands_ok": 0, "cands_total": 0})
+        d["n"] += 1
+        d["best_sum"] += best_score
+        d["avg_sum"] += avg_score
+        d["cands_ok"] += cands_ok
+        d["cands_total"] += cands_total
+    modes = []
+    for mode, d in sorted(mode_acc.items(), key=lambda x: -x[1]["n"]):
+        n = d["n"]
+        modes.append({
+            "mode": mode,
+            "count": n,
+            "avg_winner_score": round(d["best_sum"] / n, 1),
+            "avg_all_score": round(d["avg_sum"] / n, 1),
+            "avg_candidates_ok": round(d["cands_ok"] / n, 1),
+            "avg_candidates_total": round(d["cands_total"] / n, 1),
+        })
+    j_ok   = int(STATS.get("vision_judge_ok", 0))
+    j_fail = int(STATS.get("vision_judge_fail", 0))
+    j_skip = int(STATS.get("vision_judge_skip", 0))
+    j_disq = int(STATS.get("vision_judge_disqualified", 0))
+    j_total = j_ok + j_fail
+    return {
+        "period_days": days,
+        "modes": modes,
+        "judge_health": {
+            "ok": j_ok, "fail": j_fail, "skip": j_skip, "disqualified": j_disq,
+            "total": j_total,
+            "ok_rate":   round(j_ok / j_total, 3) if j_total else None,
+            "fail_rate": round(j_fail / j_total, 3) if j_total else None,
+        },
+    }
+
+
+@app.get("/api/v1/analytics/quality")
+async def api_analytics_quality(request: Request):
+    """Per-mode generation quality + Vision judge health metrics (admin only)."""
+    user = webapp_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    uid = int(user["uid"])
+    username = str(user.get("username") or "")
+    if role_for_user(uid, username) not in ("admin", "superadmin"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    days = int(request.query_params.get("days", 14))
+    days = max(3, min(days, 60))
+    return _analytics_quality(days)
 
 
 def _quest_progress_for_user(uid: int, today: str) -> List[Dict]:
