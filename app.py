@@ -3583,11 +3583,26 @@ def craft_mj_prompt_from_image(style_bytes: bytes) -> Optional[str]:
 # ===== AI Vision Judge for Generation Tournament =====
 _VISION_JUDGE_ENABLED = os.getenv("DISABLE_VISION_JUDGE", "0") != "1"
 
-def _judge_candidate_vision(candidate_bytes: bytes, face_bytes: bytes, mode_key: str) -> float:
+# Per-mode score multipliers — applied to raw GPT-4o dimension scores before normalization.
+# Modes focused on style fidelity (vogue/luxury) weight style_score higher;
+# corporate/identity modes (ceo/premium) weight face preservation higher.
+_MODE_SCORE_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "vogue":   {"face": 1.0, "quality": 1.0, "style": 1.5},
+    "luxury":  {"face": 1.0, "quality": 1.1, "style": 1.4},
+    "ceo":     {"face": 1.4, "quality": 1.2, "style": 0.6},
+    "premium": {"face": 1.3, "quality": 1.1, "style": 0.8},
+    "dating":  {"face": 1.2, "quality": 1.0, "style": 0.8},
+    "everyday":{"face": 1.2, "quality": 1.0, "style": 0.8},
+    "custom":  {"face": 1.1, "quality": 1.0, "style": 0.9},
+}
+
+def _judge_candidate_vision(candidate_bytes: bytes, face_bytes: bytes, mode_key: str) -> tuple:
     """
     Score a tournament candidate using GPT-4o Vision.
-    Evaluates face preservation (0-40) + technical quality (0-35) + style match (0-25).
-    Falls back to size+noise stub if OpenAI unavailable or call fails.
+    Evaluates face preservation (0-40) + technical quality (0-35) + style match (0-25),
+    then applies mode-specific weights and normalizes to 0-100.
+    Returns (score, breakdown_dict) — breakdown is {} when falling back to heuristic.
+    Disqualifies (returns 0.0) when face_score < 8 (broken/missing face).
     """
     if not _VISION_JUDGE_ENABLED or not OPENAI_API_KEY or OpenAI is None:
         return _score_candidate(candidate_bytes)
@@ -3599,10 +3614,6 @@ def _judge_candidate_vision(candidate_bytes: bytes, face_bytes: bytes, mode_key:
         mode_label = cfg["label"].get("en", mode_key)
         style_goal = cfg.get("prompt_layer") or "natural portrait"
 
-        system_msg = (
-            "You are a strict AI photo quality judge for a portrait generation system. "
-            "Evaluate the generated portrait. Return ONLY valid JSON, nothing else."
-        )
         user_text = (
             f'Mode: "{mode_label}"\n'
             f'Style goal: {style_goal}\n\n'
@@ -3639,13 +3650,23 @@ def _judge_candidate_vision(candidate_bytes: bytes, face_bytes: bytes, mode_key:
         if not m:
             return _score_candidate(candidate_bytes)
         data = json.loads(m.group())
-        total = (
-            int(data.get("face_score", 0))
-            + int(data.get("quality_score", 0))
-            + int(data.get("style_score", 0))
-        )
+        face_s = max(0, int(data.get("face_score", 0)))
+        quality_s = max(0, int(data.get("quality_score", 0)))
+        style_s = max(0, int(data.get("style_score", 0)))
+
+        # Disqualify candidates with a broken/missing face
+        if face_s < 8:
+            stats_incr("vision_judge_disqualified", 1)
+            return 0.0, {"face": face_s, "quality": quality_s, "style": style_s, "disqualified": True}
+
+        # Apply mode-specific weights and normalize to 0-100
+        w = _MODE_SCORE_WEIGHTS.get(mode_key, {"face": 1.0, "quality": 1.0, "style": 1.0})
+        raw_score = face_s * w["face"] + quality_s * w["quality"] + style_s * w["style"]
+        max_raw = 40.0 * w["face"] + 35.0 * w["quality"] + 25.0 * w["style"]
+        total = min(raw_score / max_raw * 100.0, 100.0)
+
         stats_incr("vision_judge_ok", 1)
-        return float(max(0, min(total, 100)))
+        return float(total), {"face": face_s, "quality": quality_s, "style": style_s}
     except Exception as e:
         stats_incr("vision_judge_fail", 1)
         print(f"Vision judge error: {str(e)[:120]}")
@@ -7502,6 +7523,8 @@ async def run_photoshoot_tournament_job(job_id: str):
     _MAX_PAR = min(n_gen, int(os.getenv("TOURNAMENT_MAX_PARALLEL", "4")))
     _par_sem = asyncio.Semaphore(_MAX_PAR)
     _progress: Dict[str, int] = {"done": 0}
+    # Skip Vision judge when there's only one candidate — nothing to compare.
+    _needs_judge = n_gen > 1
     record_job(job_id, step_label=f"generating_0_of_{n_gen}",
                candidates_done=0, candidates_total=n_gen)
     job_event(job_id, "tournament_parallel_start", n_gen=n_gen, max_parallel=_MAX_PAR)
@@ -7526,19 +7549,23 @@ async def run_photoshoot_tournament_job(job_id: str):
             if not result_bytes:
                 job_event(job_id, "candidate_empty", index=idx + 1)
                 return None
-            try:
-                score = await asyncio.to_thread(
-                    _judge_candidate_vision, result_bytes, img_bytes, mode_key
-                )
-            except Exception:
-                score = float(len(result_bytes)) / 5000.0
+            if _needs_judge:
+                try:
+                    score, score_breakdown = await asyncio.to_thread(
+                        _judge_candidate_vision, result_bytes, img_bytes, mode_key
+                    )
+                except Exception:
+                    score, score_breakdown = float(len(result_bytes)) / 5000.0, {}
+            else:
+                score, score_breakdown = float(len(result_bytes)) / 5000.0, {}
+                stats_incr("vision_judge_skip", 1)
         _progress["done"] += 1
         record_job(job_id,
                    step_label=f"generating_{_progress['done']}_of_{n_gen}",
                    candidates_done=_progress["done"])
         job_event(job_id, "candidate_ok", index=idx + 1,
                   score=round(score, 1), size=len(result_bytes))
-        return (score, result_bytes)
+        return (score, score_breakdown, result_bytes)
 
     _gen_results = await asyncio.gather(*[_gen_one(i) for i in range(n_gen)])
     candidates: List[tuple] = [r for r in _gen_results if r is not None]
@@ -7556,7 +7583,7 @@ async def run_photoshoot_tournament_job(job_id: str):
     job_event(job_id, "selection_done", selected=len(best), from_total=len(candidates))
 
     output_urls: List[str] = []
-    for idx, (score, img) in enumerate(best):
+    for idx, (_score, _bd, img) in enumerate(best):
         if do_upscale:
             record_job(job_id, step_label="upscaling")
             try:
@@ -7576,18 +7603,21 @@ async def run_photoshoot_tournament_job(job_id: str):
         record_job(job_id, status="failed", error="upload_failed")
         return
 
+    _best_score = round(best[0][0], 1) if best else 0
+    _avg_score = round(sum(s for s, _, __ in candidates) / len(candidates), 1) if candidates else 0
+    _winner_scores: Dict[str, Any] = best[0][1] if best else {}
+
     record_job(
         job_id,
         status="ready",
         output_url=output_urls[0],
         output_urls=output_urls,
         step_label="ready",
-        output_bytes=len(best[0][1]),
+        output_bytes=len(best[0][2]),
+        winner_scores=_winner_scores,
     )
     stats_incr("tournament_done", 1)
     _uadd(uid, "photoshoot_count", 1)
-    _best_score = round(best[0][0], 1) if best else 0
-    _avg_score = round(sum(s for s, _ in candidates) / len(candidates), 1) if candidates else 0
     analytics_event(uid, "generation_completed", {
         "source": "webapp",
         "mode": mode_key,
@@ -7598,6 +7628,7 @@ async def run_photoshoot_tournament_job(job_id: str):
         "best_score": _best_score,
         "avg_score": _avg_score,
         "parallel_factor": _MAX_PAR,
+        "winner_scores": _winner_scores,
     })
 
     # Deliver results to Telegram for tg_photoshoot jobs
@@ -9472,6 +9503,12 @@ async def api_admin_debug_stats(request: Request):
             )[:20],
         },
         "s3_state": USE_S3_STATE,
+        "vision_judge": {
+            "ok": STATS.get("vision_judge_ok", 0),
+            "fail": STATS.get("vision_judge_fail", 0),
+            "skip": STATS.get("vision_judge_skip", 0),
+            "disqualified": STATS.get("vision_judge_disqualified", 0),
+        },
     }
 
 

@@ -4,8 +4,14 @@ Phase 2: added style_variants (sub-style branching) and negative_layer per mode.
 Imported by app.py.
 """
 from __future__ import annotations
+import io as _io
 import random
 from typing import Dict, Any, Optional
+
+try:
+    from PIL import Image as _PILImage, ImageFilter as _PILFilter, ImageStat as _PILStat
+except ImportError:
+    _PILImage = _PILFilter = _PILStat = None
 
 PHOTOSHOOT_MODES: Dict[str, Dict[str, Any]] = {
     "everyday": {
@@ -330,17 +336,30 @@ def apply_prompt_layer(
     return result
 
 
-def _score_candidate(img_bytes: bytes) -> float:
+def _score_candidate(img_bytes: bytes) -> tuple:
     """
-    Stub candidate scorer for Generation Tournament.
-    TODO Phase 3: replace with GPT-4o Vision or CLIP-based judge.
-    Heuristic: larger JPEG = more detail retained by encoder = rough quality proxy.
+    Deterministic PIL-based image quality heuristic for tournament fallback.
+    Returns (score 0-90, breakdown_dict). Used when Vision judge is unavailable.
+    Signals: file size (encoder detail retention) + Laplacian sharpness + brightness balance.
     """
     if not img_bytes:
-        return 0.0
-    size_score = min(len(img_bytes) / 500_000, 1.0) * 60.0
-    noise_score = random.uniform(0.0, 40.0)
-    return size_score + noise_score
+        return 0.0, {}
+    size_score = min(len(img_bytes) / 500_000, 1.0) * 40.0
+    if _PILImage is None:
+        return float(size_score), {}
+    try:
+        im = _PILImage.open(_io.BytesIO(img_bytes)).convert("RGB")
+        sm = im.resize((256, 256))
+        gray = sm.convert("L")
+        lap = gray.filter(_PILFilter.Kernel(
+            size=3, kernel=[-1, -1, -1, -1, 8, -1, -1, -1, -1], scale=1, offset=0
+        ))
+        sharpness = min(_PILStat.Stat(lap).var[0] / 1000.0, 1.0) * 35.0
+        mean_lum = sum(_PILStat.Stat(sm).mean) / 3.0
+        bright_score = (1.0 - abs(mean_lum - 128.0) / 128.0) * 15.0
+        return min(float(size_score + sharpness + bright_score), 90.0), {}
+    except Exception:
+        return float(size_score), {}
 
 
 STEP_LABELS: Dict[str, Dict[str, str]] = {
