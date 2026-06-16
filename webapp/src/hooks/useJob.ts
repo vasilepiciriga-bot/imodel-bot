@@ -4,7 +4,7 @@ import type { Generation } from '../types'
 
 const tg = window.Telegram?.WebApp
 
-const TERMINAL = new Set(['done', 'error', 'failed', 'cancelled'])
+const TERMINAL = new Set(['done', 'ready', 'error', 'failed', 'cancelled'])
 
 function sseUrl(jobId: string): string {
   return `/api/v1/generations/${jobId}/events?tma=${encodeURIComponent(tg?.initData ?? '')}`
@@ -30,7 +30,8 @@ export function useJobPoller(
       es.onmessage = (event) => {
         try {
           const job = JSON.parse(event.data) as Generation & { error?: string }
-          if (job.error) return
+          // Skip pure auth/routing error frames that have no job data
+          if (job.error && !job.status) return
           onUpdateRef.current(job)
           if (TERMINAL.has(job.status)) {
             settled = true

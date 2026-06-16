@@ -14,7 +14,11 @@
       "Bash(python3 -c ' *)",
       "Bash(python -m py_compile app.py)",
       "Bash(python3 -m py_compile photoshoot_modes.py)",
-      "Bash(python3 -m py_compile prompt_engine.py)"
+      "Bash(python3 -m py_compile prompt_engine.py)",
+      "Bash(python3 -c \"from photoshoot_modes import get_style_variants; print\\('OK'\\)\")",
+      "Bash(grep -v \"hd_upscale\\\\|animate\\\\|age_transform\\\\|\\\\\"ready\\\\\"\\\\s*$\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/vasilepiciriga/imodel-bot-1/photoshoot_modes.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/vasilepiciriga/imodel-bot-1/prompt_engine.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

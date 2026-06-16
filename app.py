@@ -9362,7 +9362,7 @@ async def api_stream_job_events(job_id: str, request: Request):
     async def _stream():
         start = time.time()
         last_json = ""
-        terminal = {"done", "failed", "cancelled", "error"}
+        terminal = {"done", "ready", "failed", "cancelled", "error"}
         while True:
             if await request.is_disconnected():
                 return

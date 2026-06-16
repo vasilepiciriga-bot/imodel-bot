@@ -331,6 +331,7 @@ export default function Studio() {
         setPollingJobId(job_id)
       }
     } catch (e: unknown) {
+      clearPseudoSteps()
       setLoading(false)
       setProgressStep(0)
       setStepLabel(undefined)
@@ -366,6 +367,7 @@ export default function Studio() {
       setPhotoshootMode(modeKey as import('../types').PhotoshootModeKey)
       setPollingJobId(job_id)
     } catch (e: unknown) {
+      clearPseudoSteps()
       setLoading(false)
       setProgressStep(0)
       setStepLabel(undefined)
@@ -448,7 +450,7 @@ export default function Studio() {
       setRefLoading(false)
     }
     reader.onerror = () => {
-      toast.error('Ошибка загрузки файла')
+      toast.error('Could not load file — try again')
       setRefLoading(false)
     }
     reader.readAsDataURL(file)

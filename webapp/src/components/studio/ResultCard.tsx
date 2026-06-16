@@ -100,9 +100,9 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
   const [ageUrl, setAgeUrl] = useState<string | null>(null)
   const agePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const user = useAppStore((s) => s.user) as ({ bot_link?: string } | null)
+  const user = useAppStore((s) => s.user)
   const updateCredits = useAppStore((s) => s.updateCredits)
-  const botLink = (user as { bot_link?: string } | null)?.bot_link ?? 'https://t.me/imodelapp_bot'
+  const botLink = user?.bot_link ?? 'https://t.me/imodelapp_bot'
   const outputUrl = job.hd_url ?? job.output_url ?? ''
   const toast = useToast()
 
@@ -151,7 +151,7 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
       setAnimateJobId(res.job_id)
       setAnimateStatus('queued')
       track('animate_started', { job_id: job.job_id })
-      updateCredits(-res.credit_cost)
+      updateCredits((user?.credits ?? 0) - res.credit_cost)
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status
       if (status === 402) toast.error('Not enough credits (10⚡ needed)')
@@ -170,7 +170,7 @@ export function ResultCard({ job, beforeUrl, onRegenerate, onHD, hdLoading, phot
       setAgeJobId(res.job_id)
       setAgeStatus('queued')
       track('age_transform_started', { job_id: job.job_id, direction })
-      updateCredits(-res.credit_cost)
+      updateCredits((user?.credits ?? 0) - res.credit_cost)
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status
       if (status === 402) toast.error('Not enough credits (4⚡ needed)')
